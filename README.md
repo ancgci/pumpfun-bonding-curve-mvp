@@ -1,47 +1,44 @@
-     _ _____      _     _
-    (_)___ /_   _(_)___(_) ___         ___ ___  _ __ ___
-    | | |_ \ \ / / / __| |/ _ \       / __/ _ \| '_ ` _ \
-    | |___) \ V /| \__ \ | (_) |  _  | (_| (_) | | | | | |
-    |_|____/ \_/ |_|___/_|\___/  (_)  \___\___/|_| |_| |_|
+# Welcome to PumpFun Bonding Curve Monitoring Script
 
-    ========================================================================
-    Web Surfer Assistant  Copyright (C) 2016  F. Brezo and Y. Rubio, i3visio
-    ========================================================================
+This script monitors bonding curve of Pumpfun tokens and alerts when any token reachs 97.7% of the bonding curve. 
+To get monitoring signal on your Telegram channel, you need to add your Telegram Bot to your channel as an Administrator.
 
-[![License](https://img.shields.io/badge/license-GNU%20General%20Public%20License%20Version%203%20or%20Later-blue.svg)]()
+## Prerequisites
 
-Description:
-============
-Punycode Alert is a Google Chrome, Chromium, Opera extension that warns users when the URL
-they are accessing has some Punycode content.
-
-License: GPLv3+
-===============
-
-This is free software, and you are welcome to redistribute it under certain conditions.
-
-	This program is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- [NodeJS](https://nodejs.org/en/download) (> v18.0.0)
+- Shyft RPC, Shyft GRPC, Telegram Bot Token, 
 
 
-For more details on this issue, check the LICENSE file.
+## Quick Start
 
-The documentation of this program included in the doc folder is ruled by
-GNU Free Document License v1.3.
+1. **Clone and Install**
+   ```bash
+   git clone [your-repository-url]
+   cd [project-directory]
+   ```
 
-Installation:
-=============
-Load it from the Chrome Store or drag and drop the .crx file onto the browser
-under the chrome://extensions. That should install it in Google Chrome, Chromium and
-Opera. You can install it from: 
-<https://chrome.google.com/webstore/detail/punycode-alert/djghjigfghekidjibckjmhbhhjeomlda>
+2. **Configure Environment**
+   
+   Create a `.env` file in the root directory:
+   ```env
+    SHYFT_RPC=""
+    SHYFT_GRPC=""
+    TELEGRAM_BOT_TOKEN=""
+   ```
+
+3. **Build and Run**
+   ```bash
+   # Install dependencies
+   npm install
+
+   # Run in development mode
+   ts-node index.ts
+   ```
+
+## Feature
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `LANGUAGE` | Typescript | Yes |
+| `BOT` | Telegram Bot, Telegram Channel | Yes |
+| `ENVIRONMENT` | Shyft RPC, Shyft gRPC | Yes |
