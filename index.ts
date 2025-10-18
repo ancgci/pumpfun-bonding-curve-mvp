@@ -17,7 +17,8 @@ import pumpFunIdl from "./idls/pump_0.1.0.json";
 import { SolanaEventParser } from "./utils/event-parser";
 import { bnLayoutFormatter } from "./utils/bn-layout-formatter";
 import { transactionOutput } from "./utils/transactionOutput";
-import { getBondingCurveAddress } from "./utils/getBonding";
+import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
+
 import dotenv from "dotenv";
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -36,22 +37,23 @@ var value = 0;
 const bot = new TelegramBot(token);
 
 // Replace with your channel ID or username (e.g., '@your_channel_username')
-const chatId = "@Pumpfun_bondingCurve_alert_ch";
+const chatId = "@pumpfunew"; // Nome de usuário do canal (com @)
 
 // Create a Set to track sent addresses
 const sentAddresses = new Set();
 
 // Function to send message
 function sendMessage(message) {
-  bot
+  return bot
     .sendMessage(chatId, message, { parse_mode: "HTML" })
     .then(() => {
       console.log("Message sent successfully");
     })
     .catch((error) => {
-      console.error("Error sending message:", error);
+      console.error("Error sending message:", error.response?.body || error.message);
     });
 }
+
 interface SubscribeRequest {
   accounts: { [key: string]: SubscribeRequestFilterAccounts };
   slots: { [key: string]: SubscribeRequestFilterSlots };
@@ -131,16 +133,21 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         );
 
         if (
-          Number(progress) >= 97.7 &&
+          Number(progress) >= 97.7 &&  // Voltando para o limite original
           Number(progress) <= 100 &&
           !sentAddresses.has(tOutput.mint)
         ) {
+          // Calcular o Market Cap estimado
+          const marketCap = calculateMarketCap(Number(balance), Number(progress));
+          
           sendMessage(
-            `Token: <code>${tOutput.mint}</code> \nCurve Progress: <b>${Number(
-              progress
-            ).toFixed(1)} %</b>    Pool Value : <b>${Number(balance).toFixed(
-              2
-            )} SOL</b>`
+            `🚨 <b>ALERTA PUMPFUN - 97.7%+</b> 🚨\n\n` +
+            `Token: <code>${tOutput.mint}</code>\n` +
+            `Type: <b>${tOutput.type}</b>\n` +
+            `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+            `Pool Value: <b>${Number(balance).toFixed(2)} SOL</b>\n` +
+            `Estimated MCAP: <b>$${marketCap.toFixed(2)}</b>\n` +
+            `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
           );
           // Add the address to the set of sent addresses
           sentAddresses.add(tOutput.mint);
@@ -180,10 +187,29 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
 }
 
 const client = new Client(
-  "SHYFT gRPC",
   SHYFT_GRPC,
+  undefined,
   undefined
 );
+
+// Testar o envio imediatamente ao iniciar
+setTimeout(() => {
+  sendMessage("✅ Bot PumpFun monitor está funcionando! Aguardando tokens chegarem a 90% da curva...")
+    .then(() => console.log("✅ Mensagem de teste enviada com sucesso!"))
+    .catch((error) => {
+      console.error("❌ Erro ao enviar mensagem de teste:", error.response?.body || error.message);
+      console.log("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
+      console.log("📝 Chat ID:", chatId);
+    });
+}, 3000);
+
+// Testar o bot ao iniciar
+bot.getMe().then((botInfo) => {
+  console.log("Bot started:", botInfo.username);
+}).catch((error) => {
+  console.error("Error getting bot info:", error);
+});
+
 const req: SubscribeRequest = {
   accounts: {},
   slots: {},
