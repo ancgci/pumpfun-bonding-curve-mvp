@@ -251,7 +251,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
         buyTokenAmount: 0, // Seria calculado na implementação real
         buyTimestamp: Date.now(),
         takeProfit: TAKE_PROFIT_PERCENT,
-        stopLoss: 5, // 5% de stop loss padrão
+        stopLoss: 25, // 25% de stop loss padrão
         isActive: true
       };
       
