@@ -32,6 +32,34 @@ const SHYFT_GRPC = process.env.SHYFT_GRPC as string;
 const token = process.env.TELEGRAM_BOT_TOKEN as string;
 const ALERT_THRESHOLD = parseFloat(process.env.ALERT_THRESHOLD as string) || 97.7;
 
+// Configuração de protocolos de monitoramento
+const MONITORING_PROTOCOL = process.env.MONITORING_PROTOCOL || "PUMPFUN"; // "PUMPFUN", "METEORA_DBC", "BONK_FUN", "DAOS_FUN", "MOONSHOT", "ANONCOIN", ou "BOTH"
+
+// Configurações da Meteora DBC
+const METEORA_DBC_MONITORING_ENABLED = process.env.METEORA_DBC_MONITORING_ENABLED === "true";
+const METEORA_DBC_ALERT_THRESHOLD = parseFloat(process.env.METEORA_DBC_ALERT_THRESHOLD as string) || 97.7;
+const METEORA_DBC_PROGRAM_ID = process.env.METEORA_DBC_PROGRAM_ID as string || "METEORA_DBC_PROGRAM_ID_PLACEHOLDER";
+
+// Configurações do Bonk.fun
+const BONK_FUN_MONITORING_ENABLED = process.env.BONK_FUN_MONITORING_ENABLED === "true";
+const BONK_FUN_ALERT_THRESHOLD = parseFloat(process.env.BONK_FUN_ALERT_THRESHOLD as string) || 97.7;
+const BONK_FUN_PROGRAM_ID = process.env.BONK_FUN_PROGRAM_ID as string || "BONK_FUN_PROGRAM_ID_PLACEHOLDER";
+
+// Configurações do daos.fun
+const DAOS_FUN_MONITORING_ENABLED = process.env.DAOS_FUN_MONITORING_ENABLED === "true";
+const DAOS_FUN_ALERT_THRESHOLD = parseFloat(process.env.DAOS_FUN_ALERT_THRESHOLD as string) || 97.7;
+const DAOS_FUN_PROGRAM_ID = process.env.DAOS_FUN_PROGRAM_ID as string || "DAOS_FUN_PROGRAM_ID_PLACEHOLDER";
+
+// Configurações do Moonshot Screener
+const MOONSHOT_MONITORING_ENABLED = process.env.MOONSHOT_MONITORING_ENABLED === "true";
+const MOONSHOT_ALERT_THRESHOLD = parseFloat(process.env.MOONSHOT_ALERT_THRESHOLD as string) || 97.7;
+const MOONSHOT_PROGRAM_ID = process.env.MOONSHOT_PROGRAM_ID as string || "MOONSHOT_PROGRAM_ID_PLACEHOLDER";
+
+// Configurações do anoncoin.it
+const ANONCOIN_MONITORING_ENABLED = process.env.ANONCOIN_MONITORING_ENABLED === "true";
+const ANONCOIN_ALERT_THRESHOLD = parseFloat(process.env.ANONCOIN_ALERT_THRESHOLD as string) || 97.7;
+const ANONCOIN_PROGRAM_ID = process.env.ANONCOIN_PROGRAM_ID as string || "ANONCOIN_PROGRAM_ID_PLACEHOLDER";
+
 // Verificação do token do bot
 if (!token) {
   logger.error("❌ Token do bot não encontrado. Verifique o arquivo .env");
@@ -308,6 +336,62 @@ const TXN_FORMATTER = new TransactionFormatter();
 const PUMP_FUN_PROGRAM_ID = new PublicKey(
   "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 );
+
+// Adicionar o programa ID da Meteora DBC se o monitoramento estiver habilitado
+let METEORA_DBC_PROGRAM_ID_OBJ: PublicKey | null = null;
+if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID) {
+  try {
+    METEORA_DBC_PROGRAM_ID_OBJ = new PublicKey(METEORA_DBC_PROGRAM_ID);
+    logger.info(`✅ Program ID da Meteora DBC configurado: ${METEORA_DBC_PROGRAM_ID}`);
+  } catch (error) {
+    logger.error("❌ Erro ao configurar Program ID da Meteora DBC:", error);
+  }
+}
+
+// Adicionar o programa ID do Bonk.fun se o monitoramento estiver habilitado
+let BONK_FUN_PROGRAM_ID_OBJ: PublicKey | null = null;
+if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID) {
+  try {
+    BONK_FUN_PROGRAM_ID_OBJ = new PublicKey(BONK_FUN_PROGRAM_ID);
+    logger.info(`✅ Program ID do Bonk.fun configurado: ${BONK_FUN_PROGRAM_ID}`);
+  } catch (error) {
+    logger.error("❌ Erro ao configurar Program ID do Bonk.fun:", error);
+  }
+}
+
+// Adicionar o programa ID do daos.fun se o monitoramento estiver habilitado
+let DAOS_FUN_PROGRAM_ID_OBJ: PublicKey | null = null;
+if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID) {
+  try {
+    DAOS_FUN_PROGRAM_ID_OBJ = new PublicKey(DAOS_FUN_PROGRAM_ID);
+    logger.info(`✅ Program ID do daos.fun configurado: ${DAOS_FUN_PROGRAM_ID}`);
+  } catch (error) {
+    logger.error("❌ Erro ao configurar Program ID do daos.fun:", error);
+  }
+}
+
+// Adicionar o programa ID do Moonshot Screener se o monitoramento estiver habilitado
+let MOONSHOT_PROGRAM_ID_OBJ: PublicKey | null = null;
+if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID) {
+  try {
+    MOONSHOT_PROGRAM_ID_OBJ = new PublicKey(MOONSHOT_PROGRAM_ID);
+    logger.info(`✅ Program ID do Moonshot Screener configurado: ${MOONSHOT_PROGRAM_ID}`);
+  } catch (error) {
+    logger.error("❌ Erro ao configurar Program ID do Moonshot Screener:", error);
+  }
+}
+
+// Adicionar o programa ID do anoncoin.it se o monitoramento estiver habilitado
+let ANONCOIN_PROGRAM_ID_OBJ: PublicKey | null = null;
+if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID) {
+  try {
+    ANONCOIN_PROGRAM_ID_OBJ = new PublicKey(ANONCOIN_PROGRAM_ID);
+    logger.info(`✅ Program ID do anoncoin.it configurado: ${ANONCOIN_PROGRAM_ID}`);
+  } catch (error) {
+    logger.error("❌ Erro ao configurar Program ID do anoncoin.it:", error);
+  }
+}
+
 const PUMP_FUN_IX_PARSER = new SolanaParser([]);
 PUMP_FUN_IX_PARSER.addParserFromIdl(
   PUMP_FUN_PROGRAM_ID.toBase58(),
@@ -318,6 +402,51 @@ PUMP_FUN_EVENT_PARSER.addParserFromIdl(
   PUMP_FUN_PROGRAM_ID.toBase58(),
   pumpFunIdl as Idl
 );
+
+// Parser para Meteora DBC (será configurado quando tivermos o IDL)
+let METEORA_DBC_IX_PARSER: SolanaParser | null = null;
+let METEORA_DBC_EVENT_PARSER: SolanaEventParser | null = null;
+if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
+  METEORA_DBC_IX_PARSER = new SolanaParser([]);
+  METEORA_DBC_EVENT_PARSER = new SolanaEventParser([], console);
+  // Os parsers serão configurados quando tivermos o IDL da Meteora DBC
+}
+
+// Parser para Bonk.fun (será configurado quando tivermos o IDL)
+let BONK_FUN_IX_PARSER: SolanaParser | null = null;
+let BONK_FUN_EVENT_PARSER: SolanaEventParser | null = null;
+if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
+  BONK_FUN_IX_PARSER = new SolanaParser([]);
+  BONK_FUN_EVENT_PARSER = new SolanaEventParser([], console);
+  // Os parsers serão configurados quando tivermos o IDL do Bonk.fun
+}
+
+// Parser para daos.fun (será configurado quando tivermos o IDL)
+let DAOS_FUN_IX_PARSER: SolanaParser | null = null;
+let DAOS_FUN_EVENT_PARSER: SolanaEventParser | null = null;
+if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
+  DAOS_FUN_IX_PARSER = new SolanaParser([]);
+  DAOS_FUN_EVENT_PARSER = new SolanaEventParser([], console);
+  // Os parsers serão configurados quando tivermos o IDL do daos.fun
+}
+
+// Parser para Moonshot Screener (será configurado quando tivermos o IDL)
+let MOONSHOT_IX_PARSER: SolanaParser | null = null;
+let MOONSHOT_EVENT_PARSER: SolanaEventParser | null = null;
+if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
+  MOONSHOT_IX_PARSER = new SolanaParser([]);
+  MOONSHOT_EVENT_PARSER = new SolanaEventParser([], console);
+  // Os parsers serão configurados quando tivermos o IDL do Moonshot Screener
+}
+
+// Parser para anoncoin.it (será configurado quando tivermos o IDL)
+let ANONCOIN_IX_PARSER: SolanaParser | null = null;
+let ANONCOIN_EVENT_PARSER: SolanaEventParser | null = null;
+if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
+  ANONCOIN_IX_PARSER = new SolanaParser([]);
+  ANONCOIN_EVENT_PARSER = new SolanaEventParser([], console);
+  // Os parsers serão configurados quando tivermos o IDL do anoncoin.it
+}
 
 async function handleStream(client: Client, args: SubscribeRequest) {
   // Subscribe for events
@@ -346,147 +475,58 @@ async function handleStream(client: Client, args: SubscribeRequest) {
           data.transaction,
           Date.now()
         );
-        const parsedTxn = decodePumpFunTxn(txn);
-        if (!parsedTxn) return;
-        const tOutput = transactionOutput(parsedTxn);
         
-        // Verificar se os dados essenciais estão presentes
-        if (!tOutput.mint || !tOutput.user) {
-            // logger.info("⚠️  Transação com dados incompletos ignorada");
-            return;
-        }
-        
-        // Verificar se é uma transação válida (com valores não zero)
-        if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
-            // logger.info("⚠️  Transação BUY com token amount zero ignorada");
-            return;
-        }
-        
-        const balance = await getBondingCurveAddress(tOutput.bondingCurve);
-        const progress =
-          a * Number(balance) ** 3 +
-          b * Number(balance) ** 2 +
-          c * Number(balance) +
-          d;
-        logger.info(
-          `
-          TYPE : ${tOutput.type}
-          MINT : ${tOutput.mint}
-          SIGNER : ${tOutput.user}
-          BONDING CURVE : ${tOutput.bondingCurve}
-          TOKEN AMOUNT : ${tOutput.tokenAmount}
-          SOL AMOUNT : ${tOutput.solAmount} SOL
-          POOL DETAILS : ${balance} SOL
-                        ${Number(progress).toFixed(2)}% to completion
-          SIGNATURE : ${txn.transaction.signatures[0]}
-          `
-        );
-
-        // Buscar metadados do token, se disponível
-        let tokenMetadata = null;
-        if (tOutput.mint) {
-          try {
-            tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
-          } catch (metadataError) {
-            logger.debug(`❌ Erro ao buscar metadados para token ${tOutput.mint}:`, metadataError.message);
+        // Verificar transações PumpFun se o monitoramento estiver habilitado
+        if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+          const parsedPumpFunTxn = decodePumpFunTxn(txn);
+          if (parsedPumpFunTxn) {
+            await processPumpFunTransaction(txn, parsedPumpFunTxn);
           }
         }
-
-        if (
-          Number(progress) >= ALERT_THRESHOLD &&
-          Number(progress) <= 100 &&
-          !sentAddresses.has(tOutput.mint)
-        ) {
-          // Registrar transação no monitor de desempenho
-          recordTransaction(tOutput.mint);
-          
-          // Calcular informações adicionais
-          const solBalance = Number(balance);
-          const tokenAmount = tOutput.tokenAmount || 0;
-          // Calcular preço atual do token (SOL/token)
-          const currentPrice = solBalance > 0 && tokenAmount > 0 ? 
-            (solBalance * 1000000000) / tokenAmount : 0;
-          
-          // Preparar dados do token para o executor híbrido
-          const tokenData: TokenData = {
-            mint: tOutput.mint,
-            bondingCurve: tOutput.bondingCurve,
-            curvePercent: Number(progress),
-            isLaunched: Number(progress) >= 100, // Simplificação - na prática, verificaria se migrou para Raydium
-            mode: Number(progress) >= 100 ? "DEX" : "CURVE"
-          };
-          
-          // Executar trade híbrido passando o tipo de trade
-          executeHybridTrade(tokenData, tOutput.type).catch(error => {
-            logger.error(`❌ Erro ao executar trade híbrido para token ${tOutput.mint}:`, error);
-            recordError();
-          });
-          
-          // Preparar mensagem com metadados, se disponíveis
-          let tokenInfo = `Token: <code>${tOutput.mint}</code>\n`;
-          if (tokenMetadata) {
-            recordCacheHit(); // Registrar hit de cache
-            if (tokenMetadata.name) {
-              tokenInfo = `Token: <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
-            }
-            if (tokenMetadata.symbol) {
-              tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
-            }
-            if (tokenMetadata.description) {
-              // Limitar a descrição a 100 caracteres
-              const description = tokenMetadata.description.length > 100 
-                ? tokenMetadata.description.substring(0, 100) + '...' 
-                : tokenMetadata.description;
-              tokenInfo += `Description: <i>${description}</i>\n`;
-            }
-            if (tokenMetadata.twitter) {
-              tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
-            }
-            if (tokenMetadata.telegram) {
-              tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
-            }
-            if (tokenMetadata.website) {
-              tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
-            }
-            if (tokenMetadata.isScam) {
-              tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
-            }
-            // Adicionar informações financeiras se disponíveis
-            if (tokenMetadata.marketCap) {
-              tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
-            }
-            if (tokenMetadata.price) {
-              tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
-            }
-            if (tokenMetadata.volume24h) {
-              tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
-            }
-            if (tokenMetadata.liquidity) {
-              tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
-            }
-            if (tokenMetadata.creator) {
-              tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
-            }
-          } else {
-            recordCacheMiss(); // Registrar miss de cache
-            recordApiCall(); // Registrar chamada de API
+        
+        // Verificar transações Meteora DBC se o monitoramento estiver habilitado
+        if (METEORA_DBC_MONITORING_ENABLED && 
+            (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
+          const parsedMeteoraDBCTxn = decodeMeteoraDBCTxn(txn);
+          if (parsedMeteoraDBCTxn) {
+            await processMeteoraDBCTransaction(txn, parsedMeteoraDBCTxn);
           }
-          
-          // Enviar alerta
-          sendMessage(
-            `🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-            tokenInfo +
-            `Type: <b>${tOutput.type}</b>\n` +
-            `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
-            `<b>POOL DETAILS:</b>\n` +
-            `  Pool Value: <b>${solBalance.toFixed(2)} SOL</b>\n` +
-            `  Token Supply: <b>${(tokenAmount / 1000000000).toFixed(2)}M</b>\n` +
-            `  Current Price: <b>${currentPrice.toFixed(8)} SOL</b>\n` +
-            `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
-          );
-          
-          // Adicionar endereço aos enviados
-          sentAddresses.add(tOutput.mint);
+        }
+        
+        // Verificar transações Bonk.fun se o monitoramento estiver habilitado
+        if (BONK_FUN_MONITORING_ENABLED && 
+            (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+          const parsedBonkFunTxn = decodeBonkFunTxn(txn);
+          if (parsedBonkFunTxn) {
+            await processBonkFunTransaction(txn, parsedBonkFunTxn);
+          }
+        }
+        
+        // Verificar transações daos.fun se o monitoramento estiver habilitado
+        if (DAOS_FUN_MONITORING_ENABLED && 
+            (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+          const parsedDaosFunTxn = decodeDaosFunTxn(txn);
+          if (parsedDaosFunTxn) {
+            await processDaosFunTransaction(txn, parsedDaosFunTxn);
+          }
+        }
+        
+        // Verificar transações Moonshot Screener se o monitoramento estiver habilitado
+        if (MOONSHOT_MONITORING_ENABLED && 
+            (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
+          const parsedMoonshotTxn = decodeMoonshotTxn(txn);
+          if (parsedMoonshotTxn) {
+            await processMoonshotTransaction(txn, parsedMoonshotTxn);
+          }
+        }
+        
+        // Verificar transações anoncoin.it se o monitoramento estiver habilitado
+        if (ANONCOIN_MONITORING_ENABLED && 
+            (MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH")) {
+          const parsedAnoncoinTxn = decodeAnoncoinTxn(txn);
+          if (parsedAnoncoinTxn) {
+            await processAnoncoinTransaction(txn, parsedAnoncoinTxn);
+          }
         }
       }
     } catch (err) {
@@ -511,6 +551,1080 @@ async function handleStream(client: Client, args: SubscribeRequest) {
   await streamClosed;
 }
 
+// Função para processar transações PumpFun (movida do handleStream original)
+async function processPumpFunTransaction(txn: any, parsedTxn: any) {
+  const tOutput = transactionOutput(parsedTxn);
+  
+  // Verificar se os dados essenciais estão presentes
+  if (!tOutput.mint || !tOutput.user) {
+      // logger.info("⚠️  Transação com dados incompletos ignorada");
+      return;
+  }
+  
+  // Verificar se é uma transação válida (com valores não zero)
+  if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
+      // logger.info("⚠️  Transação BUY com token amount zero ignorada");
+      return;
+  }
+  
+  const balance = await getBondingCurveAddress(tOutput.bondingCurve);
+  const progress =
+    a * Number(balance) ** 3 +
+    b * Number(balance) ** 2 +
+    c * Number(balance) +
+    d;
+  logger.info(
+    `
+    TYPE : ${tOutput.type}
+    MINT : ${tOutput.mint}
+    SIGNER : ${tOutput.user}
+    BONDING CURVE : ${tOutput.bondingCurve}
+    TOKEN AMOUNT : ${tOutput.tokenAmount}
+    SOL AMOUNT : ${tOutput.solAmount} SOL
+    POOL DETAILS : ${balance} SOL
+                  ${Number(progress).toFixed(2)}% to completion
+    SIGNATURE : ${txn.transaction.signatures[0]}
+    `
+  );
+
+  // Buscar metadados do token, se disponível
+  let tokenMetadata = null;
+  if (tOutput.mint) {
+    try {
+      tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
+    } catch (metadataError) {
+      logger.debug(`❌ Erro ao buscar metadados para token ${tOutput.mint}:`, metadataError.message);
+    }
+  }
+
+  if (
+    Number(progress) >= ALERT_THRESHOLD &&
+    Number(progress) <= 100 &&
+    !sentAddresses.has(tOutput.mint)
+  ) {
+    // Registrar transação no monitor de desempenho
+    recordTransaction(tOutput.mint);
+    
+    // Calcular informações adicionais
+    const solBalance = Number(balance);
+    const tokenAmount = tOutput.tokenAmount || 0;
+    // Calcular preço atual do token (SOL/token)
+    const currentPrice = solBalance > 0 && tokenAmount > 0 ? 
+      (solBalance * 1000000000) / tokenAmount : 0;
+    
+    // Preparar dados do token para o executor híbrido
+    const tokenData: TokenData = {
+      mint: tOutput.mint,
+      bondingCurve: tOutput.bondingCurve,
+      curvePercent: Number(progress),
+      isLaunched: Number(progress) >= 100, // Simplificação - na prática, verificaria se migrou para Raydium
+      mode: Number(progress) >= 100 ? "DEX" : "CURVE"
+    };
+    
+    // Executar trade híbrido passando o tipo de trade
+    executeHybridTrade(tokenData, tOutput.type).catch(error => {
+      logger.error(`❌ Erro ao executar trade híbrido para token ${tOutput.mint}:`, error);
+      recordError();
+    });
+    
+    // Preparar mensagem com metadados, se disponíveis
+    let tokenInfo = `Token: <code>${tOutput.mint}</code>\n`;
+    if (tokenMetadata) {
+      recordCacheHit(); // Registrar hit de cache
+      if (tokenMetadata.name) {
+        tokenInfo = `Token: <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+      }
+      if (tokenMetadata.symbol) {
+        tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+      }
+      if (tokenMetadata.description) {
+        // Limitar a descrição a 100 caracteres
+        const description = tokenMetadata.description.length > 100 
+          ? tokenMetadata.description.substring(0, 100) + '...' 
+          : tokenMetadata.description;
+        tokenInfo += `Description: <i>${description}</i>\n`;
+      }
+      if (tokenMetadata.twitter) {
+        tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+      }
+      if (tokenMetadata.telegram) {
+        tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+      }
+      if (tokenMetadata.website) {
+        tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+      }
+      if (tokenMetadata.isScam) {
+        tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+      }
+      // Adicionar informações financeiras se disponíveis
+      if (tokenMetadata.marketCap) {
+        tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+      }
+      if (tokenMetadata.price) {
+        tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+      }
+      if (tokenMetadata.volume24h) {
+        tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+      }
+      if (tokenMetadata.liquidity) {
+        tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+      }
+      if (tokenMetadata.creator) {
+        tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+      }
+    } else {
+      recordCacheMiss(); // Registrar miss de cache
+      recordApiCall(); // Registrar chamada de API
+    }
+    
+    // Enviar alerta
+    sendMessage(
+      `🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+      tokenInfo +
+      `Type: <b>${tOutput.type}</b>\n` +
+      `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+      `<b>POOL DETAILS:</b>\n` +
+      `  Pool Value: <b>${solBalance.toFixed(2)} SOL</b>\n` +
+      `  Token Supply: <b>${(tokenAmount / 1000000000).toFixed(2)}M</b>\n` +
+      `  Current Price: <b>${currentPrice.toFixed(8)} SOL</b>\n` +
+      `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+    );
+    
+    // Adicionar endereço aos enviados
+    sentAddresses.add(tOutput.mint);
+  }
+}
+
+// Função para processar transações Meteora DBC
+async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
+  logger.info("🔄 Transação Meteora DBC detectada:", txn.transaction.signatures[0]);
+  
+  try {
+    // Importar funções utilitárias da Meteora DBC
+    const { calculateMeteoraDBCCurveProgress } = await import("./utils/getMeteoraDBCBonding");
+    
+    // Extrair informações reais da transação
+    let tOutput: any = {
+      type: "UNKNOWN",
+      mint: null,
+      user: null,
+      bondingCurve: null,
+      tokenAmount: 0,
+      solAmount: 0
+    };
+    
+    // Extrair dados reais da transação Meteora DBC
+    if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+      // Procurar por instruções relevantes na transação
+      for (const ix of parsedTxn.instructions) {
+        if (ix.accounts) {
+          // Procurar por contas relevantes (mint, user, bonding curve)
+          if (ix.accounts.length >= 3) {
+            // Normalmente, as contas estão na ordem: user, bonding curve, mint
+            // Converter objetos PublicKey para strings corretamente
+            tOutput.user = (ix.accounts[0] ? (typeof ix.accounts[0] === 'object' && ix.accounts[0].hasOwnProperty('toBase58') ? ix.accounts[0].toBase58() : String(ix.accounts[0])) : null) || tOutput.user;
+            tOutput.bondingCurve = (ix.accounts[1] ? (typeof ix.accounts[1] === 'object' && ix.accounts[1].hasOwnProperty('toBase58') ? ix.accounts[1].toBase58() : String(ix.accounts[1])) : null) || tOutput.bondingCurve;
+            tOutput.mint = (ix.accounts[2] ? (typeof ix.accounts[2] === 'object' && ix.accounts[2].hasOwnProperty('toBase58') ? ix.accounts[2].toBase58() : String(ix.accounts[2])) : null) || tOutput.mint;
+          }
+        }
+        
+        // Extrair valores de token e SOL se disponíveis
+        if (ix.data) {
+          if (ix.data.tokenAmount !== undefined) {
+            tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+          }
+          if (ix.data.solAmount !== undefined) {
+            tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+          }
+          
+          // Determinar tipo de transação com base nos dados
+          if (ix.name) {
+            if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+              tOutput.type = "BUY";
+            } else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+              tOutput.type = "SELL";
+            } else {
+              tOutput.type = ix.name.toUpperCase();
+            }
+          }
+        }
+      }
+    }
+    
+    // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
+    if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+      // Extrair de txn.transaction.message.accountKeys se disponível
+      if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+        tOutput.user = tOutput.user || (txn.transaction.message.accountKeys[0]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[0].pubkey.toBase58() : txn.transaction.message.accountKeys[0]) || "UNKNOWN_USER";
+        tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
+        tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
+      }
+      
+      // Usar signature como identificador se necessário
+      if (!tOutput.mint) {
+        tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+      }
+    }
+    
+    // Se ainda não temos bonding curve, usar o mint como fallback
+    tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+    
+    // Garantir que todos os valores sejam strings antes de passar para as funções
+    if (tOutput.mint && typeof tOutput.mint === 'object') {
+      tOutput.mint = tOutput.mint.toString();
+    }
+    if (tOutput.user && typeof tOutput.user === 'object') {
+      tOutput.user = tOutput.user.toString();
+    }
+    if (tOutput.bondingCurve && typeof tOutput.bondingCurve === 'object') {
+      tOutput.bondingCurve = tOutput.bondingCurve.toString();
+    }
+    
+    // Substituir "[object Object]" por valores reais se necessário
+    if (tOutput.mint === "[object Object]") {
+      tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+    }
+    if (tOutput.user === "[object Object]") {
+      tOutput.user = "UNKNOWN_USER";
+    }
+    if (tOutput.bondingCurve === "[object Object]") {
+      tOutput.bondingCurve = tOutput.mint;
+    }
+    
+    // Calcular o progresso da curva
+    logger.debug(`🔍 Calculando progresso da curva para bondingCurve: ${tOutput.bondingCurve}`);
+    const progress = await calculateMeteoraDBCCurveProgress(tOutput.bondingCurve);
+    logger.debug(`🔍 Progresso calculado: ${progress}`);
+    
+    logger.info(
+      `
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `
+    );
+    
+    // Verificar se atingiu o limiar de alerta
+    if (
+      Number(progress) >= METEORA_DBC_ALERT_THRESHOLD &&
+      Number(progress) <= 100 &&
+      !sentAddresses.has(tOutput.mint)
+    ) {
+      // Registrar transação no monitor de desempenho
+      recordTransaction(tOutput.mint);
+      
+      // Buscar metadados do token, se disponível
+      let tokenMetadata = null;
+      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        try {
+          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
+        } catch (metadataError) {
+          logger.debug(`❌ Erro ao buscar metadados para token Meteora DBC ${tOutput.mint}:`, metadataError.message);
+        }
+      }
+      
+      // Preparar mensagem com metadados, se disponíveis
+      let tokenInfo = `Token (Meteora DBC): <code>${tOutput.mint}</code>\n`;
+      if (tokenMetadata) {
+        recordCacheHit(); // Registrar hit de cache
+        if (tokenMetadata.name) {
+          tokenInfo = `Token (Meteora DBC): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+        }
+        if (tokenMetadata.symbol) {
+          tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+        }
+        if (tokenMetadata.description) {
+          // Limitar a descrição a 100 caracteres
+          const description = tokenMetadata.description.length > 100 
+            ? tokenMetadata.description.substring(0, 100) + '...' 
+            : tokenMetadata.description;
+          tokenInfo += `Description: <i>${description}</i>\n`;
+        }
+        if (tokenMetadata.twitter) {
+          tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+        }
+        if (tokenMetadata.telegram) {
+          tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+        }
+        if (tokenMetadata.website) {
+          tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+        }
+        if (tokenMetadata.isScam) {
+          tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+        }
+        // Adicionar informações financeiras se disponíveis
+        if (tokenMetadata.marketCap) {
+          tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.price) {
+          tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+        }
+        if (tokenMetadata.volume24h) {
+          tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.liquidity) {
+          tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.creator) {
+          tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+        }
+      } else {
+        recordCacheMiss(); // Registrar miss de cache
+        recordApiCall(); // Registrar chamada de API
+      }
+      
+      // Enviar alerta
+      sendMessage(
+        `🚨 <b>ALERTA METEORA DBC - ${METEORA_DBC_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+        tokenInfo +
+        `Type: <b>${tOutput.type}</b>\n` +
+        `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+        `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+      );
+      
+      // Adicionar endereço aos enviados
+      sentAddresses.add(tOutput.mint);
+    }
+  } catch (error) {
+    logger.error("❌ Erro ao processar transação Meteora DBC:", error);
+  }
+}
+
+// Função para processar transações Bonk.fun
+async function processBonkFunTransaction(txn: any, parsedTxn: any) {
+  logger.info("🔄 Transação Bonk.fun detectada:", txn.transaction.signatures[0]);
+  
+  try {
+    // Importar funções utilitárias do Bonk.fun
+    const { calculateBonkFunCurveProgress } = await import("./utils/getBonkFunBonding");
+    
+    // Extrair informações reais da transação
+    let tOutput: any = {
+      type: "UNKNOWN",
+      mint: null,
+      user: null,
+      bondingCurve: null,
+      tokenAmount: 0,
+      solAmount: 0
+    };
+    
+    // Extrair dados reais da transação Bonk.fun
+    if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+      // Procurar por instruções relevantes na transação
+      for (const ix of parsedTxn.instructions) {
+        if (ix.accounts) {
+          // Procurar por contas relevantes (mint, user, bonding curve)
+          if (ix.accounts.length >= 3) {
+            // Normalmente, as contas estão na ordem: user, bonding curve, mint
+            // Converter objetos PublicKey para strings
+            tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+            tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+            tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+          }
+        }
+        
+        // Extrair valores de token e SOL se disponíveis
+        if (ix.data) {
+          if (ix.data.tokenAmount !== undefined) {
+            tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+          }
+          if (ix.data.solAmount !== undefined) {
+            tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+          }
+          
+          // Determinar tipo de transação com base nos dados
+          if (ix.name) {
+            if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+              tOutput.type = "BUY";
+            } else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+              tOutput.type = "SELL";
+            } else {
+              tOutput.type = ix.name.toUpperCase();
+            }
+          }
+        }
+      }
+    }
+    
+    // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
+    if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+      // Extrair de txn.transaction.message.accountKeys se disponível
+      if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+        tOutput.user = tOutput.user || txn.transaction.message.accountKeys[0]?.pubkey?.toBase58() || "UNKNOWN_USER";
+        tOutput.bondingCurve = tOutput.bondingCurve || txn.transaction.message.accountKeys[1]?.pubkey?.toBase58() || "UNKNOWN_BONDING_CURVE";
+        tOutput.mint = tOutput.mint || txn.transaction.message.accountKeys[2]?.pubkey?.toBase58() || "UNKNOWN_MINT";
+      }
+      
+      // Usar signature como identificador se necessário
+      if (!tOutput.mint) {
+        tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+      }
+    }
+    
+    // Se ainda não temos bonding curve, usar o mint como fallback
+    tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+    
+    // Calcular o progresso da curva
+    const progress = await calculateBonkFunCurveProgress(tOutput.bondingCurve);
+    
+    logger.info(
+      `
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `
+    );
+    
+    // Verificar se atingiu o limiar de alerta
+    if (
+      Number(progress) >= BONK_FUN_ALERT_THRESHOLD &&
+      Number(progress) <= 100 &&
+      !sentAddresses.has(tOutput.mint)
+    ) {
+      // Registrar transação no monitor de desempenho
+      recordTransaction(tOutput.mint);
+      
+      // Buscar metadados do token, se disponível
+      let tokenMetadata = null;
+      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        try {
+          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
+        } catch (metadataError) {
+          logger.debug(`❌ Erro ao buscar metadados para token bonk.fun ${tOutput.mint}:`, metadataError.message);
+        }
+      }
+      
+      // Preparar mensagem com metadados, se disponíveis
+      let tokenInfo = `Token (bonk.fun): <code>${tOutput.mint}</code>\n`;
+      if (tokenMetadata) {
+        recordCacheHit(); // Registrar hit de cache
+        if (tokenMetadata.name) {
+          tokenInfo = `Token (bonk.fun): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+        }
+        if (tokenMetadata.symbol) {
+          tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+        }
+        if (tokenMetadata.description) {
+          // Limitar a descrição a 100 caracteres
+          const description = tokenMetadata.description.length > 100 
+            ? tokenMetadata.description.substring(0, 100) + '...' 
+            : tokenMetadata.description;
+          tokenInfo += `Description: <i>${description}</i>\n`;
+        }
+        if (tokenMetadata.twitter) {
+          tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+        }
+        if (tokenMetadata.telegram) {
+          tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+        }
+        if (tokenMetadata.website) {
+          tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+        }
+        if (tokenMetadata.isScam) {
+          tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+        }
+        // Adicionar informações financeiras se disponíveis
+        if (tokenMetadata.marketCap) {
+          tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.price) {
+          tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+        }
+        if (tokenMetadata.volume24h) {
+          tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.liquidity) {
+          tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.creator) {
+          tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+        }
+      } else {
+        recordCacheMiss(); // Registrar miss de cache
+        recordApiCall(); // Registrar chamada de API
+      }
+      
+      // Enviar alerta
+      sendMessage(
+        `🚨 <b>ALERTA BONK.FUN - ${BONK_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+        tokenInfo +
+        `Type: <b>${tOutput.type}</b>\n` +
+        `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+        `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+      );
+      
+      // Adicionar endereço aos enviados
+      sentAddresses.add(tOutput.mint);
+    }
+  } catch (error) {
+    logger.error("❌ Erro ao processar transação bonk.fun:", error);
+  }
+}
+
+// Função para processar transações Moonshot Screener
+// Função para processar transações Moonshot Screener
+async function processMoonshotTransaction(txn: any, parsedTxn: any) {
+  logger.info("🔄 Transação Moonshot Screener detectada:", txn.transaction.signatures[0]);
+  
+  try {
+    // Importar funções utilitárias do Moonshot Screener
+    const { calculateMoonshotCurveProgress } = await import("./utils/getMoonshotBonding");
+    
+    // Extrair informações reais da transação
+    let tOutput: any = {
+      type: "UNKNOWN",
+      mint: null,
+      user: null,
+      bondingCurve: null,
+      tokenAmount: 0,
+      solAmount: 0
+    };
+    
+    // Extrair dados reais da transação Moonshot Screener
+    if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+      // Procurar por instruções relevantes na transação
+      for (const ix of parsedTxn.instructions) {
+        if (ix.accounts) {
+          // Procurar por contas relevantes (mint, user, bonding curve)
+          if (ix.accounts.length >= 3) {
+            // Normalmente, as contas estão na ordem: user, bonding curve, mint
+            // Converter objetos PublicKey para strings
+            tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+            tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+            tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+          }
+        }
+        
+        // Extrair valores de token e SOL se disponíveis
+        if (ix.data) {
+          if (ix.data.tokenAmount !== undefined) {
+            tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+          }
+          if (ix.data.solAmount !== undefined) {
+            tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+          }
+          
+          // Determinar tipo de transação com base nos dados
+          if (ix.name) {
+            if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+              tOutput.type = "BUY";
+            } else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+              tOutput.type = "SELL";
+            } else {
+              tOutput.type = ix.name.toUpperCase();
+            }
+          }
+        }
+      }
+    }
+    
+    // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
+    if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+      // Extrair de txn.transaction.message.accountKeys se disponível
+      if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+        tOutput.user = tOutput.user || txn.transaction.message.accountKeys[0]?.pubkey?.toBase58() || "UNKNOWN_USER";
+        tOutput.bondingCurve = tOutput.bondingCurve || txn.transaction.message.accountKeys[1]?.pubkey?.toBase58() || "UNKNOWN_BONDING_CURVE";
+        tOutput.mint = tOutput.mint || txn.transaction.message.accountKeys[2]?.pubkey?.toBase58() || "UNKNOWN_MINT";
+      }
+      
+      // Usar signature como identificador se necessário
+      if (!tOutput.mint) {
+        tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+      }
+    }
+    
+    // Se ainda não temos bonding curve, usar o mint como fallback
+    tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+    
+    // Calcular o progresso da curva
+    const progress = await calculateMoonshotCurveProgress(tOutput.bondingCurve);
+    
+    logger.info(
+      `
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `
+    );
+    
+    // Verificar se atingiu o limiar de alerta
+    if (
+      Number(progress) >= MOONSHOT_ALERT_THRESHOLD &&
+      Number(progress) <= 100 &&
+      !sentAddresses.has(tOutput.mint)
+    ) {
+      // Registrar transação no monitor de desempenho
+      recordTransaction(tOutput.mint);
+      
+      // Buscar metadados do token, se disponível
+      let tokenMetadata = null;
+      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        try {
+          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
+        } catch (metadataError) {
+          logger.debug(`❌ Erro ao buscar metadados para token moonshot ${tOutput.mint}:`, metadataError.message);
+        }
+      }
+      
+      // Preparar mensagem com metadados, se disponíveis
+      let tokenInfo = `Token (moonshot): <code>${tOutput.mint}</code>\n`;
+      if (tokenMetadata) {
+        recordCacheHit(); // Registrar hit de cache
+        if (tokenMetadata.name) {
+          tokenInfo = `Token (moonshot): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+        }
+        if (tokenMetadata.symbol) {
+          tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+        }
+        if (tokenMetadata.description) {
+          // Limitar a descrição a 100 caracteres
+          const description = tokenMetadata.description.length > 100 
+            ? tokenMetadata.description.substring(0, 100) + '...' 
+            : tokenMetadata.description;
+          tokenInfo += `Description: <i>${description}</i>\n`;
+        }
+        if (tokenMetadata.twitter) {
+          tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+        }
+        if (tokenMetadata.telegram) {
+          tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+        }
+        if (tokenMetadata.website) {
+          tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+        }
+        if (tokenMetadata.isScam) {
+          tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+        }
+        // Adicionar informações financeiras se disponíveis
+        if (tokenMetadata.marketCap) {
+          tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.price) {
+          tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+        }
+        if (tokenMetadata.volume24h) {
+          tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.liquidity) {
+          tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.creator) {
+          tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+        }
+      } else {
+        recordCacheMiss(); // Registrar miss de cache
+        recordApiCall(); // Registrar chamada de API
+      }
+      
+      // Enviar alerta
+      sendMessage(
+        `🚨 <b>ALERTA MOONSHOT - ${MOONSHOT_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+        tokenInfo +
+        `Type: <b>${tOutput.type}</b>\n` +
+        `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+        `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+      );
+      
+      // Adicionar endereço aos enviados
+      sentAddresses.add(tOutput.mint);
+    }
+  } catch (error) {
+    logger.error("❌ Erro ao processar transação moonshot:", error);
+  }
+}
+
+// Função para processar transações anoncoin.it
+async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
+  logger.info("🔄 Transação anoncoin.it detectada:", txn.transaction.signatures[0]);
+  
+  try {
+    // Importar funções utilitárias do anoncoin.it
+    const { calculateAnoncoinCurveProgress } = await import("./utils/getAnoncoinBonding");
+    
+    // Extrair informações reais da transação
+    let tOutput: any = {
+      type: "UNKNOWN",
+      mint: null,
+      user: null,
+      bondingCurve: null,
+      tokenAmount: 0,
+      solAmount: 0
+    };
+    
+    // Extrair dados reais da transação anoncoin.it
+    if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+      // Procurar por instruções relevantes na transação
+      for (const ix of parsedTxn.instructions) {
+        if (ix.accounts) {
+          // Procurar por contas relevantes (mint, user, bonding curve)
+          if (ix.accounts.length >= 3) {
+            // Normalmente, as contas estão na ordem: user, bonding curve, mint
+            // Converter objetos PublicKey para strings
+            tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+            tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+            tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+          }
+        }
+        
+        // Extrair valores de token e SOL se disponíveis
+        if (ix.data) {
+          if (ix.data.tokenAmount !== undefined) {
+            tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+          }
+          if (ix.data.solAmount !== undefined) {
+            tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+          }
+          
+          // Determinar tipo de transação com base nos dados
+          if (ix.name) {
+            if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+              tOutput.type = "BUY";
+            } else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+              tOutput.type = "SELL";
+            } else {
+              tOutput.type = ix.name.toUpperCase();
+            }
+          }
+        }
+      }
+    }
+    
+    // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
+    if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+      // Extrair de txn.transaction.message.accountKeys se disponível
+      if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+        tOutput.user = tOutput.user || (txn.transaction.message.accountKeys[0]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[0].pubkey.toBase58() : txn.transaction.message.accountKeys[0]) || "UNKNOWN_USER";
+        tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
+        tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
+      }
+      
+      // Usar signature como identificador se necessário
+      if (!tOutput.mint) {
+        tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+      }
+    }
+    
+    // Se ainda não temos bonding curve, usar o mint como fallback
+    tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+    
+    // Calcular o progresso da curva
+    const progress = await calculateAnoncoinCurveProgress(tOutput.bondingCurve);
+    
+    logger.info(
+      `
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `
+    );
+    
+    // Verificar se atingiu o limiar de alerta
+    if (
+      Number(progress) >= ANONCOIN_ALERT_THRESHOLD &&
+      Number(progress) <= 100 &&
+      !sentAddresses.has(tOutput.mint)
+    ) {
+      // Registrar transação no monitor de desempenho
+      recordTransaction(tOutput.mint);
+      
+      // Buscar metadados do token, se disponível
+      let tokenMetadata = null;
+      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        try {
+          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
+        } catch (metadataError) {
+          logger.debug(`❌ Erro ao buscar metadados para token anoncoin.it ${tOutput.mint}:`, metadataError.message);
+        }
+      }
+      
+      // Preparar mensagem com metadados, se disponíveis
+      let tokenInfo = `Token (anoncoin.it): <code>${tOutput.mint}</code>\n`;
+      if (tokenMetadata) {
+        recordCacheHit(); // Registrar hit de cache
+        if (tokenMetadata.name) {
+          tokenInfo = `Token (anoncoin.it): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+        }
+        if (tokenMetadata.symbol) {
+          tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+        }
+        if (tokenMetadata.description) {
+          // Limitar a descrição a 100 caracteres
+          const description = tokenMetadata.description.length > 100 
+            ? tokenMetadata.description.substring(0, 100) + '...' 
+            : tokenMetadata.description;
+          tokenInfo += `Description: <i>${description}</i>\n`;
+        }
+        if (tokenMetadata.twitter) {
+          tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+        }
+        if (tokenMetadata.telegram) {
+          tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+        }
+        if (tokenMetadata.website) {
+          tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+        }
+        if (tokenMetadata.isScam) {
+          tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+        }
+        // Adicionar informações financeiras se disponíveis
+        if (tokenMetadata.marketCap) {
+          tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.price) {
+          tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+        }
+        if (tokenMetadata.volume24h) {
+          tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.liquidity) {
+          tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.creator) {
+          tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+        }
+      } else {
+        recordCacheMiss(); // Registrar miss de cache
+        recordApiCall(); // Registrar chamada de API
+      }
+      
+      // Enviar alerta
+      sendMessage(
+        `🚨 <b>ALERTA ANONCOIN.IT - ${ANONCOIN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+        tokenInfo +
+        `Type: <b>${tOutput.type}</b>\n` +
+        `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+        `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+      );
+      
+      // Adicionar endereço aos enviados
+      sentAddresses.add(tOutput.mint);
+    }
+  } catch (error) {
+    logger.error("❌ Erro ao processar transação anoncoin.it:", error);
+  }
+}
+
+// Função para processar transações Meteora DBC
+
+// Função para processar transações daos.fun
+async function processDaosFunTransaction(txn: any, parsedTxn: any) {
+  logger.info("🔄 Transação daos.fun detectada:", txn.transaction.signatures[0]);
+  
+  try {
+    // Importar funções utilitárias do daos.fun
+    const { calculateDaosFunCurveProgress } = await import("./utils/getDaosFunBonding");
+    
+    // Extrair informações reais da transação
+    let tOutput: any = {
+      type: "UNKNOWN",
+      mint: null,
+      user: null,
+      bondingCurve: null,
+      tokenAmount: 0,
+      solAmount: 0
+    };
+    
+    // Extrair dados reais da transação daos.fun
+    if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+      // Procurar por instruções relevantes na transação
+      for (const ix of parsedTxn.instructions) {
+        if (ix.accounts) {
+          // Procurar por contas relevantes (mint, user, bonding curve)
+          if (ix.accounts.length >= 3) {
+            // Normalmente, as contas estão na ordem: user, bonding curve, mint
+            // Converter objetos PublicKey para strings
+            tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+            tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+            tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+          }
+        }
+        
+        // Extrair valores de token e SOL se disponíveis
+        if (ix.data) {
+          if (ix.data.tokenAmount !== undefined) {
+            tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+          }
+          if (ix.data.solAmount !== undefined) {
+            tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+          }
+          
+          // Determinar tipo de transação com base nos dados
+          if (ix.name) {
+            if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+              tOutput.type = "BUY";
+            } else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+              tOutput.type = "SELL";
+            } else {
+              tOutput.type = ix.name.toUpperCase();
+            }
+          }
+        }
+      }
+    }
+    
+    // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
+    if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+      // Extrair de txn.transaction.message.accountKeys se disponível
+      if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+        tOutput.user = tOutput.user || (txn.transaction.message.accountKeys[0]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[0].pubkey.toBase58() : txn.transaction.message.accountKeys[0]) || "UNKNOWN_USER";
+        tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
+        tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
+      }
+      
+      // Usar signature como identificador se necessário
+      if (!tOutput.mint) {
+        tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+      }
+    }
+    
+    // Se ainda não temos bonding curve, usar o mint como fallback
+    tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+    
+    // Garantir que todos os valores sejam strings antes de passar para as funções
+    if (tOutput.mint && typeof tOutput.mint === 'object') {
+      tOutput.mint = tOutput.mint.toString();
+    }
+    if (tOutput.user && typeof tOutput.user === 'object') {
+      tOutput.user = tOutput.user.toString();
+    }
+    if (tOutput.bondingCurve && typeof tOutput.bondingCurve === 'object') {
+      tOutput.bondingCurve = tOutput.bondingCurve.toString();
+    }
+    
+    // Calcular o progresso da curva
+    const progress = await calculateDaosFunCurveProgress(tOutput.bondingCurve);
+    
+    logger.info(
+      `
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `
+    );
+    
+    // Verificar se atingiu o limiar de alerta
+    if (
+      Number(progress) >= DAOS_FUN_ALERT_THRESHOLD &&
+      Number(progress) <= 100 &&
+      !sentAddresses.has(tOutput.mint)
+    ) {
+      // Registrar transação no monitor de desempenho
+      recordTransaction(tOutput.mint);
+      
+      // Buscar metadados do token, se disponível
+      let tokenMetadata = null;
+      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        try {
+          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
+        } catch (metadataError) {
+          logger.debug(`❌ Erro ao buscar metadados para token daos.fun ${tOutput.mint}:`, metadataError.message);
+        }
+      }
+      
+      // Preparar mensagem com metadados, se disponíveis
+      let tokenInfo = `Token (daos.fun): <code>${tOutput.mint}</code>\n`;
+      if (tokenMetadata) {
+        recordCacheHit(); // Registrar hit de cache
+        if (tokenMetadata.name) {
+          tokenInfo = `Token (daos.fun): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+        }
+        if (tokenMetadata.symbol) {
+          tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+        }
+        if (tokenMetadata.description) {
+          // Limitar a descrição a 100 caracteres
+          const description = tokenMetadata.description.length > 100 
+            ? tokenMetadata.description.substring(0, 100) + '...' 
+            : tokenMetadata.description;
+          tokenInfo += `Description: <i>${description}</i>\n`;
+        }
+        if (tokenMetadata.twitter) {
+          tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+        }
+        if (tokenMetadata.telegram) {
+          tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+        }
+        if (tokenMetadata.website) {
+          tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+        }
+        if (tokenMetadata.isScam) {
+          tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+        }
+        // Adicionar informações financeiras se disponíveis
+        if (tokenMetadata.marketCap) {
+          tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.price) {
+          tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+        }
+        if (tokenMetadata.volume24h) {
+          tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.liquidity) {
+          tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+        }
+        if (tokenMetadata.creator) {
+          tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+        }
+      } else {
+        recordCacheMiss(); // Registrar miss de cache
+        recordApiCall(); // Registrar chamada de API
+      }
+      
+      // Enviar alerta
+      sendMessage(
+        `🚨 <b>ALERTA DAOS.FUN - ${DAOS_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+        tokenInfo +
+        `Type: <b>${tOutput.type}</b>\n` +
+        `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+        `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+      );
+      
+      // Adicionar endereço aos enviados
+      sentAddresses.add(tOutput.mint);
+    }
+  } catch (error) {
+    logger.error("❌ Erro ao processar transação daos.fun:", error);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 async function subscribeCommand(client: Client, args: SubscribeRequest) {
   while (true) {
     try {
@@ -527,6 +1641,118 @@ const client = new Client(
   undefined,
   undefined
 );
+
+const req: SubscribeRequest = {
+  accounts: {},
+  slots: {},
+  transactions: {},
+  transactionsStatus: {},
+  entry: {},
+  blocks: {},
+  blocksMeta: {},
+  accountsDataSlice: [],
+  ping: undefined,
+  commitment: CommitmentLevel.CONFIRMED,
+};
+
+// Configurar monitoramento com base no protocolo selecionado
+if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+  req.transactions.pumpFun = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
+}
+
+// Adicionar monitoramento da Meteora DBC se habilitado e se o protocolo estiver configurado
+if ((MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH") && 
+    METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
+  req.transactions.meteoraDBC = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [METEORA_DBC_PROGRAM_ID_OBJ.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento da Meteora DBC habilitado para o programa: ${METEORA_DBC_PROGRAM_ID_OBJ.toBase58()}`);
+}
+
+// Adicionar monitoramento do Bonk.fun se habilitado e se o protocolo estiver configurado
+if ((MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH") && 
+    BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
+  req.transactions.bonkFun = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [BONK_FUN_PROGRAM_ID_OBJ.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento do Bonk.fun habilitado para o programa: ${BONK_FUN_PROGRAM_ID_OBJ.toBase58()}`);
+}
+
+// Adicionar monitoramento do daos.fun se habilitado e se o protocolo estiver configurado
+if ((MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH") && 
+    DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
+  req.transactions.daosFun = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [DAOS_FUN_PROGRAM_ID_OBJ.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento do daos.fun habilitado para o programa: ${DAOS_FUN_PROGRAM_ID_OBJ.toBase58()}`);
+}
+
+// Adicionar monitoramento do Moonshot Screener se habilitado e se o protocolo estiver configurado
+if ((MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH") && 
+    MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
+  req.transactions.moonshot = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [MOONSHOT_PROGRAM_ID_OBJ.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento do Moonshot Screener habilitado para o programa: ${MOONSHOT_PROGRAM_ID_OBJ.toBase58()}`);
+}
+
+// Adicionar monitoramento do anoncoin.it se habilitado e se o protocolo estiver configurado
+if ((MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH") && 
+    ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
+  req.transactions.anoncoin = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [ANONCOIN_PROGRAM_ID_OBJ.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento do anoncoin.it habilitado para o programa: ${ANONCOIN_PROGRAM_ID_OBJ.toBase58()}`);
+}
+
+// Se nenhum protocolo estiver configurado corretamente, usar PumpFun como padrão
+if (Object.keys(req.transactions).length === 0) {
+  logger.warn("⚠️ Nenhum protocolo de monitoramento configurado corretamente. Usando PumpFun como padrão.");
+  req.transactions.pumpFun = {
+    vote: false,
+    failed: false,
+    signature: undefined,
+    accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+    accountExclude: [],
+    accountRequired: [],
+  };
+  logger.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
+}
+
+subscribeCommand(client, req);
 
 // Função de reconexão com backoff exponencial
 async function reconnectWithBackoff(maxRetries = 5) {
@@ -718,30 +1944,6 @@ bot.on('error', async (error) => {
   }
 });
 
-const req: SubscribeRequest = {
-  accounts: {},
-  slots: {},
-  transactions: {
-    pumpFun: {
-      vote: false,
-      failed: false,
-      signature: undefined,
-      accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()], //["Hb9uyfUg8RbLsfSdud3LSW3yXx5PodM3XZmMS2ajpump",'DT1WapMVRafeBbJ2RcA7Rf2dF3g6pEa7vz7rxYLXpump]
-      accountExclude: [],
-      accountRequired: [],
-    },
-  },
-  transactionsStatus: {},
-  entry: {},
-  blocks: {},
-  blocksMeta: {},
-  accountsDataSlice: [],
-  ping: undefined,
-  commitment: CommitmentLevel.CONFIRMED,
-};
-
-subscribeCommand(client, req);
-
 function decodePumpFunTxn(tx: VersionedTransactionResponse) {
   if (tx.meta?.err) return;
 
@@ -757,6 +1959,131 @@ function decodePumpFunTxn(tx: VersionedTransactionResponse) {
   if (pumpFunIxs.length === 0) return;
   const events = PUMP_FUN_EVENT_PARSER.parseEvent(tx);
   const result = { instructions: pumpFunIxs, events };
+  bnLayoutFormatter(result);
+  return result;
+}
+
+// Função para decodificar transações da Meteora DBC
+function decodeMeteoraDBCTxn(tx: VersionedTransactionResponse) {
+  if (!METEORA_DBC_MONITORING_ENABLED || !METEORA_DBC_PROGRAM_ID_OBJ || !METEORA_DBC_IX_PARSER || !METEORA_DBC_EVENT_PARSER) {
+    return null;
+  }
+  
+  if (tx.meta?.err) return;
+
+  const paredIxs = METEORA_DBC_IX_PARSER.parseTransactionData(
+    tx.transaction.message,
+    tx.meta.loadedAddresses
+  );
+
+  const meteoraDbcIxs = paredIxs.filter((ix) =>
+    ix.programId.equals(METEORA_DBC_PROGRAM_ID_OBJ!)
+  );
+
+  if (meteoraDbcIxs.length === 0) return null;
+  
+  const events = METEORA_DBC_EVENT_PARSER.parseEvent(tx);
+  const result = { instructions: meteoraDbcIxs, events };
+  bnLayoutFormatter(result);
+  return result;
+}
+
+// Função para decodificar transações do Bonk.fun
+function decodeBonkFunTxn(tx: VersionedTransactionResponse) {
+  if (!BONK_FUN_MONITORING_ENABLED || !BONK_FUN_PROGRAM_ID_OBJ || !BONK_FUN_IX_PARSER || !BONK_FUN_EVENT_PARSER) {
+    return null;
+  }
+  
+  if (tx.meta?.err) return;
+
+  const paredIxs = BONK_FUN_IX_PARSER.parseTransactionData(
+    tx.transaction.message,
+    tx.meta.loadedAddresses
+  );
+
+  const bonkFunIxs = paredIxs.filter((ix) =>
+    ix.programId.equals(BONK_FUN_PROGRAM_ID_OBJ!)
+  );
+
+  if (bonkFunIxs.length === 0) return null;
+  
+  const events = BONK_FUN_EVENT_PARSER.parseEvent(tx);
+  const result = { instructions: bonkFunIxs, events };
+  bnLayoutFormatter(result);
+  return result;
+}
+
+// Função para decodificar transações do daos.fun
+function decodeDaosFunTxn(tx: VersionedTransactionResponse) {
+  if (!DAOS_FUN_MONITORING_ENABLED || !DAOS_FUN_PROGRAM_ID_OBJ || !DAOS_FUN_IX_PARSER || !DAOS_FUN_EVENT_PARSER) {
+    return null;
+  }
+  
+  if (tx.meta?.err) return;
+
+  const paredIxs = DAOS_FUN_IX_PARSER.parseTransactionData(
+    tx.transaction.message,
+    tx.meta.loadedAddresses
+  );
+
+  const daosFunIxs = paredIxs.filter((ix) =>
+    ix.programId.equals(DAOS_FUN_PROGRAM_ID_OBJ!)
+  );
+
+  if (daosFunIxs.length === 0) return null;
+  
+  const events = DAOS_FUN_EVENT_PARSER.parseEvent(tx);
+  const result = { instructions: daosFunIxs, events };
+  bnLayoutFormatter(result);
+  return result;
+}
+
+// Função para decodificar transações do Moonshot Screener
+function decodeMoonshotTxn(tx: VersionedTransactionResponse) {
+  if (!MOONSHOT_MONITORING_ENABLED || !MOONSHOT_PROGRAM_ID_OBJ || !MOONSHOT_IX_PARSER || !MOONSHOT_EVENT_PARSER) {
+    return null;
+  }
+  
+  if (tx.meta?.err) return;
+
+  const paredIxs = MOONSHOT_IX_PARSER.parseTransactionData(
+    tx.transaction.message,
+    tx.meta.loadedAddresses
+  );
+
+  const moonshotIxs = paredIxs.filter((ix) =>
+    ix.programId.equals(MOONSHOT_PROGRAM_ID_OBJ!)
+  );
+
+  if (moonshotIxs.length === 0) return null;
+  
+  const events = MOONSHOT_EVENT_PARSER.parseEvent(tx);
+  const result = { instructions: moonshotIxs, events };
+  bnLayoutFormatter(result);
+  return result;
+}
+
+// Função para decodificar transações do anoncoin.it
+function decodeAnoncoinTxn(tx: VersionedTransactionResponse) {
+  if (!ANONCOIN_MONITORING_ENABLED || !ANONCOIN_PROGRAM_ID_OBJ || !ANONCOIN_IX_PARSER || !ANONCOIN_EVENT_PARSER) {
+    return null;
+  }
+  
+  if (tx.meta?.err) return;
+
+  const paredIxs = ANONCOIN_IX_PARSER.parseTransactionData(
+    tx.transaction.message,
+    tx.meta.loadedAddresses
+  );
+
+  const anoncoinIxs = paredIxs.filter((ix) =>
+    ix.programId.equals(ANONCOIN_PROGRAM_ID_OBJ!)
+  );
+
+  if (anoncoinIxs.length === 0) return null;
+  
+  const events = ANONCOIN_EVENT_PARSER.parseEvent(tx);
+  const result = { instructions: anoncoinIxs, events };
   bnLayoutFormatter(result);
   return result;
 }

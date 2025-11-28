@@ -4,11 +4,30 @@ import {
   Transaction, 
   sendAndConfirmTransaction,
   Keypair,
-  ComputeBudgetProgram
+  ComputeBudgetProgram,
+  SystemProgram,
+  TransactionInstruction
 } from "@solana/web3.js";
 import { BN } from "@project-serum/anchor";
 import { decode } from "bs58";
+import { createJupiterApiClient } from "@jup-ag/api";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import logger from "./logger";
+
+// Função auxiliar para obter o endereço de token associado
+async function getAssociatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+  allowOwnerOffCurve = false,
+  programId = TOKEN_PROGRAM_ID,
+  associatedTokenProgramId = ASSOCIATED_TOKEN_PROGRAM_ID
+): Promise<PublicKey> {
+  const [address] = await PublicKey.findProgramAddress(
+    [owner.toBuffer(), programId.toBuffer(), mint.toBuffer()],
+    associatedTokenProgramId
+  );
+  return address;
+}
 
 // Tipos e interfaces
 export interface TokenData {
@@ -41,7 +60,10 @@ const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 const PUMPFUN_PROGRAM_ID = new PublicKey(process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const BUY_AMOUNT_SOL = parseFloat(process.env.BUY_AMOUNT_SOL || "0.1");
 const TAKE_PROFIT_PERCENT = parseFloat(process.env.TAKE_PROFIT_PERCENT || "20");
+const STOP_LOSS_PERCENT = parseFloat(process.env.STOP_LOSS_PERCENT || "25");
 const SLIPPAGE_BPS = parseInt(process.env.SLIPPAGE_BPS || "50");
+// Exportar a variável para testes
+export { STOP_LOSS_PERCENT };
 // Para testes, podemos forçar a ativação da compra automática
 // Para testes, podemos forçar a ativação da compra automática
 // Configuração para controle de compra automática
@@ -58,6 +80,9 @@ const TRADE_TYPE_FILTER = process.env.TRADE_TYPE_FILTER || "BOTH"; // "BUY", "SE
 
 // Conexão com a Solana
 const connection = new Connection(RPC_URL, "confirmed");
+
+// Cliente da Jupiter API
+const jupiterApi = createJupiterApiClient();
 
 // Carregar carteira
 let keypair: Keypair | null = null;
@@ -125,21 +150,81 @@ export function isTradeTypeAllowed(tradeType: string): boolean {
  * @returns Assinatura da transação
  */
 export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promise<string> {
-  // Não exigir keypair em modo de simulação
+  if (!keypair) {
+    throw new Error("Keypair não disponível para executar trade");
+  }
+
   logger.info(`🛒 Iniciando compra do token ${tokenMint} na PumpFun`);
   
   try {
-    // Aqui seria implementada a lógica real de compra
-    // Esta é uma implementação simplificada como exemplo:
+    // Converter amountSol para lamports (1 SOL = 10^9 lamports)
+    const amountLamports = Math.floor(amountSol * 1e9);
     
-    // 1. Obter endereço da curva de bonding
-    // 2. Criar instrução de compra
-    // 3. Adicionar ComputeBudgetProgram para prioridade
-    // 4. Enviar transação
+    // Obter endereços necessários
+    const mintPublicKey = new PublicKey(tokenMint);
+    const globalAccount = PublicKey.findProgramAddressSync(
+      [Buffer.from("global")],
+      PUMPFUN_PROGRAM_ID
+    )[0];
     
-    // Simulação para fins de demonstração
-    const signature = "simulated_buy_signature_" + Date.now();
-    logger.info(`✅ Compra simulada realizada: ${signature}`);
+    const feeRecipient = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
+    
+    const bondingCurve = PublicKey.findProgramAddressSync(
+      [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
+      PUMPFUN_PROGRAM_ID
+    )[0];
+    
+    const associatedBondingCurve = await getAssociatedTokenAddress(
+      mintPublicKey,
+      bondingCurve,
+      true
+    );
+    
+    const associatedUser = await getAssociatedTokenAddress(
+      mintPublicKey,
+      keypair.publicKey
+    );
+
+    // Calcular maxSolCost com slippage
+    const maxSolCost = Math.floor(amountLamports * (1 + SLIPPAGE_BPS / 10000));
+
+    // Criar instrução de compra
+    const buyInstruction = new TransactionInstruction({
+      programId: PUMPFUN_PROGRAM_ID,
+      keys: [
+        { pubkey: globalAccount, isSigner: false, isWritable: false },
+        { pubkey: feeRecipient, isSigner: false, isWritable: true },
+        { pubkey: mintPublicKey, isSigner: false, isWritable: false },
+        { pubkey: bondingCurve, isSigner: false, isWritable: true },
+        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+        { pubkey: associatedUser, isSigner: false, isWritable: true },
+        { pubkey: keypair.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // rent
+      ],
+      data: Buffer.concat([
+        Buffer.from([110, 159, 49, 139, 158, 125, 146, 204]), // Discriminator for "buy"
+        new BN(amountLamports).toArrayLike(Buffer, "le", 8), // amount
+        new BN(maxSolCost).toArrayLike(Buffer, "le", 8), // maxSolCost
+      ]),
+    });
+
+    // Criar transação
+    const transaction = new Transaction().add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
+      buyInstruction
+    );
+
+    // Enviar e confirmar transação
+    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+      commitment: "confirmed",
+      skipPreflight: false,
+    });
+
+    logger.info(`✅ Compra realizada com sucesso: ${signature}`);
     
     return signature;
   } catch (error) {
@@ -155,21 +240,80 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
  * @returns Assinatura da transação
  */
 export async function sellOnPumpFun(tokenMint: string, amountToken: number): Promise<string> {
-  // Não exigir keypair em modo de simulação
+  if (!keypair) {
+    throw new Error("Keypair não disponível para executar trade");
+  }
+
   logger.info(`📉 Iniciando venda do token ${tokenMint} na PumpFun`);
   
   try {
-    // Aqui seria implementada a lógica real de venda
-    // Esta é uma implementação simplificada como exemplo:
+    // Converter amountToken para integer
+    const amount = Math.floor(amountToken);
     
-    // 1. Obter endereço da curva de bonding
-    // 2. Criar instrução de venda
-    // 3. Adicionar ComputeBudgetProgram para prioridade
-    // 4. Enviar transação
+    // Obter endereços necessários
+    const mintPublicKey = new PublicKey(tokenMint);
+    const globalAccount = PublicKey.findProgramAddressSync(
+      [Buffer.from("global")],
+      PUMPFUN_PROGRAM_ID
+    )[0];
     
-    // Simulação para fins de demonstração
-    const signature = "simulated_sell_signature_" + Date.now();
-    logger.info(`✅ Venda simulada realizada: ${signature}`);
+    const feeRecipient = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
+    
+    const bondingCurve = PublicKey.findProgramAddressSync(
+      [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
+      PUMPFUN_PROGRAM_ID
+    )[0];
+    
+    const associatedBondingCurve = await getAssociatedTokenAddress(
+      mintPublicKey,
+      bondingCurve,
+      true
+    );
+    
+    const associatedUser = await getAssociatedTokenAddress(
+      mintPublicKey,
+      keypair.publicKey
+    );
+
+    // Calcular minSolOutput com slippage (0.5% de proteção)
+    const minSolOutput = Math.floor(amount * 0.995);
+
+    // Criar instrução de venda
+    const sellInstruction = new TransactionInstruction({
+      programId: PUMPFUN_PROGRAM_ID,
+      keys: [
+        { pubkey: globalAccount, isSigner: false, isWritable: false },
+        { pubkey: feeRecipient, isSigner: false, isWritable: true },
+        { pubkey: mintPublicKey, isSigner: false, isWritable: false },
+        { pubkey: bondingCurve, isSigner: false, isWritable: true },
+        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+        { pubkey: associatedUser, isSigner: false, isWritable: true },
+        { pubkey: keypair.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.concat([
+        Buffer.from([51, 230, 133, 164, 1, 127, 131, 173]), // Discriminator for "sell"
+        new BN(amount).toArrayLike(Buffer, "le", 8), // amount
+        new BN(minSolOutput).toArrayLike(Buffer, "le", 8), // minSolOutput
+      ]),
+    });
+
+    // Criar transação
+    const transaction = new Transaction().add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
+      sellInstruction
+    );
+
+    // Enviar e confirmar transação
+    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+      commitment: "confirmed",
+      skipPreflight: false,
+    });
+
+    logger.info(`✅ Venda realizada com sucesso: ${signature}`);
     
     return signature;
   } catch (error) {
@@ -185,20 +329,104 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
  * @returns Assinatura da transação
  */
 export async function sellViaJupiter(tokenMint: string, amountToken: number): Promise<string> {
-  // Não exigir keypair em modo de simulação
+  if (!keypair) {
+    throw new Error("Keypair não disponível para executar trade");
+  }
+
   logger.info(`🔁 Iniciando venda do token ${tokenMint} via Jupiter`);
   
   try {
-    // Aqui seria implementada a lógica real de venda via Jupiter
-    // Esta é uma implementação simplificada como exemplo:
+    // Converter amountToken para integer
+    const amount = Math.floor(amountToken);
     
-    // 1. Obter quote da Jupiter API
-    // 2. Criar instrução de swap
-    // 3. Enviar transação
-    
-    // Simulação para fins de demonstração
-    const signature = "simulated_jupiter_signature_" + Date.now();
-    logger.info(`✅ Venda simulada via Jupiter realizada: ${signature}`);
+    // Obter endereço da token account do usuário
+    const mintPublicKey = new PublicKey(tokenMint);
+    const userTokenAccount = await getAssociatedTokenAddress(
+      mintPublicKey,
+      keypair.publicKey
+    );
+
+    // Obter cotação da Jupiter API (token -> SOL)
+    const quote = await jupiterApi.quoteGet({
+      inputMint: tokenMint,
+      outputMint: "So11111111111111111111111111111111111111112", // SOL mint
+      amount: amount,
+      slippageBps: SLIPPAGE_BPS,
+    });
+
+    if (!quote) {
+      throw new Error("Não foi possível obter cotação da Jupiter API");
+    }
+
+    // Obter instruções de swap
+    const swapResult = await jupiterApi.swapInstructionsPost({
+      swapRequest: {
+        quoteResponse: quote,
+        userPublicKey: keypair.publicKey.toString(),
+        wrapAndUnwrapSol: true,
+      },
+    });
+
+    if (!swapResult) {
+      throw new Error("Não foi possível obter instruções de swap da Jupiter API");
+    }
+
+    // Converter instruções para TransactionInstruction
+    const instructions: TransactionInstruction[] = [];
+
+    // Adicionar instruções de setup, se existirem
+    if (swapResult.setupInstructions) {
+      for (const setupIx of swapResult.setupInstructions) {
+        instructions.push(new TransactionInstruction({
+          programId: new PublicKey(setupIx.programId),
+          keys: setupIx.accounts.map(account => ({
+            pubkey: new PublicKey(account.pubkey),
+            isSigner: account.isSigner,
+            isWritable: account.isWritable,
+          })),
+          data: Buffer.from(setupIx.data, "base64"),
+        }));
+      }
+    }
+
+    // Adicionar instrução de swap principal
+    instructions.push(new TransactionInstruction({
+      programId: new PublicKey(swapResult.swapInstruction.programId),
+      keys: swapResult.swapInstruction.accounts.map(account => ({
+        pubkey: new PublicKey(account.pubkey),
+        isSigner: account.isSigner,
+        isWritable: account.isWritable,
+      })),
+      data: Buffer.from(swapResult.swapInstruction.data, "base64"),
+    }));
+
+    // Adicionar instrução de cleanup, se existir
+    if (swapResult.cleanupInstruction) {
+      instructions.push(new TransactionInstruction({
+        programId: new PublicKey(swapResult.cleanupInstruction.programId),
+        keys: swapResult.cleanupInstruction.accounts.map(account => ({
+          pubkey: new PublicKey(account.pubkey),
+          isSigner: account.isSigner,
+          isWritable: account.isWritable,
+        })),
+        data: Buffer.from(swapResult.cleanupInstruction.data, "base64"),
+      }));
+    }
+
+    // Criar transação
+    const transaction = new Transaction().add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1000000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
+      ...instructions
+    );
+
+    // Enviar e confirmar transação
+    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+      commitment: "confirmed",
+      skipPreflight: false,
+    });
+
+    logger.info(`✅ Venda via Jupiter realizada com sucesso: ${signature}`);
     
     return signature;
   } catch (error) {
@@ -251,19 +479,19 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
         buyTokenAmount: 0, // Seria calculado na implementação real
         buyTimestamp: Date.now(),
         takeProfit: TAKE_PROFIT_PERCENT,
-        stopLoss: 25, // 25% de stop loss padrão
+        stopLoss: STOP_LOSS_PERCENT, // Usar a variável de ambiente configurável
         isActive: true
       };
-      
+
       openPositions.set(tokenData.mint, position);
-      
+
       // Log de informações de lucro/prejuízo
       logger.info(`📊 COMPRA REALIZADA PARA TOKEN ${tokenData.mint}`);
       logger.info(`   Valor investido: ${BUY_AMOUNT_SOL} SOL`);
       logger.info(`   Take Profit configurado: ${TAKE_PROFIT_PERCENT}%`);
-      logger.info(`   Stop Loss configurado: -${5}%`);
+      logger.info(`   Stop Loss configurado: -${STOP_LOSS_PERCENT}%`);
       logger.info(`   Timestamp da compra: ${new Date(position.buyTimestamp).toISOString()}`);
-      
+
       logger.info(`📌 Posição registrada para token ${tokenData.mint}`);
     }
     

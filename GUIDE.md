@@ -68,6 +68,27 @@ TRADE_TYPE_FILTER=BUY  # Ou SELL, ou BOTH
 - Permite estratégias específicas (apenas compra ou apenas venda)
 - Redução de risco ao limitar tipos de operações
 
+### Configuração de Stop Loss
+
+#### Como funciona
+O Stop Loss é um mecanismo de proteção que fecha automaticamente uma posição quando o preço cai abaixo de um determinado percentual do preço de entrada, limitando assim as perdas.
+
+#### Configuração
+```env
+# Configurações de Trading Híbrido
+STOP_LOSS_PERCENT=25  # Percentual de stop loss (padrão: 25%)
+```
+
+#### Valores recomendados
+- **15**: Para traders conservadores
+- **25**: Para traders moderadamente agressivos (padrão)
+- **40**: Para traders agressivos que aceitam maior risco
+
+#### Benefícios
+- Proteção automática contra grandes perdas
+- Configuração personalizável de acordo com o perfil de risco
+- Monitoramento contínuo e fechamento automático de posições
+
 ## 📈 Monitor de Desempenho
 
 ### Métricas Coletadas
@@ -82,6 +103,65 @@ TRADE_TYPE_FILTER=BUY  # Ou SELL, ou BOTH
 O sistema gera relatórios automáticos:
 - A cada 10 minutos (se o bot estiver rodando por mais de 10 minutos)
 - A cada 1 hora (relatório completo)
+
+## 📊 Monitoramento Flexível de Protocolos
+
+### Como funciona
+O sistema agora permite configurar quais protocolos monitorar:
+
+### Configurações
+```env
+# Monitoramento de Protocolos
+# Opções: "PUMPFUN", "METEORA_DBC", "BONK_FUN", "BOTH"
+MONITORING_PROTOCOL=PUMPFUN
+```
+
+### Opções disponíveis
+- **PUMPFUN**: Monitorar apenas tokens PumpFun (comportamento padrão)
+- **METEORA_DBC**: Monitorar apenas tokens Meteora DBC
+- **BONK_FUN**: Monitorar apenas tokens Bonk.fun
+- **BOTH**: Monitorar múltiplos protocolos simultaneamente
+
+### Benefícios
+- Flexibilidade para testar diferentes protocolos
+- Possibilidade de focar em um protocolo específico
+- Monitoramento simultâneo de múltiplos protocolos
+
+## 📊 Monitoramento da Meteora DBC
+
+### Como funciona
+O sistema agora também pode monitorar tokens criados na Meteora DBC com sistema de curva similar ao PumpFun.
+
+### Configurações
+```env
+# Monitoramento de Meteora DBC
+METEORA_DBC_MONITORING_ENABLED=true    # Habilitar/desabilitar monitoramento
+METEORA_DBC_ALERT_THRESHOLD=97.7      # Limiar de alerta (padrão 97.7%)
+METEORA_DBC_PROGRAM_ID=...            # Program ID do contrato Meteora DBC
+```
+
+### Benefícios
+- Expansão para monitorar outra plataforma de tokens com curva de bonding
+- Configuração independente do monitoramento PumpFun
+- Alertas via Telegram quando tokens atingem o limiar configurado
+
+## 📊 Monitoramento do Bonk.fun
+
+### Como funciona
+O sistema agora também pode monitorar tokens criados no Bonk.fun com sistema de curva similar ao PumpFun.
+
+### Configurações
+```env
+# Monitoramento de Bonk.fun
+BONK_FUN_MONITORING_ENABLED=true    # Habilitar/desabilitar monitoramento
+BONK_FUN_ALERT_THRESHOLD=97.7      # Limiar de alerta (padrão 97.7%)
+BONK_FUN_PROGRAM_ID=...            # Program ID do contrato Bonk.fun
+```
+
+### Benefícios
+- Expansão para monitorar outra plataforma de tokens com curva de bonding
+- Configuração independente do monitoramento PumpFun
+- Alertas via Telegram quando tokens atingem o limiar configurado
 
 ## 🧪 Testes
 
@@ -113,6 +193,20 @@ Para testar o filtro de tipo de trade:
 npm run test:trade-type
 ```
 
+### Teste de Monitoramento da Meteora DBC
+Para testar o monitoramento da Meteora DBC:
+
+```bash
+npm run test:meteora-dbc
+```
+
+### Teste de Monitoramento do Bonk.fun
+Para testar o monitoramento do Bonk.fun:
+
+```bash
+npm run test:bonk-fun
+```
+
 ## 🛠️ Solução de Problemas
 
 ### Problemas Comuns
@@ -140,6 +234,21 @@ npm run test:trade-type
    - As opções válidas são: BUY, SELL, BOTH
    - Reinicie o bot após alterar as configurações
 
+6. **Monitoramento da Meteora DBC não está funcionando**
+   - Verifique se a variável `METEORA_DBC_MONITORING_ENABLED=true` está configurada no [.env](file:///wsl.localhost/Ubuntu/home/garci/telegram-webhook/.env)
+   - Verifique se o `METEORA_DBC_PROGRAM_ID` está configurado corretamente
+   - Reinicie o bot após alterar as configurações
+
+7. **Monitoramento do Bonk.fun não está funcionando**
+   - Verifique se a variável `BONK_FUN_MONITORING_ENABLED=true` está configurada no [.env](file:///wsl.localhost/Ubuntu/home/garci/telegram-webhook/.env)
+   - Verifique se o `BONK_FUN_PROGRAM_ID` está configurado corretamente
+   - Reinicie o bot após alterar as configurações
+
+8. **Protocolo de monitoramento não está funcionando**
+   - Verifique se a variável `MONITORING_PROTOCOL` está configurada corretamente no [.env](file:///wsl.localhost/Ubuntu/home/garci/telegram-webhook/.env)
+   - As opções válidas são: PUMPFUN, METEORA_DBC, BONK_FUN, BOTH
+   - Reinicie o bot após alterar as configurações
+
 ### Logs
 Os logs são salvos na pasta `logs/` e podem ser consultados para:
 - Verificar erros na busca de metadados
@@ -147,6 +256,9 @@ Os logs são salvos na pasta `logs/` e podem ser consultados para:
 - Acompanhar chamadas de API
 - Verificar o status do modo de trade único
 - Verificar se o filtro de tipo de trade está funcionando
+- Verificar o monitoramento da Meteora DBC
+- Verificar o monitoramento do Bonk.fun
+- Verificar quais protocolos estão sendo monitorados
 
 ## 📞 Suporte
 

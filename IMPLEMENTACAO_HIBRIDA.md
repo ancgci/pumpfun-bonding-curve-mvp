@@ -26,6 +26,7 @@ Implementar um sistema híbrido de execução de trades que opere em dois modos:
    BUY_AMOUNT_SOL=0.1
    TAKE_PROFIT_PERCENT=0.20
    SLIPPAGE_BPS=50
+   AUTO_BUY_ENABLED=true
    ```
 
 2. **Instalar dependências necessárias**
@@ -33,10 +34,11 @@ Implementar um sistema híbrido de execução de trades que opere em dois modos:
    npm install @solana/web3.js @solana/spl-token @jup-ag/api @project-serum/anchor
    ```
 
-3. **Criar módulo `hybridExecutor.ts`**
-   - Estrutura básica com funções exportadas
+3. **Atualizar módulo `hybridExecutor.ts`**
+   - Implementar funções reais de trading
    - Configuração de conexão com Solana
    - Carregamento de carteira programática
+   - Integração com Jupiter API
 
 ### Fase 2: Integração com PumpFun (Modo CURVE)
 
@@ -137,7 +139,7 @@ Implementar um sistema híbrido de execução de trades que opere em dois modos:
 
 ## 📦 Entregável Esperado
 
-1. Novo módulo `hybridExecutor.ts` funcional
+1. Novo módulo `hybridExecutor.ts` funcional com implementação real de trading
 2. Integração com bot principal
 3. Documentação atualizada
 4. Testes realizados em devnet

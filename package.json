@@ -10,7 +10,16 @@
     "test:metadata": "npx ts-node testMetadata.ts",
     "test:all": "npx ts-node testAllImprovements.ts",
     "test:single-trade": "npx ts-node testSingleTrade.ts",
-    "test:trade-type": "npx ts-node testTradeTypeFilter.ts"
+    "test:trade-type": "npx ts-node testTradeTypeFilter.ts",
+    "test:meteora-dbc": "npx ts-node testMeteoraDBC.ts",
+    "test:bonk-fun": "npx ts-node testBonkFun.ts",
+    "test:daos-fun": "npx ts-node testDaosFun.ts",
+    "test:moonshot": "npx ts-node testMoonshot.ts",
+    "test:anoncoin": "npx ts-node testAnoncoin.ts",
+    "test:real-trading": "npx ts-node testRealTrading.ts",
+    "test:specific-token": "npx ts-node testSpecificToken.ts",
+    "test:stop-loss": "npx ts-node testStopLossConfig.ts",
+    "test:stop-loss-full": "npx ts-node testStopLossFull.ts"
   },
   "author": "",
   "license": "ISC",
