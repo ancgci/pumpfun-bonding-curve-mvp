@@ -40,10 +40,27 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const bottleneck_1 = __importDefault(require("bottleneck"));
 dotenv_1.default.config();
 const SHYFT_GRPC = process.env.SHYFT_GRPC;
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const ALERT_THRESHOLD = parseFloat(process.env.ALERT_THRESHOLD) || 97.7;
+const MONITORING_PROTOCOL = process.env.MONITORING_PROTOCOL || "PUMPFUN";
+const METEORA_DBC_MONITORING_ENABLED = process.env.METEORA_DBC_MONITORING_ENABLED === "true";
+const METEORA_DBC_ALERT_THRESHOLD = parseFloat(process.env.METEORA_DBC_ALERT_THRESHOLD) || 97.7;
+const METEORA_DBC_PROGRAM_ID = process.env.METEORA_DBC_PROGRAM_ID || "METEORA_DBC_PROGRAM_ID_PLACEHOLDER";
+const BONK_FUN_MONITORING_ENABLED = process.env.BONK_FUN_MONITORING_ENABLED === "true";
+const BONK_FUN_ALERT_THRESHOLD = parseFloat(process.env.BONK_FUN_ALERT_THRESHOLD) || 97.7;
+const BONK_FUN_PROGRAM_ID = process.env.BONK_FUN_PROGRAM_ID || "BONK_FUN_PROGRAM_ID_PLACEHOLDER";
+const DAOS_FUN_MONITORING_ENABLED = process.env.DAOS_FUN_MONITORING_ENABLED === "true";
+const DAOS_FUN_ALERT_THRESHOLD = parseFloat(process.env.DAOS_FUN_ALERT_THRESHOLD) || 97.7;
+const DAOS_FUN_PROGRAM_ID = process.env.DAOS_FUN_PROGRAM_ID || "DAOS_FUN_PROGRAM_ID_PLACEHOLDER";
+const MOONSHOT_MONITORING_ENABLED = process.env.MOONSHOT_MONITORING_ENABLED === "true";
+const MOONSHOT_ALERT_THRESHOLD = parseFloat(process.env.MOONSHOT_ALERT_THRESHOLD) || 97.7;
+const MOONSHOT_PROGRAM_ID = process.env.MOONSHOT_PROGRAM_ID || "MOONSHOT_PROGRAM_ID_PLACEHOLDER";
+const ANONCOIN_MONITORING_ENABLED = process.env.ANONCOIN_MONITORING_ENABLED === "true";
+const ANONCOIN_ALERT_THRESHOLD = parseFloat(process.env.ANONCOIN_ALERT_THRESHOLD) || 97.7;
+const ANONCOIN_PROGRAM_ID = process.env.ANONCOIN_PROGRAM_ID || "ANONCOIN_PROGRAM_ID_PLACEHOLDER";
 if (!token) {
     logger_1.default.error("❌ Token do bot não encontrado. Verifique o arquivo .env");
     process.exit(1);
@@ -148,7 +165,11 @@ function removePidFile() {
 }
 createPidFile();
 let lastMessageTime = 0;
-const minMessageInterval = 5000;
+const minMessageInterval = parseInt(process.env.MIN_MESSAGE_INTERVAL || "5000");
+const limiter = new bottleneck_1.default({
+    minTime: 1000,
+    maxConcurrent: 1
+});
 let botHealth = {
     isHealthy: true,
     lastCheck: Date.now(),
@@ -184,72 +205,147 @@ setInterval(async () => {
     await checkBotHealth();
 }, 30000);
 async function sendMessage(message) {
-    const messageWithLink = message + '\n\n<a href="https://gmgn.ai/r/gD6vfzCr" target="_blank">Trade with GMGN.AI</a>';
-    const now = Date.now();
-    const timeSinceLastMessage = now - lastMessageTime;
-    if (timeSinceLastMessage < minMessageInterval) {
-        const delay = minMessageInterval - timeSinceLastMessage;
-        logger_1.default.info(`⏳ Rate limiting: esperando ${delay}ms antes de enviar próxima mensagem`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-    }
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        const result = await bot.sendMessage(chatId, messageWithLink, {
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-        });
-        clearTimeout(timeoutId);
-        lastMessageTime = Date.now();
-        logger_1.default.info("✅ Message sent successfully");
-        return result;
-    }
-    catch (error) {
-        logger_1.default.error("❌ Error sending message:", error.response?.body || error.message || error);
-        if (error.response?.body?.error_code === 429) {
-            const retryAfter = error.response.body.parameters?.retry_after || 30;
-            logger_1.default.warn(`⚠️  Rate limit atingido. Aguardando ${retryAfter} segundos antes de tentar novamente.`);
-            await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+    const messageWithLink = message + '\n\n<a href="https://gmgn.ai/r/gD6vfzCr">Trade with GMGN.AI</a>';
+    return await limiter.schedule(async () => {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const result = await bot.sendMessage(chatId, messageWithLink, {
+                parse_mode: "HTML",
+                disable_web_page_preview: true
+            });
+            clearTimeout(timeoutId);
+            lastMessageTime = Date.now();
+            logger_1.default.info("✅ Message sent successfully");
+            return result;
+        }
+        catch (error) {
+            logger_1.default.error("❌ Error sending message:", error.response?.body || error.message || error);
+            if (error.response?.body?.error_code === 429) {
+                const retryAfter = error.response.body.parameters?.retry_after || 30;
+                logger_1.default.warn(`⚠️  Rate limit atingido. Aguardando ${retryAfter} segundos antes de tentar novamente.`);
+                await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                throw error;
+            }
+            if (error.code === 'EFATAL' || error.name === 'AggregateError') {
+                logger_1.default.error("🚨 Erro fatal na comunicação com Telegram. Tentando reconectar...");
+                logger_1.default.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
+                logger_1.default.info("📝 Chat ID:", chatId);
+                try {
+                    logger_1.default.info("🔄 Iniciando processo de reconexão com backoff exponencial...");
+                    await reconnectWithBackoff(5);
+                    const newBot = new node_telegram_bot_api_1.default(token, {
+                        polling: true,
+                        request: {
+                            proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
+                            url: ''
+                        }
+                    });
+                    const retryResult = await limiter.schedule(() => newBot.sendMessage(chatId, messageWithLink, { parse_mode: "HTML" }));
+                    logger_1.default.info("✅ Mensagem enviada com sucesso após reconexão");
+                    Object.assign(bot, newBot);
+                    lastMessageTime = Date.now();
+                    return retryResult;
+                }
+                catch (reconnectError) {
+                    logger_1.default.error("❌ Falha ao reconectar após múltiplas tentativas:", reconnectError.message);
+                    logger_1.default.info("📋 Verifique:");
+                    logger_1.default.info("  1. Se o token do bot está correto no arquivo .env");
+                    logger_1.default.info("  2. Se o bot foi adicionado como administrador do canal");
+                    logger_1.default.info("  3. Se você tem conexão com a internet");
+                    logger_1.default.info("  4. Se o nome do canal está correto:", chatId);
+                }
+            }
             throw error;
         }
-        if (error.code === 'EFATAL' || error.name === 'AggregateError') {
-            logger_1.default.error("🚨 Erro fatal na comunicação com Telegram. Tentando reconectar...");
-            logger_1.default.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
-            logger_1.default.info("📝 Chat ID:", chatId);
-            try {
-                logger_1.default.info("🔄 Iniciando processo de reconexão com backoff exponencial...");
-                await reconnectWithBackoff(5);
-                const newBot = new node_telegram_bot_api_1.default(token, {
-                    polling: true,
-                    request: {
-                        proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
-                        url: ''
-                    }
-                });
-                const retryResult = await newBot.sendMessage(chatId, messageWithLink, { parse_mode: "HTML" });
-                logger_1.default.info("✅ Mensagem enviada com sucesso após reconexão");
-                Object.assign(bot, newBot);
-                lastMessageTime = Date.now();
-                return retryResult;
-            }
-            catch (reconnectError) {
-                logger_1.default.error("❌ Falha ao reconectar após múltiplas tentativas:", reconnectError.message);
-                logger_1.default.info("📋 Verifique:");
-                logger_1.default.info("  1. Se o token do bot está correto no arquivo .env");
-                logger_1.default.info("  2. Se o bot foi adicionado como administrador do canal");
-                logger_1.default.info("  3. Se você tem conexão com a internet");
-                logger_1.default.info("  4. Se o nome do canal está correto:", chatId);
-            }
-        }
-        throw error;
-    }
+    });
 }
 const TXN_FORMATTER = new transaction_formatter_1.TransactionFormatter();
 const PUMP_FUN_PROGRAM_ID = new web3_js_1.PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+let METEORA_DBC_PROGRAM_ID_OBJ = null;
+if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID) {
+    try {
+        METEORA_DBC_PROGRAM_ID_OBJ = new web3_js_1.PublicKey(METEORA_DBC_PROGRAM_ID);
+        logger_1.default.info(`✅ Program ID da Meteora DBC configurado: ${METEORA_DBC_PROGRAM_ID}`);
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao configurar Program ID da Meteora DBC:", error);
+    }
+}
+let BONK_FUN_PROGRAM_ID_OBJ = null;
+if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID) {
+    try {
+        BONK_FUN_PROGRAM_ID_OBJ = new web3_js_1.PublicKey(BONK_FUN_PROGRAM_ID);
+        logger_1.default.info(`✅ Program ID do Bonk.fun configurado: ${BONK_FUN_PROGRAM_ID}`);
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao configurar Program ID do Bonk.fun:", error);
+    }
+}
+let DAOS_FUN_PROGRAM_ID_OBJ = null;
+if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID) {
+    try {
+        DAOS_FUN_PROGRAM_ID_OBJ = new web3_js_1.PublicKey(DAOS_FUN_PROGRAM_ID);
+        logger_1.default.info(`✅ Program ID do daos.fun configurado: ${DAOS_FUN_PROGRAM_ID}`);
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao configurar Program ID do daos.fun:", error);
+    }
+}
+let MOONSHOT_PROGRAM_ID_OBJ = null;
+if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID) {
+    try {
+        MOONSHOT_PROGRAM_ID_OBJ = new web3_js_1.PublicKey(MOONSHOT_PROGRAM_ID);
+        logger_1.default.info(`✅ Program ID do Moonshot Screener configurado: ${MOONSHOT_PROGRAM_ID}`);
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao configurar Program ID do Moonshot Screener:", error);
+    }
+}
+let ANONCOIN_PROGRAM_ID_OBJ = null;
+if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID) {
+    try {
+        ANONCOIN_PROGRAM_ID_OBJ = new web3_js_1.PublicKey(ANONCOIN_PROGRAM_ID);
+        logger_1.default.info(`✅ Program ID do anoncoin.it configurado: ${ANONCOIN_PROGRAM_ID}`);
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao configurar Program ID do anoncoin.it:", error);
+    }
+}
 const PUMP_FUN_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
 PUMP_FUN_IX_PARSER.addParserFromIdl(PUMP_FUN_PROGRAM_ID.toBase58(), pump_0_1_0_json_1.default);
 const PUMP_FUN_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
 PUMP_FUN_EVENT_PARSER.addParserFromIdl(PUMP_FUN_PROGRAM_ID.toBase58(), pump_0_1_0_json_1.default);
+let METEORA_DBC_IX_PARSER = null;
+let METEORA_DBC_EVENT_PARSER = null;
+if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
+    METEORA_DBC_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    METEORA_DBC_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
+}
+let BONK_FUN_IX_PARSER = null;
+let BONK_FUN_EVENT_PARSER = null;
+if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
+    BONK_FUN_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    BONK_FUN_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
+}
+let DAOS_FUN_IX_PARSER = null;
+let DAOS_FUN_EVENT_PARSER = null;
+if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
+    DAOS_FUN_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    DAOS_FUN_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
+}
+let MOONSHOT_IX_PARSER = null;
+let MOONSHOT_EVENT_PARSER = null;
+if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
+    MOONSHOT_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    MOONSHOT_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
+}
+let ANONCOIN_IX_PARSER = null;
+let ANONCOIN_EVENT_PARSER = null;
+if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
+    ANONCOIN_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    ANONCOIN_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
+}
 async function handleStream(client, args) {
     const stream = await client.subscribe();
     const streamClosed = new Promise((resolve, reject) => {
@@ -269,59 +365,46 @@ async function handleStream(client, args) {
         try {
             if (data?.transaction) {
                 const txn = TXN_FORMATTER.formTransactionFromJson(data.transaction, Date.now());
-                const parsedTxn = decodePumpFunTxn(txn);
-                if (!parsedTxn)
-                    return;
-                const tOutput = (0, transactionOutput_1.transactionOutput)(parsedTxn);
-                if (!tOutput.mint || !tOutput.user) {
-                    return;
+                if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+                    const parsedPumpFunTxn = decodePumpFunTxn(txn);
+                    if (parsedPumpFunTxn) {
+                        await processPumpFunTransaction(txn, parsedPumpFunTxn);
+                    }
                 }
-                if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
-                    return;
+                if (METEORA_DBC_MONITORING_ENABLED &&
+                    (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
+                    const parsedMeteoraDBCTxn = decodeMeteoraDBCTxn(txn);
+                    if (parsedMeteoraDBCTxn) {
+                        await processMeteoraDBCTransaction(txn, parsedMeteoraDBCTxn);
+                    }
                 }
-                const balance = await (0, getBonding_1.getBondingCurveAddress)(tOutput.bondingCurve);
-                const progress = a * Number(balance) ** 3 +
-                    b * Number(balance) ** 2 +
-                    c * Number(balance) +
-                    d;
-                logger_1.default.info(`
-          TYPE : ${tOutput.type}
-          MINT : ${tOutput.mint}
-          SIGNER : ${tOutput.user}
-          BONDING CURVE : ${tOutput.bondingCurve}
-          TOKEN AMOUNT : ${tOutput.tokenAmount}
-          SOL AMOUNT : ${tOutput.solAmount} SOL
-          POOL DETAILS : ${balance} SOL
-                        ${Number(progress).toFixed(2)}% to completion
-          SIGNATURE : ${txn.transaction.signatures[0]}
-          `);
-                if (Number(progress) >= ALERT_THRESHOLD &&
-                    Number(progress) <= 100 &&
-                    !sentAddresses.has(tOutput.mint)) {
-                    const solBalance = Number(balance);
-                    const tokenAmount = tOutput.tokenAmount || 0;
-                    const currentPrice = solBalance > 0 && tokenAmount > 0 ?
-                        (solBalance * 1000000000) / tokenAmount : 0;
-                    const tokenData = {
-                        mint: tOutput.mint,
-                        bondingCurve: tOutput.bondingCurve,
-                        curvePercent: Number(progress),
-                        isLaunched: Number(progress) >= 100,
-                        mode: Number(progress) >= 100 ? "DEX" : "CURVE"
-                    };
-                    (0, hybridExecutor_1.executeHybridTrade)(tokenData).catch(error => {
-                        logger_1.default.error(`❌ Erro ao executar trade híbrido para token ${tOutput.mint}:`, error);
-                    });
-                    sendMessage(`🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-                        `Token: <code>${tOutput.mint}</code>\n` +
-                        `Type: <b>${tOutput.type}</b>\n` +
-                        `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
-                        `<b>POOL DETAILS:</b>\n` +
-                        `  Pool Value: <b>${solBalance.toFixed(2)} SOL</b>\n` +
-                        `  Token Supply: <b>${(tokenAmount / 1000000000).toFixed(2)}M</b>\n` +
-                        `  Current Price: <b>${currentPrice.toFixed(8)} SOL</b>\n` +
-                        `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
-                    sentAddresses.add(tOutput.mint);
+                if (BONK_FUN_MONITORING_ENABLED &&
+                    (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+                    const parsedBonkFunTxn = decodeBonkFunTxn(txn);
+                    if (parsedBonkFunTxn) {
+                        await processBonkFunTransaction(txn, parsedBonkFunTxn);
+                    }
+                }
+                if (DAOS_FUN_MONITORING_ENABLED &&
+                    (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+                    const parsedDaosFunTxn = decodeDaosFunTxn(txn);
+                    if (parsedDaosFunTxn) {
+                        await processDaosFunTransaction(txn, parsedDaosFunTxn);
+                    }
+                }
+                if (MOONSHOT_MONITORING_ENABLED &&
+                    (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
+                    const parsedMoonshotTxn = decodeMoonshotTxn(txn);
+                    if (parsedMoonshotTxn) {
+                        await processMoonshotTransaction(txn, parsedMoonshotTxn);
+                    }
+                }
+                if (ANONCOIN_MONITORING_ENABLED &&
+                    (MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH")) {
+                    const parsedAnoncoinTxn = decodeAnoncoinTxn(txn);
+                    if (parsedAnoncoinTxn) {
+                        await processAnoncoinTransaction(txn, parsedAnoncoinTxn);
+                    }
                 }
             }
         }
@@ -344,6 +427,826 @@ async function handleStream(client, args) {
     });
     await streamClosed;
 }
+async function processPumpFunTransaction(txn, parsedTxn) {
+    const tOutput = (0, transactionOutput_1.transactionOutput)(parsedTxn);
+    if (!tOutput.mint || !tOutput.user) {
+        return;
+    }
+    if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
+        return;
+    }
+    const balance = await (0, getBonding_1.getBondingCurveAddress)(tOutput.bondingCurve);
+    const progress = a * Number(balance) ** 3 +
+        b * Number(balance) ** 2 +
+        c * Number(balance) +
+        d;
+    logger_1.default.info(`
+    TYPE : ${tOutput.type}
+    MINT : ${tOutput.mint}
+    SIGNER : ${tOutput.user}
+    BONDING CURVE : ${tOutput.bondingCurve}
+    TOKEN AMOUNT : ${tOutput.tokenAmount}
+    SOL AMOUNT : ${tOutput.solAmount} SOL
+    POOL DETAILS : ${balance} SOL
+                  ${Number(progress).toFixed(2)}% to completion
+    SIGNATURE : ${txn.transaction.signatures[0]}
+    `);
+    let tokenMetadata = null;
+    if (tOutput.mint) {
+        try {
+            tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
+        }
+        catch (metadataError) {
+            logger_1.default.debug(`❌ Erro ao buscar metadados para token ${tOutput.mint}:`, metadataError.message);
+        }
+    }
+    if (Number(progress) >= ALERT_THRESHOLD &&
+        Number(progress) <= 100 &&
+        !sentAddresses.has(tOutput.mint)) {
+        (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+        const solBalance = Number(balance);
+        const tokenAmount = tOutput.tokenAmount || 0;
+        const currentPrice = solBalance > 0 && tokenAmount > 0 ?
+            (solBalance * 1000000000) / tokenAmount : 0;
+        const tokenData = {
+            mint: tOutput.mint,
+            bondingCurve: tOutput.bondingCurve,
+            curvePercent: Number(progress),
+            isLaunched: Number(progress) >= 100,
+            mode: Number(progress) >= 100 ? "DEX" : "CURVE"
+        };
+        (0, hybridExecutor_1.executeHybridTrade)(tokenData, tOutput.type).catch(error => {
+            logger_1.default.error(`❌ Erro ao executar trade híbrido para token ${tOutput.mint}:`, error);
+            (0, performanceMonitor_1.recordError)();
+        });
+        let tokenInfo = `Token: <code>${tOutput.mint}</code>\n`;
+        if (tokenMetadata) {
+            (0, performanceMonitor_1.recordCacheHit)();
+            if (tokenMetadata.name) {
+                tokenInfo = `Token: <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+            }
+            if (tokenMetadata.symbol) {
+                tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+            }
+            if (tokenMetadata.description) {
+                const description = tokenMetadata.description.length > 100
+                    ? tokenMetadata.description.substring(0, 100) + '...'
+                    : tokenMetadata.description;
+                tokenInfo += `Description: <i>${description}</i>\n`;
+            }
+            if (tokenMetadata.twitter) {
+                tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+            }
+            if (tokenMetadata.telegram) {
+                tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+            }
+            if (tokenMetadata.website) {
+                tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+            }
+            if (tokenMetadata.isScam) {
+                tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+            }
+            if (tokenMetadata.marketCap) {
+                tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+            }
+            if (tokenMetadata.price) {
+                tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+            }
+            if (tokenMetadata.volume24h) {
+                tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+            }
+            if (tokenMetadata.liquidity) {
+                tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+            }
+            if (tokenMetadata.creator) {
+                tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+            }
+        }
+        else {
+            (0, performanceMonitor_1.recordCacheMiss)();
+            (0, performanceMonitor_1.recordApiCall)();
+        }
+        sendMessage(`🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+            tokenInfo +
+            `Type: <b>${tOutput.type}</b>\n` +
+            `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+            `<b>POOL DETAILS:</b>\n` +
+            `  Pool Value: <b>${solBalance.toFixed(2)} SOL</b>\n` +
+            `  Token Supply: <b>${(tokenAmount / 1000000000).toFixed(2)}M</b>\n` +
+            `  Current Price: <b>${currentPrice.toFixed(8)} SOL</b>\n` +
+            `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
+        sentAddresses.add(tOutput.mint);
+    }
+}
+async function processMeteoraDBCTransaction(txn, parsedTxn) {
+    logger_1.default.info("🔄 Transação Meteora DBC detectada:", txn.transaction.signatures[0]);
+    try {
+        const { calculateMeteoraDBCCurveProgress } = await Promise.resolve().then(() => __importStar(require("./utils/getMeteoraDBCBonding")));
+        let tOutput = {
+            type: "UNKNOWN",
+            mint: null,
+            user: null,
+            bondingCurve: null,
+            tokenAmount: 0,
+            solAmount: 0
+        };
+        if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+            for (const ix of parsedTxn.instructions) {
+                if (ix.accounts) {
+                    if (ix.accounts.length >= 3) {
+                        tOutput.user = (ix.accounts[0] ? (typeof ix.accounts[0] === 'object' && ix.accounts[0].hasOwnProperty('toBase58') ? ix.accounts[0].toBase58() : String(ix.accounts[0])) : null) || tOutput.user;
+                        tOutput.bondingCurve = (ix.accounts[1] ? (typeof ix.accounts[1] === 'object' && ix.accounts[1].hasOwnProperty('toBase58') ? ix.accounts[1].toBase58() : String(ix.accounts[1])) : null) || tOutput.bondingCurve;
+                        tOutput.mint = (ix.accounts[2] ? (typeof ix.accounts[2] === 'object' && ix.accounts[2].hasOwnProperty('toBase58') ? ix.accounts[2].toBase58() : String(ix.accounts[2])) : null) || tOutput.mint;
+                    }
+                }
+                if (ix.data) {
+                    if (ix.data.tokenAmount !== undefined) {
+                        tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+                    }
+                    if (ix.data.solAmount !== undefined) {
+                        tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+                    }
+                    if (ix.name) {
+                        if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+                            tOutput.type = "BUY";
+                        }
+                        else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+                            tOutput.type = "SELL";
+                        }
+                        else {
+                            tOutput.type = ix.name.toUpperCase();
+                        }
+                    }
+                }
+            }
+        }
+        if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+            if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+                tOutput.user = tOutput.user || (txn.transaction.message.accountKeys[0]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[0].pubkey.toBase58() : txn.transaction.message.accountKeys[0]) || "UNKNOWN_USER";
+                tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
+                tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
+            }
+            if (!tOutput.mint) {
+                tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+            }
+        }
+        tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+        if (tOutput.mint && typeof tOutput.mint === 'object') {
+            tOutput.mint = tOutput.mint.toString();
+        }
+        if (tOutput.user && typeof tOutput.user === 'object') {
+            tOutput.user = tOutput.user.toString();
+        }
+        if (tOutput.bondingCurve && typeof tOutput.bondingCurve === 'object') {
+            tOutput.bondingCurve = tOutput.bondingCurve.toString();
+        }
+        if (tOutput.mint === "[object Object]") {
+            tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+        }
+        if (tOutput.user === "[object Object]") {
+            tOutput.user = "UNKNOWN_USER";
+        }
+        if (tOutput.bondingCurve === "[object Object]") {
+            tOutput.bondingCurve = tOutput.mint;
+        }
+        logger_1.default.debug(`🔍 Calculando progresso da curva para bondingCurve: ${tOutput.bondingCurve}`);
+        const progress = await calculateMeteoraDBCCurveProgress(tOutput.bondingCurve);
+        logger_1.default.debug(`🔍 Progresso calculado: ${progress}`);
+        logger_1.default.info(`
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `);
+        if (Number(progress) >= METEORA_DBC_ALERT_THRESHOLD &&
+            Number(progress) <= 100 &&
+            !sentAddresses.has(tOutput.mint)) {
+            (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+            let tokenMetadata = null;
+            if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+                try {
+                    tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
+                }
+                catch (metadataError) {
+                    logger_1.default.debug(`❌ Erro ao buscar metadados para token Meteora DBC ${tOutput.mint}:`, metadataError.message);
+                }
+            }
+            let tokenInfo = `Token (Meteora DBC): <code>${tOutput.mint}</code>\n`;
+            if (tokenMetadata) {
+                (0, performanceMonitor_1.recordCacheHit)();
+                if (tokenMetadata.name) {
+                    tokenInfo = `Token (Meteora DBC): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+                }
+                if (tokenMetadata.symbol) {
+                    tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+                }
+                if (tokenMetadata.description) {
+                    const description = tokenMetadata.description.length > 100
+                        ? tokenMetadata.description.substring(0, 100) + '...'
+                        : tokenMetadata.description;
+                    tokenInfo += `Description: <i>${description}</i>\n`;
+                }
+                if (tokenMetadata.twitter) {
+                    tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+                }
+                if (tokenMetadata.telegram) {
+                    tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+                }
+                if (tokenMetadata.website) {
+                    tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+                }
+                if (tokenMetadata.isScam) {
+                    tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+                }
+                if (tokenMetadata.marketCap) {
+                    tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.price) {
+                    tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+                }
+                if (tokenMetadata.volume24h) {
+                    tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.liquidity) {
+                    tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.creator) {
+                    tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+                }
+            }
+            else {
+                (0, performanceMonitor_1.recordCacheMiss)();
+                (0, performanceMonitor_1.recordApiCall)();
+            }
+            sendMessage(`🚨 <b>ALERTA METEORA DBC - ${METEORA_DBC_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+                tokenInfo +
+                `Type: <b>${tOutput.type}</b>\n` +
+                `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+                `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
+            sentAddresses.add(tOutput.mint);
+        }
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao processar transação Meteora DBC:", error);
+    }
+}
+async function processBonkFunTransaction(txn, parsedTxn) {
+    logger_1.default.info("🔄 Transação Bonk.fun detectada:", txn.transaction.signatures[0]);
+    try {
+        const { calculateBonkFunCurveProgress } = await Promise.resolve().then(() => __importStar(require("./utils/getBonkFunBonding")));
+        let tOutput = {
+            type: "UNKNOWN",
+            mint: null,
+            user: null,
+            bondingCurve: null,
+            tokenAmount: 0,
+            solAmount: 0
+        };
+        if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+            for (const ix of parsedTxn.instructions) {
+                if (ix.accounts) {
+                    if (ix.accounts.length >= 3) {
+                        tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+                        tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+                        tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+                    }
+                }
+                if (ix.data) {
+                    if (ix.data.tokenAmount !== undefined) {
+                        tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+                    }
+                    if (ix.data.solAmount !== undefined) {
+                        tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+                    }
+                    if (ix.name) {
+                        if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+                            tOutput.type = "BUY";
+                        }
+                        else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+                            tOutput.type = "SELL";
+                        }
+                        else {
+                            tOutput.type = ix.name.toUpperCase();
+                        }
+                    }
+                }
+            }
+        }
+        if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+            if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+                tOutput.user = tOutput.user || txn.transaction.message.accountKeys[0]?.pubkey?.toBase58() || "UNKNOWN_USER";
+                tOutput.bondingCurve = tOutput.bondingCurve || txn.transaction.message.accountKeys[1]?.pubkey?.toBase58() || "UNKNOWN_BONDING_CURVE";
+                tOutput.mint = tOutput.mint || txn.transaction.message.accountKeys[2]?.pubkey?.toBase58() || "UNKNOWN_MINT";
+            }
+            if (!tOutput.mint) {
+                tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+            }
+        }
+        tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+        const progress = await calculateBonkFunCurveProgress(tOutput.bondingCurve);
+        logger_1.default.info(`
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `);
+        if (Number(progress) >= BONK_FUN_ALERT_THRESHOLD &&
+            Number(progress) <= 100 &&
+            !sentAddresses.has(tOutput.mint)) {
+            (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+            let tokenMetadata = null;
+            if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+                try {
+                    tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
+                }
+                catch (metadataError) {
+                    logger_1.default.debug(`❌ Erro ao buscar metadados para token bonk.fun ${tOutput.mint}:`, metadataError.message);
+                }
+            }
+            let tokenInfo = `Token (bonk.fun): <code>${tOutput.mint}</code>\n`;
+            if (tokenMetadata) {
+                (0, performanceMonitor_1.recordCacheHit)();
+                if (tokenMetadata.name) {
+                    tokenInfo = `Token (bonk.fun): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+                }
+                if (tokenMetadata.symbol) {
+                    tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+                }
+                if (tokenMetadata.description) {
+                    const description = tokenMetadata.description.length > 100
+                        ? tokenMetadata.description.substring(0, 100) + '...'
+                        : tokenMetadata.description;
+                    tokenInfo += `Description: <i>${description}</i>\n`;
+                }
+                if (tokenMetadata.twitter) {
+                    tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+                }
+                if (tokenMetadata.telegram) {
+                    tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+                }
+                if (tokenMetadata.website) {
+                    tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+                }
+                if (tokenMetadata.isScam) {
+                    tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+                }
+                if (tokenMetadata.marketCap) {
+                    tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.price) {
+                    tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+                }
+                if (tokenMetadata.volume24h) {
+                    tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.liquidity) {
+                    tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.creator) {
+                    tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+                }
+            }
+            else {
+                (0, performanceMonitor_1.recordCacheMiss)();
+                (0, performanceMonitor_1.recordApiCall)();
+            }
+            sendMessage(`🚨 <b>ALERTA BONK.FUN - ${BONK_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+                tokenInfo +
+                `Type: <b>${tOutput.type}</b>\n` +
+                `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+                `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
+            sentAddresses.add(tOutput.mint);
+        }
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao processar transação bonk.fun:", error);
+    }
+}
+async function processMoonshotTransaction(txn, parsedTxn) {
+    logger_1.default.info("🔄 Transação Moonshot Screener detectada:", txn.transaction.signatures[0]);
+    try {
+        const { calculateMoonshotCurveProgress } = await Promise.resolve().then(() => __importStar(require("./utils/getMoonshotBonding")));
+        let tOutput = {
+            type: "UNKNOWN",
+            mint: null,
+            user: null,
+            bondingCurve: null,
+            tokenAmount: 0,
+            solAmount: 0
+        };
+        if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+            for (const ix of parsedTxn.instructions) {
+                if (ix.accounts) {
+                    if (ix.accounts.length >= 3) {
+                        tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+                        tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+                        tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+                    }
+                }
+                if (ix.data) {
+                    if (ix.data.tokenAmount !== undefined) {
+                        tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+                    }
+                    if (ix.data.solAmount !== undefined) {
+                        tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+                    }
+                    if (ix.name) {
+                        if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+                            tOutput.type = "BUY";
+                        }
+                        else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+                            tOutput.type = "SELL";
+                        }
+                        else {
+                            tOutput.type = ix.name.toUpperCase();
+                        }
+                    }
+                }
+            }
+        }
+        if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+            if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+                tOutput.user = tOutput.user || txn.transaction.message.accountKeys[0]?.pubkey?.toBase58() || "UNKNOWN_USER";
+                tOutput.bondingCurve = tOutput.bondingCurve || txn.transaction.message.accountKeys[1]?.pubkey?.toBase58() || "UNKNOWN_BONDING_CURVE";
+                tOutput.mint = tOutput.mint || txn.transaction.message.accountKeys[2]?.pubkey?.toBase58() || "UNKNOWN_MINT";
+            }
+            if (!tOutput.mint) {
+                tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+            }
+        }
+        tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+        const progress = await calculateMoonshotCurveProgress(tOutput.bondingCurve);
+        logger_1.default.info(`
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `);
+        if (Number(progress) >= MOONSHOT_ALERT_THRESHOLD &&
+            Number(progress) <= 100 &&
+            !sentAddresses.has(tOutput.mint)) {
+            (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+            let tokenMetadata = null;
+            if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+                try {
+                    tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
+                }
+                catch (metadataError) {
+                    logger_1.default.debug(`❌ Erro ao buscar metadados para token moonshot ${tOutput.mint}:`, metadataError.message);
+                }
+            }
+            let tokenInfo = `Token (moonshot): <code>${tOutput.mint}</code>\n`;
+            if (tokenMetadata) {
+                (0, performanceMonitor_1.recordCacheHit)();
+                if (tokenMetadata.name) {
+                    tokenInfo = `Token (moonshot): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+                }
+                if (tokenMetadata.symbol) {
+                    tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+                }
+                if (tokenMetadata.description) {
+                    const description = tokenMetadata.description.length > 100
+                        ? tokenMetadata.description.substring(0, 100) + '...'
+                        : tokenMetadata.description;
+                    tokenInfo += `Description: <i>${description}</i>\n`;
+                }
+                if (tokenMetadata.twitter) {
+                    tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+                }
+                if (tokenMetadata.telegram) {
+                    tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+                }
+                if (tokenMetadata.website) {
+                    tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+                }
+                if (tokenMetadata.isScam) {
+                    tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+                }
+                if (tokenMetadata.marketCap) {
+                    tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.price) {
+                    tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+                }
+                if (tokenMetadata.volume24h) {
+                    tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.liquidity) {
+                    tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.creator) {
+                    tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+                }
+            }
+            else {
+                (0, performanceMonitor_1.recordCacheMiss)();
+                (0, performanceMonitor_1.recordApiCall)();
+            }
+            sendMessage(`🚨 <b>ALERTA MOONSHOT - ${MOONSHOT_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+                tokenInfo +
+                `Type: <b>${tOutput.type}</b>\n` +
+                `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+                `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
+            sentAddresses.add(tOutput.mint);
+        }
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao processar transação moonshot:", error);
+    }
+}
+async function processAnoncoinTransaction(txn, parsedTxn) {
+    logger_1.default.info("🔄 Transação anoncoin.it detectada:", txn.transaction.signatures[0]);
+    try {
+        const { calculateAnoncoinCurveProgress } = await Promise.resolve().then(() => __importStar(require("./utils/getAnoncoinBonding")));
+        let tOutput = {
+            type: "UNKNOWN",
+            mint: null,
+            user: null,
+            bondingCurve: null,
+            tokenAmount: 0,
+            solAmount: 0
+        };
+        if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+            for (const ix of parsedTxn.instructions) {
+                if (ix.accounts) {
+                    if (ix.accounts.length >= 3) {
+                        tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+                        tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+                        tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+                    }
+                }
+                if (ix.data) {
+                    if (ix.data.tokenAmount !== undefined) {
+                        tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+                    }
+                    if (ix.data.solAmount !== undefined) {
+                        tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+                    }
+                    if (ix.name) {
+                        if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+                            tOutput.type = "BUY";
+                        }
+                        else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+                            tOutput.type = "SELL";
+                        }
+                        else {
+                            tOutput.type = ix.name.toUpperCase();
+                        }
+                    }
+                }
+            }
+        }
+        if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+            if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+                tOutput.user = tOutput.user || (txn.transaction.message.accountKeys[0]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[0].pubkey.toBase58() : txn.transaction.message.accountKeys[0]) || "UNKNOWN_USER";
+                tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
+                tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
+            }
+            if (!tOutput.mint) {
+                tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+            }
+        }
+        tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+        const progress = await calculateAnoncoinCurveProgress(tOutput.bondingCurve);
+        logger_1.default.info(`
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `);
+        if (Number(progress) >= ANONCOIN_ALERT_THRESHOLD &&
+            Number(progress) <= 100 &&
+            !sentAddresses.has(tOutput.mint)) {
+            (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+            let tokenMetadata = null;
+            if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+                try {
+                    tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
+                }
+                catch (metadataError) {
+                    logger_1.default.debug(`❌ Erro ao buscar metadados para token anoncoin.it ${tOutput.mint}:`, metadataError.message);
+                }
+            }
+            let tokenInfo = `Token (anoncoin.it): <code>${tOutput.mint}</code>\n`;
+            if (tokenMetadata) {
+                (0, performanceMonitor_1.recordCacheHit)();
+                if (tokenMetadata.name) {
+                    tokenInfo = `Token (anoncoin.it): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+                }
+                if (tokenMetadata.symbol) {
+                    tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+                }
+                if (tokenMetadata.description) {
+                    const description = tokenMetadata.description.length > 100
+                        ? tokenMetadata.description.substring(0, 100) + '...'
+                        : tokenMetadata.description;
+                    tokenInfo += `Description: <i>${description}</i>\n`;
+                }
+                if (tokenMetadata.twitter) {
+                    tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+                }
+                if (tokenMetadata.telegram) {
+                    tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+                }
+                if (tokenMetadata.website) {
+                    tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+                }
+                if (tokenMetadata.isScam) {
+                    tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+                }
+                if (tokenMetadata.marketCap) {
+                    tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.price) {
+                    tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+                }
+                if (tokenMetadata.volume24h) {
+                    tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.liquidity) {
+                    tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.creator) {
+                    tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+                }
+            }
+            else {
+                (0, performanceMonitor_1.recordCacheMiss)();
+                (0, performanceMonitor_1.recordApiCall)();
+            }
+            sendMessage(`🚨 <b>ALERTA ANONCOIN.IT - ${ANONCOIN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+                tokenInfo +
+                `Type: <b>${tOutput.type}</b>\n` +
+                `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+                `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
+            sentAddresses.add(tOutput.mint);
+        }
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao processar transação anoncoin.it:", error);
+    }
+}
+async function processDaosFunTransaction(txn, parsedTxn) {
+    logger_1.default.info("🔄 Transação daos.fun detectada:", txn.transaction.signatures[0]);
+    try {
+        const { calculateDaosFunCurveProgress } = await Promise.resolve().then(() => __importStar(require("./utils/getDaosFunBonding")));
+        let tOutput = {
+            type: "UNKNOWN",
+            mint: null,
+            user: null,
+            bondingCurve: null,
+            tokenAmount: 0,
+            solAmount: 0
+        };
+        if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
+            for (const ix of parsedTxn.instructions) {
+                if (ix.accounts) {
+                    if (ix.accounts.length >= 3) {
+                        tOutput.user = (ix.accounts[0] ? ix.accounts[0].toString() : null) || tOutput.user;
+                        tOutput.bondingCurve = (ix.accounts[1] ? ix.accounts[1].toString() : null) || tOutput.bondingCurve;
+                        tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
+                    }
+                }
+                if (ix.data) {
+                    if (ix.data.tokenAmount !== undefined) {
+                        tOutput.tokenAmount = Number(ix.data.tokenAmount) || tOutput.tokenAmount;
+                    }
+                    if (ix.data.solAmount !== undefined) {
+                        tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
+                    }
+                    if (ix.name) {
+                        if (ix.name.includes('buy') || ix.name.includes('Buy')) {
+                            tOutput.type = "BUY";
+                        }
+                        else if (ix.name.includes('sell') || ix.name.includes('Sell')) {
+                            tOutput.type = "SELL";
+                        }
+                        else {
+                            tOutput.type = ix.name.toUpperCase();
+                        }
+                    }
+                }
+            }
+        }
+        if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
+            if (txn.transaction.message.accountKeys && txn.transaction.message.accountKeys.length >= 3) {
+                tOutput.user = tOutput.user || (txn.transaction.message.accountKeys[0]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[0].pubkey.toBase58() : txn.transaction.message.accountKeys[0]) || "UNKNOWN_USER";
+                tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
+                tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
+            }
+            if (!tOutput.mint) {
+                tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
+            }
+        }
+        tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
+        if (tOutput.mint && typeof tOutput.mint === 'object') {
+            tOutput.mint = tOutput.mint.toString();
+        }
+        if (tOutput.user && typeof tOutput.user === 'object') {
+            tOutput.user = tOutput.user.toString();
+        }
+        if (tOutput.bondingCurve && typeof tOutput.bondingCurve === 'object') {
+            tOutput.bondingCurve = tOutput.bondingCurve.toString();
+        }
+        const progress = await calculateDaosFunCurveProgress(tOutput.bondingCurve);
+        logger_1.default.info(`
+      TYPE : ${tOutput.type}
+      MINT : ${tOutput.mint}
+      SIGNER : ${tOutput.user}
+      BONDING CURVE : ${tOutput.bondingCurve}
+      TOKEN AMOUNT : ${tOutput.tokenAmount}
+      SOL AMOUNT : ${tOutput.solAmount} SOL
+      CURVE PROGRESS : ${Number(progress).toFixed(2)}%
+      SIGNATURE : ${txn.transaction.signatures[0]}
+      `);
+        if (Number(progress) >= DAOS_FUN_ALERT_THRESHOLD &&
+            Number(progress) <= 100 &&
+            !sentAddresses.has(tOutput.mint)) {
+            (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+            let tokenMetadata = null;
+            if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+                try {
+                    tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
+                }
+                catch (metadataError) {
+                    logger_1.default.debug(`❌ Erro ao buscar metadados para token daos.fun ${tOutput.mint}:`, metadataError.message);
+                }
+            }
+            let tokenInfo = `Token (daos.fun): <code>${tOutput.mint}</code>\n`;
+            if (tokenMetadata) {
+                (0, performanceMonitor_1.recordCacheHit)();
+                if (tokenMetadata.name) {
+                    tokenInfo = `Token (daos.fun): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
+                }
+                if (tokenMetadata.symbol) {
+                    tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
+                }
+                if (tokenMetadata.description) {
+                    const description = tokenMetadata.description.length > 100
+                        ? tokenMetadata.description.substring(0, 100) + '...'
+                        : tokenMetadata.description;
+                    tokenInfo += `Description: <i>${description}</i>\n`;
+                }
+                if (tokenMetadata.twitter) {
+                    tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
+                }
+                if (tokenMetadata.telegram) {
+                    tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
+                }
+                if (tokenMetadata.website) {
+                    tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
+                }
+                if (tokenMetadata.isScam) {
+                    tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
+                }
+                if (tokenMetadata.marketCap) {
+                    tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.price) {
+                    tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
+                }
+                if (tokenMetadata.volume24h) {
+                    tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.liquidity) {
+                    tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
+                }
+                if (tokenMetadata.creator) {
+                    tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
+                }
+            }
+            else {
+                (0, performanceMonitor_1.recordCacheMiss)();
+                (0, performanceMonitor_1.recordApiCall)();
+            }
+            sendMessage(`🚨 <b>ALERTA DAOS.FUN - ${DAOS_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
+                tokenInfo +
+                `Type: <b>${tOutput.type}</b>\n` +
+                `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
+                `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
+            sentAddresses.add(tOutput.mint);
+        }
+    }
+    catch (error) {
+        logger_1.default.error("❌ Erro ao processar transação daos.fun:", error);
+    }
+}
 async function subscribeCommand(client, args) {
     while (true) {
         try {
@@ -356,6 +1259,102 @@ async function subscribeCommand(client, args) {
     }
 }
 const client = new yellowstone_grpc_1.default(SHYFT_GRPC, undefined, undefined);
+const req = {
+    accounts: {},
+    slots: {},
+    transactions: {},
+    transactionsStatus: {},
+    entry: {},
+    blocks: {},
+    blocksMeta: {},
+    accountsDataSlice: [],
+    ping: undefined,
+    commitment: yellowstone_grpc_1.CommitmentLevel.CONFIRMED,
+};
+if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+    req.transactions.pumpFun = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
+}
+if ((MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH") &&
+    METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
+    req.transactions.meteoraDBC = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [METEORA_DBC_PROGRAM_ID_OBJ.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento da Meteora DBC habilitado para o programa: ${METEORA_DBC_PROGRAM_ID_OBJ.toBase58()}`);
+}
+if ((MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH") &&
+    BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
+    req.transactions.bonkFun = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [BONK_FUN_PROGRAM_ID_OBJ.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento do Bonk.fun habilitado para o programa: ${BONK_FUN_PROGRAM_ID_OBJ.toBase58()}`);
+}
+if ((MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH") &&
+    DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
+    req.transactions.daosFun = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [DAOS_FUN_PROGRAM_ID_OBJ.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento do daos.fun habilitado para o programa: ${DAOS_FUN_PROGRAM_ID_OBJ.toBase58()}`);
+}
+if ((MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH") &&
+    MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
+    req.transactions.moonshot = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [MOONSHOT_PROGRAM_ID_OBJ.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento do Moonshot Screener habilitado para o programa: ${MOONSHOT_PROGRAM_ID_OBJ.toBase58()}`);
+}
+if ((MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH") &&
+    ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
+    req.transactions.anoncoin = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [ANONCOIN_PROGRAM_ID_OBJ.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento do anoncoin.it habilitado para o programa: ${ANONCOIN_PROGRAM_ID_OBJ.toBase58()}`);
+}
+if (Object.keys(req.transactions).length === 0) {
+    logger_1.default.warn("⚠️ Nenhum protocolo de monitoramento configurado corretamente. Usando PumpFun como padrão.");
+    req.transactions.pumpFun = {
+        vote: false,
+        failed: false,
+        signature: undefined,
+        accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+        accountExclude: [],
+        accountRequired: [],
+    };
+    logger_1.default.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
+}
+subscribeCommand(client, req);
 async function reconnectWithBackoff(maxRetries = 5) {
     const baseDelay = 2000;
     for (let i = 0; i < maxRetries; i++) {
@@ -393,6 +1392,7 @@ function reportBotStatus() {
 }
 setInterval(async () => {
     const statusMessage = reportBotStatus();
+    (0, performanceMonitor_1.reportPerformance)();
     try {
     }
     catch (error) {
@@ -497,28 +1497,6 @@ bot.on('error', async (error) => {
         }
     }
 });
-const req = {
-    accounts: {},
-    slots: {},
-    transactions: {
-        pumpFun: {
-            vote: false,
-            failed: false,
-            signature: undefined,
-            accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
-            accountExclude: [],
-            accountRequired: [],
-        },
-    },
-    transactionsStatus: {},
-    entry: {},
-    blocks: {},
-    blocksMeta: {},
-    accountsDataSlice: [],
-    ping: undefined,
-    commitment: yellowstone_grpc_1.CommitmentLevel.CONFIRMED,
-};
-subscribeCommand(client, req);
 function decodePumpFunTxn(tx) {
     if (tx.meta?.err)
         return;
@@ -531,5 +1509,82 @@ function decodePumpFunTxn(tx) {
     (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
     return result;
 }
+function decodeMeteoraDBCTxn(tx) {
+    if (!METEORA_DBC_MONITORING_ENABLED || !METEORA_DBC_PROGRAM_ID_OBJ || !METEORA_DBC_IX_PARSER || !METEORA_DBC_EVENT_PARSER) {
+        return null;
+    }
+    if (tx.meta?.err)
+        return;
+    const paredIxs = METEORA_DBC_IX_PARSER.parseTransactionData(tx.transaction.message, tx.meta.loadedAddresses);
+    const meteoraDbcIxs = paredIxs.filter((ix) => ix.programId.equals(METEORA_DBC_PROGRAM_ID_OBJ));
+    if (meteoraDbcIxs.length === 0)
+        return null;
+    const events = METEORA_DBC_EVENT_PARSER.parseEvent(tx);
+    const result = { instructions: meteoraDbcIxs, events };
+    (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
+    return result;
+}
+function decodeBonkFunTxn(tx) {
+    if (!BONK_FUN_MONITORING_ENABLED || !BONK_FUN_PROGRAM_ID_OBJ || !BONK_FUN_IX_PARSER || !BONK_FUN_EVENT_PARSER) {
+        return null;
+    }
+    if (tx.meta?.err)
+        return;
+    const paredIxs = BONK_FUN_IX_PARSER.parseTransactionData(tx.transaction.message, tx.meta.loadedAddresses);
+    const bonkFunIxs = paredIxs.filter((ix) => ix.programId.equals(BONK_FUN_PROGRAM_ID_OBJ));
+    if (bonkFunIxs.length === 0)
+        return null;
+    const events = BONK_FUN_EVENT_PARSER.parseEvent(tx);
+    const result = { instructions: bonkFunIxs, events };
+    (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
+    return result;
+}
+function decodeDaosFunTxn(tx) {
+    if (!DAOS_FUN_MONITORING_ENABLED || !DAOS_FUN_PROGRAM_ID_OBJ || !DAOS_FUN_IX_PARSER || !DAOS_FUN_EVENT_PARSER) {
+        return null;
+    }
+    if (tx.meta?.err)
+        return;
+    const paredIxs = DAOS_FUN_IX_PARSER.parseTransactionData(tx.transaction.message, tx.meta.loadedAddresses);
+    const daosFunIxs = paredIxs.filter((ix) => ix.programId.equals(DAOS_FUN_PROGRAM_ID_OBJ));
+    if (daosFunIxs.length === 0)
+        return null;
+    const events = DAOS_FUN_EVENT_PARSER.parseEvent(tx);
+    const result = { instructions: daosFunIxs, events };
+    (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
+    return result;
+}
+function decodeMoonshotTxn(tx) {
+    if (!MOONSHOT_MONITORING_ENABLED || !MOONSHOT_PROGRAM_ID_OBJ || !MOONSHOT_IX_PARSER || !MOONSHOT_EVENT_PARSER) {
+        return null;
+    }
+    if (tx.meta?.err)
+        return;
+    const paredIxs = MOONSHOT_IX_PARSER.parseTransactionData(tx.transaction.message, tx.meta.loadedAddresses);
+    const moonshotIxs = paredIxs.filter((ix) => ix.programId.equals(MOONSHOT_PROGRAM_ID_OBJ));
+    if (moonshotIxs.length === 0)
+        return null;
+    const events = MOONSHOT_EVENT_PARSER.parseEvent(tx);
+    const result = { instructions: moonshotIxs, events };
+    (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
+    return result;
+}
+function decodeAnoncoinTxn(tx) {
+    if (!ANONCOIN_MONITORING_ENABLED || !ANONCOIN_PROGRAM_ID_OBJ || !ANONCOIN_IX_PARSER || !ANONCOIN_EVENT_PARSER) {
+        return null;
+    }
+    if (tx.meta?.err)
+        return;
+    const paredIxs = ANONCOIN_IX_PARSER.parseTransactionData(tx.transaction.message, tx.meta.loadedAddresses);
+    const anoncoinIxs = paredIxs.filter((ix) => ix.programId.equals(ANONCOIN_PROGRAM_ID_OBJ));
+    if (anoncoinIxs.length === 0)
+        return null;
+    const events = ANONCOIN_EVENT_PARSER.parseEvent(tx);
+    const result = { instructions: anoncoinIxs, events };
+    (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
+    return result;
+}
 const hybridExecutor_1 = require("./utils/hybridExecutor");
+const metadataCache_1 = require("./utils/metadataCache");
+const performanceMonitor_1 = require("./utils/performanceMonitor");
 //# sourceMappingURL=index.js.map

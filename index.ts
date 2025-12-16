@@ -24,6 +24,7 @@ import dotenv from "dotenv";
 import TelegramBot from "node-telegram-bot-api";
 import fs from "fs";
 import path from "path";
+import Bottleneck from "bottleneck";
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -198,6 +199,12 @@ createPidFile();
 let lastMessageTime = 0;
 const minMessageInterval = parseInt(process.env.MIN_MESSAGE_INTERVAL || "5000"); // Aumentar para 5 segundos entre mensagens (ou valor do .env)
 
+// Create rate limiter using Bottleneck
+const limiter = new Bottleneck({
+  minTime: 1000,  // 1 second between requests
+  maxConcurrent: 1  // Only 1 request at a time
+});
+
 // Variável para controlar o estado de saúde do bot
 let botHealth = {
   isHealthy: true,
@@ -242,33 +249,25 @@ setInterval(async () => {
 // Function to send message with rate limiting and improved error handling
 async function sendMessage(message: string) {
   // Adiciona o link do GMGN.AI no final de cada mensagem
-  const messageWithLink = message + '\n\n<a href="https://gmgn.ai/r/gD6vfzCr" target="_blank">Trade with GMGN.AI</a>';
+  const messageWithLink = message + '\n\n<a href="https://gmgn.ai/r/gD6vfzCr">Trade with GMGN.AI</a>';
   
-  // Implementa rate limiting mais conservador
-  const now = Date.now();
-  const timeSinceLastMessage = now - lastMessageTime;
-  
-  if (timeSinceLastMessage < minMessageInterval) {
-    const delay = minMessageInterval - timeSinceLastMessage;
-    logger.info(`⏳ Rate limiting: esperando ${delay}ms antes de enviar próxima mensagem`);
-    await new Promise(resolve => setTimeout(resolve, delay));
-  }
-  
-  try {
-    // Adicionar timeout para requisições
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
-    
-    const result = await bot.sendMessage(chatId, messageWithLink, { 
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
-    
-    clearTimeout(timeoutId);
-    lastMessageTime = Date.now();
-    logger.info("✅ Message sent successfully");
-    return result;
-  } catch (error: any) {
+  // Use Bottleneck for rate limiting
+  return await limiter.schedule(async () => {
+    try {
+      // Adicionar timeout para requisições
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
+      
+      const result = await bot.sendMessage(chatId, messageWithLink, { 
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+      
+      clearTimeout(timeoutId);
+      lastMessageTime = Date.now();
+      logger.info("✅ Message sent successfully");
+      return result;
+    } catch (error: any) {
     logger.error("❌ Error sending message:", error.response?.body || error.message || error);
     
     // Tratamento específico para erros de rate limit
@@ -299,7 +298,7 @@ async function sendMessage(message: string) {
           }
         });
         
-        const retryResult = await newBot.sendMessage(chatId, messageWithLink, { parse_mode: "HTML" });
+        const retryResult = await limiter.schedule(() => newBot.sendMessage(chatId, messageWithLink, { parse_mode: "HTML" }));
         logger.info("✅ Mensagem enviada com sucesso após reconexão");
         // Substituir a instância do bot
         Object.assign(bot, newBot);
@@ -317,6 +316,7 @@ async function sendMessage(message: string) {
     
     throw error;
   }
+});
 }
 
 interface SubscribeRequest {

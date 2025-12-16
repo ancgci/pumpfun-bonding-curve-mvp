@@ -5,4 +5,10 @@ export declare function transactionOutput(txn: any): {
     tokenAmount: any;
     user: any;
     bondingCurve: any;
+    name: any;
+    symbol: any;
+    uri: any;
+    timestamp: any;
+    slot: any;
+    signature: any;
 };

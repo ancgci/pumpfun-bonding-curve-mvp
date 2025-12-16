@@ -4,7 +4,7 @@ exports.transactionOutput = void 0;
 function transactionOutput(txn) {
     const type = txn.instructions[0].name === "sell" ? "SELL" : "BUY";
     let events = txn.events[0]?.data;
-    let bondingCurve, mint, solAmount, tokenAmount, user;
+    let bondingCurve, mint, solAmount, tokenAmount, user, name, symbol, uri;
     if (txn.instructions[0].accounts && txn.instructions[0].accounts.length > 3) {
         bondingCurve = txn.instructions[0].accounts[3]?.pubkey;
     }
@@ -13,6 +13,9 @@ function transactionOutput(txn) {
         solAmount = events?.solAmount ? events.solAmount / 1000000000 : 0;
         tokenAmount = events?.tokenAmount;
         user = events?.user;
+        name = events?.name;
+        symbol = events?.symbol;
+        uri = events?.uri;
     }
     else if (txn.instructions[0]?.data) {
         const data = txn.instructions[0].data;
@@ -22,6 +25,17 @@ function transactionOutput(txn) {
         if (data.maxSolCost || data.minSolOutput) {
             solAmount = (data.maxSolCost || data.minSolOutput) / 1000000000;
         }
+        if (txn.instructions[0].name === "create") {
+            name = data?.name;
+            symbol = data?.symbol;
+            uri = data?.uri;
+        }
+    }
+    let timestamp, slot, signature;
+    if (txn.transaction) {
+        signature = txn.transaction.signatures?.[0];
+        slot = txn.slot;
+        timestamp = txn.blockTime;
     }
     return {
         type,
@@ -29,7 +43,13 @@ function transactionOutput(txn) {
         solAmount: solAmount || 0,
         tokenAmount,
         user,
-        bondingCurve
+        bondingCurve,
+        name,
+        symbol,
+        uri,
+        timestamp,
+        slot,
+        signature
     };
 }
 exports.transactionOutput = transactionOutput;
