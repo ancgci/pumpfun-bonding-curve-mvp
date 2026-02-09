@@ -9,7 +9,10 @@ async function testJupiterAPI() {
     
     try {
         // Criar cliente da Jupiter API
-        const jupiterApi = createJupiterApiClient();
+        const jupiterApi = createJupiterApiClient({
+            basePath: process.env.JUPITER_API_BASE || 'https://quote-api.jup.ag/v6',
+            apiKey: process.env.JUPITER_API_KEY
+        });
         
         // Testar cotação simples com 500 USDC
         const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC
@@ -49,7 +52,10 @@ async function testJupiterSwap() {
     
     try {
         // Criar cliente da Jupiter API
-        const jupiterApi = createJupiterApiClient();
+        const jupiterApi = createJupiterApiClient({
+            basePath: process.env.JUPITER_API_BASE || 'https://quote-api.jup.ag/v6',
+            apiKey: process.env.JUPITER_API_KEY
+        });
         
         // Primeiro obter uma cotação com 500 USDC
         const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';

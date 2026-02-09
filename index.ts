@@ -26,11 +26,13 @@ import fs from "fs";
 import path from "path";
 import Bottleneck from "bottleneck";
 
+
 // Carregar variáveis de ambiente
 dotenv.config();
 
 const SHYFT_GRPC = process.env.SHYFT_GRPC as string;
 const token = process.env.TELEGRAM_BOT_TOKEN as string;
+const chatId = process.env.TELEGRAM_CHAT_ID as string;
 const ALERT_THRESHOLD = parseFloat(process.env.ALERT_THRESHOLD as string) || 97.7;
 
 // Configuração de protocolos de monitoramento
@@ -67,6 +69,12 @@ if (!token) {
   process.exit(1);
 }
 
+// Verificação do Chat ID
+if (!chatId) {
+  logger.error("❌ Chat ID não encontrado. Verifique a variável TELEGRAM_CHAT_ID no arquivo .env");
+  process.exit(1);
+}
+
 // Verificação do limite de alerta
 if (isNaN(ALERT_THRESHOLD) || ALERT_THRESHOLD <= 0) {
   logger.error("❌ Limite de alerta inválido. Verifique a variável ALERT_THRESHOLD no arquivo .env");
@@ -74,16 +82,7 @@ if (isNaN(ALERT_THRESHOLD) || ALERT_THRESHOLD <= 0) {
 }
 
 // Replace with your channel ID or username (e.g., '@your_channel_username')
-// Usando o ID correto do canal obtido via getChat
-const chatId = "YOUR_TELEGRAM_CHAT_ID"; // ID do canal @pumpfunew
-// Substituindo por um grupo conforme preferência do usuário
-// const chatId = "-1002730123456"; // Substitua pelo ID do seu grupo
-
-// Verificação do chat ID
-if (!chatId) {
-  logger.error("❌ Chat ID não configurado. Verifique a variável chatId no código");
-  process.exit(1);
-}
+// O ID do canal agora é carregado via variável de ambiente TELEGRAM_CHAT_ID
 
 const a = 0.00022500443612959005;
 const b = -0.04465309899499017;
@@ -91,7 +90,7 @@ const c = 3.3439469804363813;
 const d = 1.7232697904532974;
 var value = 0;
 // Create a bot instance with additional options for better error handling
-const bot = new TelegramBot(token, { 
+const bot = new TelegramBot(token, {
   polling: true,
   request: {
     proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
@@ -248,75 +247,85 @@ setInterval(async () => {
 
 // Function to send message with rate limiting and improved error handling
 async function sendMessage(message: string) {
-  // Adiciona o link do GMGN.AI no final de cada mensagem
-  const messageWithLink = message + '\n\n<a href="https://gmgn.ai/r/gD6vfzCr">Trade with GMGN.AI</a>';
-  
   // Use Bottleneck for rate limiting
   return await limiter.schedule(async () => {
     try {
       // Adicionar timeout para requisições
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
-      
-      const result = await bot.sendMessage(chatId, messageWithLink, { 
+
+      const result = await bot.sendMessage(chatId, message, {
         parse_mode: "HTML",
         disable_web_page_preview: true
       });
-      
+
       clearTimeout(timeoutId);
       lastMessageTime = Date.now();
       logger.info("✅ Message sent successfully");
+
+      // Log alert for backtest analysis (async, non-blocking)
+      try {
+        const alertLog = {
+          timestamp: Date.now(),
+          message: message,
+          // Extract mint if present in message (between href=" and ")
+          mint: message.match(/href="[^"]*\/([A-Za-z0-9]{32,44})"/)?.[1] || null
+        };
+        const logPath = path.join(__dirname, 'data', 'telegram-alerts.jsonl');
+        fs.appendFileSync(logPath, JSON.stringify(alertLog) + '\n');
+      } catch { }
+
       return result;
     } catch (error: any) {
-    logger.error("❌ Error sending message:", error.response?.body || error.message || error);
-    
-    // Tratamento específico para erros de rate limit
-    if (error.response?.body?.error_code === 429) {
-      const retryAfter = error.response.body.parameters?.retry_after || 30;
-      logger.warn(`⚠️  Rate limit atingido. Aguardando ${retryAfter} segundos antes de tentar novamente.`);
-      await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-      throw error; // Re-throw para tentar novamente
-    }
-    
-    // Tratamento específico para erros fatais
-    if (error.code === 'EFATAL' || error.name === 'AggregateError') {
-      logger.error("🚨 Erro fatal na comunicação com Telegram. Tentando reconectar...");
-      logger.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
-      logger.info("📝 Chat ID:", chatId);
-      
-      // Tentar reconectar com backoff exponencial
-      try {
-        logger.info("🔄 Iniciando processo de reconexão com backoff exponencial...");
-        await reconnectWithBackoff(5);
-        
-        // Criar nova instância do bot após reconexão bem-sucedida
-        const newBot = new TelegramBot(token, { 
-          polling: true,
-          request: {
-            proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
-            url: '' // Adicionando a propriedade url necessária
-          }
-        });
-        
-        const retryResult = await limiter.schedule(() => newBot.sendMessage(chatId, messageWithLink, { parse_mode: "HTML" }));
-        logger.info("✅ Mensagem enviada com sucesso após reconexão");
-        // Substituir a instância do bot
-        Object.assign(bot, newBot);
-        lastMessageTime = Date.now();
-        return retryResult;
-      } catch (reconnectError) {
-        logger.error("❌ Falha ao reconectar após múltiplas tentativas:", reconnectError.message);
-        logger.info("📋 Verifique:");
-        logger.info("  1. Se o token do bot está correto no arquivo .env");
-        logger.info("  2. Se o bot foi adicionado como administrador do canal");
-        logger.info("  3. Se você tem conexão com a internet");
-        logger.info("  4. Se o nome do canal está correto:", chatId);
+      logger.error("❌ Error sending message:", error.response?.body || error.message || error);
+
+      // Tratamento específico para erros de rate limit
+      if (error.response?.body?.error_code === 429) {
+        const retryAfter = error.response.body.parameters?.retry_after || 30;
+        logger.warn(`⚠️  Rate limit atingido. Aguardando ${retryAfter} segundos antes de tentar novamente.`);
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        throw error; // Re-throw para tentar novamente
       }
+
+      // Tratamento específico para erros fatais
+      if (error.code === 'EFATAL' || error.name === 'AggregateError') {
+        logger.error("🚨 Erro fatal na comunicação com Telegram. Tentando reconectar...");
+        logger.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
+        logger.info("📝 Chat ID:", chatId);
+
+        // Tentar reconectar com backoff exponencial
+        try {
+          logger.info("🔄 Iniciando processo de reconexão com backoff exponencial...");
+          await reconnectWithBackoff(5);
+
+          // Criar nova instância do bot após reconexão bem-sucedida
+          const newBot = new TelegramBot(token, {
+            polling: true,
+            request: {
+              proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
+              url: '' // Adicionando a propriedade url necessária
+            }
+          });
+
+          const retryResult = await limiter.schedule(() => newBot.sendMessage(chatId, message, { parse_mode: "HTML" }));
+          logger.info("✅ Mensagem enviada com sucesso após reconexão");
+          // Substituir a instância do bot
+          Object.assign(bot, newBot);
+          lastMessageTime = Date.now();
+          return retryResult;
+        } catch (reconnectError) {
+          logger.error("❌ Falha ao reconectar após múltiplas tentativas:", reconnectError.message);
+          logger.info("📋 Verifique:");
+          logger.info("  1. Se o token do bot está correto no arquivo .env");
+          logger.info("  2. Se o bot foi adicionado como administrador do canal");
+          logger.info("  3. Se você tem conexão com a internet");
+          logger.info("  4. Se o nome do canal está correto:", chatId);
+        }
+      }
+
+      throw error;
     }
-    
-    throw error;
-  }
-});
+  });
 }
 
 interface SubscribeRequest {
@@ -475,7 +484,7 @@ async function handleStream(client: Client, args: SubscribeRequest) {
           data.transaction,
           Date.now()
         );
-        
+
         // Verificar transações PumpFun se o monitoramento estiver habilitado
         if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
           const parsedPumpFunTxn = decodePumpFunTxn(txn);
@@ -483,46 +492,46 @@ async function handleStream(client: Client, args: SubscribeRequest) {
             await processPumpFunTransaction(txn, parsedPumpFunTxn);
           }
         }
-        
+
         // Verificar transações Meteora DBC se o monitoramento estiver habilitado
-        if (METEORA_DBC_MONITORING_ENABLED && 
-            (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
+        if (METEORA_DBC_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedMeteoraDBCTxn = decodeMeteoraDBCTxn(txn);
           if (parsedMeteoraDBCTxn) {
             await processMeteoraDBCTransaction(txn, parsedMeteoraDBCTxn);
           }
         }
-        
+
         // Verificar transações Bonk.fun se o monitoramento estiver habilitado
-        if (BONK_FUN_MONITORING_ENABLED && 
-            (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (BONK_FUN_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedBonkFunTxn = decodeBonkFunTxn(txn);
           if (parsedBonkFunTxn) {
             await processBonkFunTransaction(txn, parsedBonkFunTxn);
           }
         }
-        
+
         // Verificar transações daos.fun se o monitoramento estiver habilitado
-        if (DAOS_FUN_MONITORING_ENABLED && 
-            (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (DAOS_FUN_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedDaosFunTxn = decodeDaosFunTxn(txn);
           if (parsedDaosFunTxn) {
             await processDaosFunTransaction(txn, parsedDaosFunTxn);
           }
         }
-        
+
         // Verificar transações Moonshot Screener se o monitoramento estiver habilitado
-        if (MOONSHOT_MONITORING_ENABLED && 
-            (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
+        if (MOONSHOT_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedMoonshotTxn = decodeMoonshotTxn(txn);
           if (parsedMoonshotTxn) {
             await processMoonshotTransaction(txn, parsedMoonshotTxn);
           }
         }
-        
+
         // Verificar transações anoncoin.it se o monitoramento estiver habilitado
-        if (ANONCOIN_MONITORING_ENABLED && 
-            (MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (ANONCOIN_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedAnoncoinTxn = decodeAnoncoinTxn(txn);
           if (parsedAnoncoinTxn) {
             await processAnoncoinTransaction(txn, parsedAnoncoinTxn);
@@ -554,19 +563,19 @@ async function handleStream(client: Client, args: SubscribeRequest) {
 // Função para processar transações PumpFun (movida do handleStream original)
 async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   const tOutput = transactionOutput(parsedTxn);
-  
+
   // Verificar se os dados essenciais estão presentes
   if (!tOutput.mint || !tOutput.user) {
-      // logger.info("⚠️  Transação com dados incompletos ignorada");
-      return;
+    // logger.info("⚠️  Transação com dados incompletos ignorada");
+    return;
   }
-  
+
   // Verificar se é uma transação válida (com valores não zero)
   if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
-      // logger.info("⚠️  Transação BUY com token amount zero ignorada");
-      return;
+    // logger.info("⚠️  Transação BUY com token amount zero ignorada");
+    return;
   }
-  
+
   const balance = await getBondingCurveAddress(tOutput.bondingCurve);
   const progress =
     a * Number(balance) ** 3 +
@@ -604,14 +613,14 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   ) {
     // Registrar transação no monitor de desempenho
     recordTransaction(tOutput.mint);
-    
+
     // Calcular informações adicionais
     const solBalance = Number(balance);
     const tokenAmount = tOutput.tokenAmount || 0;
     // Calcular preço atual do token (SOL/token)
-    const currentPrice = solBalance > 0 && tokenAmount > 0 ? 
+    const currentPrice = solBalance > 0 && tokenAmount > 0 ?
       (solBalance * 1000000000) / tokenAmount : 0;
-    
+
     // Preparar dados do token para o executor híbrido
     const tokenData: TokenData = {
       mint: tOutput.mint,
@@ -620,76 +629,33 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       isLaunched: Number(progress) >= 100, // Simplificação - na prática, verificaria se migrou para Raydium
       mode: Number(progress) >= 100 ? "DEX" : "CURVE"
     };
-    
+
     // Executar trade híbrido passando o tipo de trade
     executeHybridTrade(tokenData, tOutput.type).catch(error => {
       logger.error(`❌ Erro ao executar trade híbrido para token ${tOutput.mint}:`, error);
       recordError();
     });
-    
+
     // Preparar mensagem com metadados, se disponíveis
-    let tokenInfo = `Token: <code>${tOutput.mint}</code>\n`;
-    if (tokenMetadata) {
-      recordCacheHit(); // Registrar hit de cache
-      if (tokenMetadata.name) {
-        tokenInfo = `Token: <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
-      }
-      if (tokenMetadata.symbol) {
-        tokenInfo += `Symbol: <b>${tokenMetadata.symbol}</b>\n`;
-      }
-      if (tokenMetadata.description) {
-        // Limitar a descrição a 100 caracteres
-        const description = tokenMetadata.description.length > 100 
-          ? tokenMetadata.description.substring(0, 100) + '...' 
-          : tokenMetadata.description;
-        tokenInfo += `Description: <i>${description}</i>\n`;
-      }
-      if (tokenMetadata.twitter) {
-        tokenInfo += `Twitter: <a href="${tokenMetadata.twitter}">Link</a>\n`;
-      }
-      if (tokenMetadata.telegram) {
-        tokenInfo += `Telegram: <a href="${tokenMetadata.telegram}">Link</a>\n`;
-      }
-      if (tokenMetadata.website) {
-        tokenInfo += `Website: <a href="${tokenMetadata.website}">Link</a>\n`;
-      }
-      if (tokenMetadata.isScam) {
-        tokenInfo += `⚠️ <b>SCAM DETECTED</b>\n`;
-      }
-      // Adicionar informações financeiras se disponíveis
-      if (tokenMetadata.marketCap) {
-        tokenInfo += `Market Cap: <b>${tokenMetadata.marketCap.toFixed(2)} SOL</b>\n`;
-      }
-      if (tokenMetadata.price) {
-        tokenInfo += `Current Price: <b>${tokenMetadata.price.toFixed(8)} SOL</b>\n`;
-      }
-      if (tokenMetadata.volume24h) {
-        tokenInfo += `Volume 24h: <b>${tokenMetadata.volume24h.toFixed(2)} SOL</b>\n`;
-      }
-      if (tokenMetadata.liquidity) {
-        tokenInfo += `Liquidity: <b>${tokenMetadata.liquidity.toFixed(2)} SOL</b>\n`;
-      }
-      if (tokenMetadata.creator) {
-        tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
-      }
-    } else {
-      recordCacheMiss(); // Registrar miss de cache
-      recordApiCall(); // Registrar chamada de API
-    }
-    
-    // Enviar alerta
+    // Preparar mensagem customizada
+    const tokenName = tokenMetadata?.name || "Unknown";
+    const tokenSymbol = tokenMetadata?.symbol || "UNK";
+    const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : "N/A";
+    const priceSol = tokenMetadata?.price ? tokenMetadata.price.toFixed(9) : currentPrice.toFixed(9);
+
+    // Enviar alerta formatado
     sendMessage(
       `🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-      tokenInfo +
+      `Token: <a href="https://www.dextools.io/app/en/solana/pair-explorer/${tOutput.mint}">${tokenName}</a>\n` +
+      `Symbol: <b>${tokenSymbol}</b>\n` +
+      `Source: <b>🚀 PumpFun</b>\n` +
+      `Market Cap: <b>${marketCap}</b>\n` +
+      `Current Price: <b>${priceSol} SOL</b>\n` +
       `Type: <b>${tOutput.type}</b>\n` +
       `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
-      `<b>POOL DETAILS:</b>\n` +
-      `  Pool Value: <b>${solBalance.toFixed(2)} SOL</b>\n` +
-      `  Token Supply: <b>${(tokenAmount / 1000000000).toFixed(2)}M</b>\n` +
-      `  Current Price: <b>${currentPrice.toFixed(8)} SOL</b>\n` +
-      `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
+      `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 8)}...</a>`
     );
-    
+
     // Adicionar endereço aos enviados
     sentAddresses.add(tOutput.mint);
   }
@@ -698,11 +664,11 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 // Função para processar transações Meteora DBC
 async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
   logger.info("🔄 Transação Meteora DBC detectada:", txn.transaction.signatures[0]);
-  
+
   try {
     // Importar funções utilitárias da Meteora DBC
     const { calculateMeteoraDBCCurveProgress } = await import("./utils/getMeteoraDBCBonding");
-    
+
     // Extrair informações reais da transação
     let tOutput: any = {
       type: "UNKNOWN",
@@ -712,7 +678,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       tokenAmount: 0,
       solAmount: 0
     };
-    
+
     // Extrair dados reais da transação Meteora DBC
     if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
       // Procurar por instruções relevantes na transação
@@ -727,7 +693,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
             tOutput.mint = (ix.accounts[2] ? (typeof ix.accounts[2] === 'object' && ix.accounts[2].hasOwnProperty('toBase58') ? ix.accounts[2].toBase58() : String(ix.accounts[2])) : null) || tOutput.mint;
           }
         }
-        
+
         // Extrair valores de token e SOL se disponíveis
         if (ix.data) {
           if (ix.data.tokenAmount !== undefined) {
@@ -736,7 +702,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
           if (ix.data.solAmount !== undefined) {
             tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
           }
-          
+
           // Determinar tipo de transação com base nos dados
           if (ix.name) {
             if (ix.name.includes('buy') || ix.name.includes('Buy')) {
@@ -750,7 +716,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         }
       }
     }
-    
+
     // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
     if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
       // Extrair de txn.transaction.message.accountKeys se disponível
@@ -759,16 +725,16 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
         tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
       }
-      
+
       // Usar signature como identificador se necessário
       if (!tOutput.mint) {
         tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
       }
     }
-    
+
     // Se ainda não temos bonding curve, usar o mint como fallback
     tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
-    
+
     // Garantir que todos os valores sejam strings antes de passar para as funções
     if (tOutput.mint && typeof tOutput.mint === 'object') {
       tOutput.mint = tOutput.mint.toString();
@@ -779,7 +745,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
     if (tOutput.bondingCurve && typeof tOutput.bondingCurve === 'object') {
       tOutput.bondingCurve = tOutput.bondingCurve.toString();
     }
-    
+
     // Substituir "[object Object]" por valores reais se necessário
     if (tOutput.mint === "[object Object]") {
       tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
@@ -790,12 +756,12 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
     if (tOutput.bondingCurve === "[object Object]") {
       tOutput.bondingCurve = tOutput.mint;
     }
-    
+
     // Calcular o progresso da curva
     logger.debug(`🔍 Calculando progresso da curva para bondingCurve: ${tOutput.bondingCurve}`);
     const progress = await calculateMeteoraDBCCurveProgress(tOutput.bondingCurve);
     logger.debug(`🔍 Progresso calculado: ${progress}`);
-    
+
     logger.info(
       `
       TYPE : ${tOutput.type}
@@ -808,7 +774,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       SIGNATURE : ${txn.transaction.signatures[0]}
       `
     );
-    
+
     // Verificar se atingiu o limiar de alerta
     if (
       Number(progress) >= METEORA_DBC_ALERT_THRESHOLD &&
@@ -817,7 +783,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
     ) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-      
+
       // Buscar metadados do token, se disponível
       let tokenMetadata = null;
       if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
@@ -827,7 +793,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
           logger.debug(`❌ Erro ao buscar metadados para token Meteora DBC ${tOutput.mint}:`, metadataError.message);
         }
       }
-      
+
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (Meteora DBC): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
@@ -840,8 +806,8 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         }
         if (tokenMetadata.description) {
           // Limitar a descrição a 100 caracteres
-          const description = tokenMetadata.description.length > 100 
-            ? tokenMetadata.description.substring(0, 100) + '...' 
+          const description = tokenMetadata.description.length > 100
+            ? tokenMetadata.description.substring(0, 100) + '...'
             : tokenMetadata.description;
           tokenInfo += `Description: <i>${description}</i>\n`;
         }
@@ -877,7 +843,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         recordCacheMiss(); // Registrar miss de cache
         recordApiCall(); // Registrar chamada de API
       }
-      
+
       // Enviar alerta
       sendMessage(
         `🚨 <b>ALERTA METEORA DBC - ${METEORA_DBC_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
@@ -886,7 +852,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-      
+
       // Adicionar endereço aos enviados
       sentAddresses.add(tOutput.mint);
     }
@@ -898,11 +864,11 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
 // Função para processar transações Bonk.fun
 async function processBonkFunTransaction(txn: any, parsedTxn: any) {
   logger.info("🔄 Transação Bonk.fun detectada:", txn.transaction.signatures[0]);
-  
+
   try {
     // Importar funções utilitárias do Bonk.fun
     const { calculateBonkFunCurveProgress } = await import("./utils/getBonkFunBonding");
-    
+
     // Extrair informações reais da transação
     let tOutput: any = {
       type: "UNKNOWN",
@@ -912,7 +878,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
       tokenAmount: 0,
       solAmount: 0
     };
-    
+
     // Extrair dados reais da transação Bonk.fun
     if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
       // Procurar por instruções relevantes na transação
@@ -927,7 +893,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
             tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
           }
         }
-        
+
         // Extrair valores de token e SOL se disponíveis
         if (ix.data) {
           if (ix.data.tokenAmount !== undefined) {
@@ -936,7 +902,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
           if (ix.data.solAmount !== undefined) {
             tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
           }
-          
+
           // Determinar tipo de transação com base nos dados
           if (ix.name) {
             if (ix.name.includes('buy') || ix.name.includes('Buy')) {
@@ -950,7 +916,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         }
       }
     }
-    
+
     // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
     if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
       // Extrair de txn.transaction.message.accountKeys se disponível
@@ -959,19 +925,19 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         tOutput.bondingCurve = tOutput.bondingCurve || txn.transaction.message.accountKeys[1]?.pubkey?.toBase58() || "UNKNOWN_BONDING_CURVE";
         tOutput.mint = tOutput.mint || txn.transaction.message.accountKeys[2]?.pubkey?.toBase58() || "UNKNOWN_MINT";
       }
-      
+
       // Usar signature como identificador se necessário
       if (!tOutput.mint) {
         tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
       }
     }
-    
+
     // Se ainda não temos bonding curve, usar o mint como fallback
     tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
-    
+
     // Calcular o progresso da curva
     const progress = await calculateBonkFunCurveProgress(tOutput.bondingCurve);
-    
+
     logger.info(
       `
       TYPE : ${tOutput.type}
@@ -984,7 +950,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
       SIGNATURE : ${txn.transaction.signatures[0]}
       `
     );
-    
+
     // Verificar se atingiu o limiar de alerta
     if (
       Number(progress) >= BONK_FUN_ALERT_THRESHOLD &&
@@ -993,7 +959,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
     ) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-      
+
       // Buscar metadados do token, se disponível
       let tokenMetadata = null;
       if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
@@ -1003,7 +969,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
           logger.debug(`❌ Erro ao buscar metadados para token bonk.fun ${tOutput.mint}:`, metadataError.message);
         }
       }
-      
+
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (bonk.fun): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
@@ -1016,8 +982,8 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         }
         if (tokenMetadata.description) {
           // Limitar a descrição a 100 caracteres
-          const description = tokenMetadata.description.length > 100 
-            ? tokenMetadata.description.substring(0, 100) + '...' 
+          const description = tokenMetadata.description.length > 100
+            ? tokenMetadata.description.substring(0, 100) + '...'
             : tokenMetadata.description;
           tokenInfo += `Description: <i>${description}</i>\n`;
         }
@@ -1053,7 +1019,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         recordCacheMiss(); // Registrar miss de cache
         recordApiCall(); // Registrar chamada de API
       }
-      
+
       // Enviar alerta
       sendMessage(
         `🚨 <b>ALERTA BONK.FUN - ${BONK_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
@@ -1062,7 +1028,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-      
+
       // Adicionar endereço aos enviados
       sentAddresses.add(tOutput.mint);
     }
@@ -1075,11 +1041,11 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
 // Função para processar transações Moonshot Screener
 async function processMoonshotTransaction(txn: any, parsedTxn: any) {
   logger.info("🔄 Transação Moonshot Screener detectada:", txn.transaction.signatures[0]);
-  
+
   try {
     // Importar funções utilitárias do Moonshot Screener
     const { calculateMoonshotCurveProgress } = await import("./utils/getMoonshotBonding");
-    
+
     // Extrair informações reais da transação
     let tOutput: any = {
       type: "UNKNOWN",
@@ -1089,7 +1055,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
       tokenAmount: 0,
       solAmount: 0
     };
-    
+
     // Extrair dados reais da transação Moonshot Screener
     if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
       // Procurar por instruções relevantes na transação
@@ -1104,7 +1070,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
             tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
           }
         }
-        
+
         // Extrair valores de token e SOL se disponíveis
         if (ix.data) {
           if (ix.data.tokenAmount !== undefined) {
@@ -1113,7 +1079,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
           if (ix.data.solAmount !== undefined) {
             tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
           }
-          
+
           // Determinar tipo de transação com base nos dados
           if (ix.name) {
             if (ix.name.includes('buy') || ix.name.includes('Buy')) {
@@ -1127,7 +1093,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         }
       }
     }
-    
+
     // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
     if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
       // Extrair de txn.transaction.message.accountKeys se disponível
@@ -1136,19 +1102,19 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         tOutput.bondingCurve = tOutput.bondingCurve || txn.transaction.message.accountKeys[1]?.pubkey?.toBase58() || "UNKNOWN_BONDING_CURVE";
         tOutput.mint = tOutput.mint || txn.transaction.message.accountKeys[2]?.pubkey?.toBase58() || "UNKNOWN_MINT";
       }
-      
+
       // Usar signature como identificador se necessário
       if (!tOutput.mint) {
         tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
       }
     }
-    
+
     // Se ainda não temos bonding curve, usar o mint como fallback
     tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
-    
+
     // Calcular o progresso da curva
     const progress = await calculateMoonshotCurveProgress(tOutput.bondingCurve);
-    
+
     logger.info(
       `
       TYPE : ${tOutput.type}
@@ -1161,7 +1127,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
       SIGNATURE : ${txn.transaction.signatures[0]}
       `
     );
-    
+
     // Verificar se atingiu o limiar de alerta
     if (
       Number(progress) >= MOONSHOT_ALERT_THRESHOLD &&
@@ -1170,7 +1136,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
     ) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-      
+
       // Buscar metadados do token, se disponível
       let tokenMetadata = null;
       if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
@@ -1180,7 +1146,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
           logger.debug(`❌ Erro ao buscar metadados para token moonshot ${tOutput.mint}:`, metadataError.message);
         }
       }
-      
+
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (moonshot): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
@@ -1193,8 +1159,8 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         }
         if (tokenMetadata.description) {
           // Limitar a descrição a 100 caracteres
-          const description = tokenMetadata.description.length > 100 
-            ? tokenMetadata.description.substring(0, 100) + '...' 
+          const description = tokenMetadata.description.length > 100
+            ? tokenMetadata.description.substring(0, 100) + '...'
             : tokenMetadata.description;
           tokenInfo += `Description: <i>${description}</i>\n`;
         }
@@ -1230,7 +1196,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         recordCacheMiss(); // Registrar miss de cache
         recordApiCall(); // Registrar chamada de API
       }
-      
+
       // Enviar alerta
       sendMessage(
         `🚨 <b>ALERTA MOONSHOT - ${MOONSHOT_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
@@ -1239,7 +1205,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-      
+
       // Adicionar endereço aos enviados
       sentAddresses.add(tOutput.mint);
     }
@@ -1251,11 +1217,11 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
 // Função para processar transações anoncoin.it
 async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
   logger.info("🔄 Transação anoncoin.it detectada:", txn.transaction.signatures[0]);
-  
+
   try {
     // Importar funções utilitárias do anoncoin.it
     const { calculateAnoncoinCurveProgress } = await import("./utils/getAnoncoinBonding");
-    
+
     // Extrair informações reais da transação
     let tOutput: any = {
       type: "UNKNOWN",
@@ -1265,7 +1231,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
       tokenAmount: 0,
       solAmount: 0
     };
-    
+
     // Extrair dados reais da transação anoncoin.it
     if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
       // Procurar por instruções relevantes na transação
@@ -1280,7 +1246,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
             tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
           }
         }
-        
+
         // Extrair valores de token e SOL se disponíveis
         if (ix.data) {
           if (ix.data.tokenAmount !== undefined) {
@@ -1289,7 +1255,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
           if (ix.data.solAmount !== undefined) {
             tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
           }
-          
+
           // Determinar tipo de transação com base nos dados
           if (ix.name) {
             if (ix.name.includes('buy') || ix.name.includes('Buy')) {
@@ -1303,7 +1269,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
         }
       }
     }
-    
+
     // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
     if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
       // Extrair de txn.transaction.message.accountKeys se disponível
@@ -1312,19 +1278,19 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
         tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
         tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
       }
-      
+
       // Usar signature como identificador se necessário
       if (!tOutput.mint) {
         tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
       }
     }
-    
+
     // Se ainda não temos bonding curve, usar o mint como fallback
     tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
-    
+
     // Calcular o progresso da curva
     const progress = await calculateAnoncoinCurveProgress(tOutput.bondingCurve);
-    
+
     logger.info(
       `
       TYPE : ${tOutput.type}
@@ -1337,7 +1303,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
       SIGNATURE : ${txn.transaction.signatures[0]}
       `
     );
-    
+
     // Verificar se atingiu o limiar de alerta
     if (
       Number(progress) >= ANONCOIN_ALERT_THRESHOLD &&
@@ -1346,7 +1312,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
     ) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-      
+
       // Buscar metadados do token, se disponível
       let tokenMetadata = null;
       if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
@@ -1356,7 +1322,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
           logger.debug(`❌ Erro ao buscar metadados para token anoncoin.it ${tOutput.mint}:`, metadataError.message);
         }
       }
-      
+
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (anoncoin.it): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
@@ -1369,8 +1335,8 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
         }
         if (tokenMetadata.description) {
           // Limitar a descrição a 100 caracteres
-          const description = tokenMetadata.description.length > 100 
-            ? tokenMetadata.description.substring(0, 100) + '...' 
+          const description = tokenMetadata.description.length > 100
+            ? tokenMetadata.description.substring(0, 100) + '...'
             : tokenMetadata.description;
           tokenInfo += `Description: <i>${description}</i>\n`;
         }
@@ -1406,7 +1372,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
         recordCacheMiss(); // Registrar miss de cache
         recordApiCall(); // Registrar chamada de API
       }
-      
+
       // Enviar alerta
       sendMessage(
         `🚨 <b>ALERTA ANONCOIN.IT - ${ANONCOIN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
@@ -1415,7 +1381,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-      
+
       // Adicionar endereço aos enviados
       sentAddresses.add(tOutput.mint);
     }
@@ -1429,11 +1395,11 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
 // Função para processar transações daos.fun
 async function processDaosFunTransaction(txn: any, parsedTxn: any) {
   logger.info("🔄 Transação daos.fun detectada:", txn.transaction.signatures[0]);
-  
+
   try {
     // Importar funções utilitárias do daos.fun
     const { calculateDaosFunCurveProgress } = await import("./utils/getDaosFunBonding");
-    
+
     // Extrair informações reais da transação
     let tOutput: any = {
       type: "UNKNOWN",
@@ -1443,7 +1409,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
       tokenAmount: 0,
       solAmount: 0
     };
-    
+
     // Extrair dados reais da transação daos.fun
     if (parsedTxn && parsedTxn.instructions && parsedTxn.instructions.length > 0) {
       // Procurar por instruções relevantes na transação
@@ -1458,7 +1424,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
             tOutput.mint = (ix.accounts[2] ? ix.accounts[2].toString() : null) || tOutput.mint;
           }
         }
-        
+
         // Extrair valores de token e SOL se disponíveis
         if (ix.data) {
           if (ix.data.tokenAmount !== undefined) {
@@ -1467,7 +1433,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
           if (ix.data.solAmount !== undefined) {
             tOutput.solAmount = Number(ix.data.solAmount) || tOutput.solAmount;
           }
-          
+
           // Determinar tipo de transação com base nos dados
           if (ix.name) {
             if (ix.name.includes('buy') || ix.name.includes('Buy')) {
@@ -1481,7 +1447,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         }
       }
     }
-    
+
     // Se não conseguimos extrair dados suficientes, usar dados da transação bruta
     if (!tOutput.mint || !tOutput.user || !tOutput.bondingCurve) {
       // Extrair de txn.transaction.message.accountKeys se disponível
@@ -1490,16 +1456,16 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         tOutput.bondingCurve = tOutput.bondingCurve || (txn.transaction.message.accountKeys[1]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[1].pubkey.toBase58() : txn.transaction.message.accountKeys[1]) || "UNKNOWN_BONDING_CURVE";
         tOutput.mint = tOutput.mint || (txn.transaction.message.accountKeys[2]?.pubkey?.toBase58 ? txn.transaction.message.accountKeys[2].pubkey.toBase58() : txn.transaction.message.accountKeys[2]) || "UNKNOWN_MINT";
       }
-      
+
       // Usar signature como identificador se necessário
       if (!tOutput.mint) {
         tOutput.mint = txn.transaction.signatures[0] || "UNKNOWN_MINT";
       }
     }
-    
+
     // Se ainda não temos bonding curve, usar o mint como fallback
     tOutput.bondingCurve = tOutput.bondingCurve || tOutput.mint;
-    
+
     // Garantir que todos os valores sejam strings antes de passar para as funções
     if (tOutput.mint && typeof tOutput.mint === 'object') {
       tOutput.mint = tOutput.mint.toString();
@@ -1510,10 +1476,10 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
     if (tOutput.bondingCurve && typeof tOutput.bondingCurve === 'object') {
       tOutput.bondingCurve = tOutput.bondingCurve.toString();
     }
-    
+
     // Calcular o progresso da curva
     const progress = await calculateDaosFunCurveProgress(tOutput.bondingCurve);
-    
+
     logger.info(
       `
       TYPE : ${tOutput.type}
@@ -1526,7 +1492,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
       SIGNATURE : ${txn.transaction.signatures[0]}
       `
     );
-    
+
     // Verificar se atingiu o limiar de alerta
     if (
       Number(progress) >= DAOS_FUN_ALERT_THRESHOLD &&
@@ -1535,7 +1501,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
     ) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-      
+
       // Buscar metadados do token, se disponível
       let tokenMetadata = null;
       if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
@@ -1545,7 +1511,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
           logger.debug(`❌ Erro ao buscar metadados para token daos.fun ${tOutput.mint}:`, metadataError.message);
         }
       }
-      
+
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (daos.fun): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
@@ -1558,8 +1524,8 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         }
         if (tokenMetadata.description) {
           // Limitar a descrição a 100 caracteres
-          const description = tokenMetadata.description.length > 100 
-            ? tokenMetadata.description.substring(0, 100) + '...' 
+          const description = tokenMetadata.description.length > 100
+            ? tokenMetadata.description.substring(0, 100) + '...'
             : tokenMetadata.description;
           tokenInfo += `Description: <i>${description}</i>\n`;
         }
@@ -1595,7 +1561,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         recordCacheMiss(); // Registrar miss de cache
         recordApiCall(); // Registrar chamada de API
       }
-      
+
       // Enviar alerta
       sendMessage(
         `🚨 <b>ALERTA DAOS.FUN - ${DAOS_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
@@ -1604,7 +1570,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-      
+
       // Adicionar endereço aos enviados
       sentAddresses.add(tOutput.mint);
     }
@@ -1636,9 +1602,11 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
   }
 }
 
+const SHYFT_GRPC_TOKEN = process.env.SHYFT_GRPC_TOKEN;
+
 const client = new Client(
   SHYFT_GRPC,
-  undefined,
+  SHYFT_GRPC_TOKEN,
   undefined
 );
 
@@ -1669,8 +1637,8 @@ if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
 }
 
 // Adicionar monitoramento da Meteora DBC se habilitado e se o protocolo estiver configurado
-if ((MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH") && 
-    METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
+if ((MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH") &&
+  METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
   req.transactions.meteoraDBC = {
     vote: false,
     failed: false,
@@ -1683,8 +1651,8 @@ if ((MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH") &&
 }
 
 // Adicionar monitoramento do Bonk.fun se habilitado e se o protocolo estiver configurado
-if ((MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH") && 
-    BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
+if ((MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH") &&
+  BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
   req.transactions.bonkFun = {
     vote: false,
     failed: false,
@@ -1697,8 +1665,8 @@ if ((MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH") &&
 }
 
 // Adicionar monitoramento do daos.fun se habilitado e se o protocolo estiver configurado
-if ((MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH") && 
-    DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
+if ((MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH") &&
+  DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
   req.transactions.daosFun = {
     vote: false,
     failed: false,
@@ -1711,8 +1679,8 @@ if ((MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH") &&
 }
 
 // Adicionar monitoramento do Moonshot Screener se habilitado e se o protocolo estiver configurado
-if ((MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH") && 
-    MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
+if ((MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH") &&
+  MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
   req.transactions.moonshot = {
     vote: false,
     failed: false,
@@ -1725,8 +1693,8 @@ if ((MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH") &&
 }
 
 // Adicionar monitoramento do anoncoin.it se habilitado e se o protocolo estiver configurado
-if ((MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH") && 
-    ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
+if ((MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH") &&
+  ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
   req.transactions.anoncoin = {
     vote: false,
     failed: false,
@@ -1758,7 +1726,7 @@ subscribeCommand(client, req);
 async function reconnectWithBackoff(maxRetries = 5) {
   // Aumentar o tempo de espera entre tentativas
   const baseDelay = 2000; // 2 segundos
-  
+
   for (let i = 0; i < maxRetries; i++) {
     try {
       logger.info(`🔄 Tentativa de reconexão ${i + 1}/${maxRetries}`);
@@ -1766,7 +1734,7 @@ async function reconnectWithBackoff(maxRetries = 5) {
       const delay = baseDelay * Math.pow(2, i);
       logger.info(`⏳ Aguardando ${delay}ms antes de tentar reconectar...`);
       await new Promise(resolve => setTimeout(resolve, delay));
-      
+
       // Se chegou aqui, a reconexão foi bem-sucedida
       logger.info("✅ Reconexão bem-sucedida");
       return true;
@@ -1784,7 +1752,7 @@ function reportBotStatus() {
   const hours = Math.floor(uptime / 3600);
   const minutes = Math.floor((uptime % 3600) / 60);
   const seconds = Math.floor(uptime % 60);
-  
+
   const statusMessage = `
 📊 **STATUS DO BOT PUMPFUN**
 ⏱️  Uptime: ${hours}h ${minutes}m ${seconds}s
@@ -1793,7 +1761,7 @@ function reportBotStatus() {
 📝 Último erro: ${botHealth.lastError || 'Nenhum'}
 📦 Tokens monitorados: ${sentAddresses.size}
   `;
-  
+
   logger.info(statusMessage);
   return statusMessage;
 }
@@ -1817,7 +1785,7 @@ setTimeout(async () => {
     logger.info("🔍 Verificando conexão com o Telegram...");
     const botInfo = await bot.getMe();
     logger.info(`✅ Bot conectado: ${botInfo.username} (ID: ${botInfo.id})`);
-    
+
     await sendMessage(`✅ Bot PumpFun monitor está funcionando! Aguardando tokens chegarem a ${ALERT_THRESHOLD}% da curva...`);
     logger.info("✅ Mensagem de teste enviada com sucesso!");
     updateBotHealth(true);
@@ -1826,20 +1794,20 @@ setTimeout(async () => {
     logger.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
     logger.info("📝 Chat ID:", chatId);
     logger.info("📝 Limite de alerta:", ALERT_THRESHOLD);
-    
+
     // Verificação adicional
     if (!token || token.length < 20) {
       logger.error("❌ Token do bot parece inválido. Deve ter pelo menos 20 caracteres.");
     }
-    
+
     if (!chatId) {
       logger.error("❌ Chat ID parece inválido.");
     }
-    
+
     if (isNaN(ALERT_THRESHOLD) || ALERT_THRESHOLD <= 0) {
       logger.error("❌ Limite de alerta inválido.");
     }
-    
+
     updateBotHealth(false, error.message);
   }
 }, 5000); // Aumentar o tempo de espera para 5 segundos
@@ -1847,42 +1815,42 @@ setTimeout(async () => {
 // Adicionar tratamento de erros mais robusto para polling
 bot.on('polling_error', async (error: any) => {
   logger.error('❌ Erro de polling:', error.message);
-  
+
   // Tratamento específico para redirecionamentos 301
   if (error.message && error.message.includes('301')) {
     logger.warn("⚠️  Redirecionamento 301 detectado. Atualizando baseApiUrl...");
     // Atualizar a URL base para lidar com redirecionamentos
     bot.options.baseApiUrl = 'https://api.telegram.org';
-    
+
     // Esperar um pouco antes de tentar novamente
     await new Promise(resolve => setTimeout(resolve, 5000));
     return;
   }
-  
+
   // Incrementar contador de erros
   botHealth.errorCount++;
   botHealth.lastError = error.message;
-  
+
   // Se houver muitos erros consecutivos, esperar mais antes de tentar reconectar
   if (botHealth.errorCount > 10) {
     logger.warn("⚠️  Muitos erros consecutivos. Aguardando 60 segundos antes de tentar reconectar...");
     await new Promise(resolve => setTimeout(resolve, 60000));
   }
-  
+
   // Tratamento específico para erros fatais
-  if (error.code === 'EFATAL' || error.name === 'AggregateError' || 
-      error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
+  if (error.code === 'EFATAL' || error.name === 'AggregateError' ||
+    error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
     logger.error("🚨 Erro de conexão detectado. Tentando reconectar...");
     logger.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
     logger.info("📝 Chat ID:", chatId);
-    
+
     try {
       // Tentar reconectar com backoff exponencial
       await reconnectWithBackoff(5);
-      
+
       // Recriar a instância do bot após reconexão bem-sucedida
       logger.info("🔄 Recriando instância do bot após reconexão...");
-      const newBot = new TelegramBot(token, { 
+      const newBot = new TelegramBot(token, {
         polling: true,
         request: {
           proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
@@ -1898,7 +1866,7 @@ bot.on('polling_error', async (error: any) => {
         pollingTimeout: 60000,
         baseApiUrl: 'https://api.telegram.org'
       });
-      
+
       // Transferir listeners do bot antigo para o novo
       const listeners = bot.eventNames();
       listeners.forEach(event => {
@@ -1907,11 +1875,11 @@ bot.on('polling_error', async (error: any) => {
           newBot.on(event, callback);
         });
       });
-      
+
       // Substituir a instância do bot
       Object.assign(bot, newBot);
       logger.info("✅ Bot recriado com sucesso após reconexão");
-      
+
       // Resetar contador de erros após reconexão bem-sucedida
       botHealth.errorCount = 0;
       botHealth.lastError = null;
@@ -1923,18 +1891,18 @@ bot.on('polling_error', async (error: any) => {
 
 bot.on('error', async (error) => {
   logger.error('❌ Erro no bot:', error.message);
-  
+
   // Incrementar contador de erros
   botHealth.errorCount++;
   botHealth.lastError = error.message;
-  
+
   // Tentar reconectar em caso de erros críticos
   if (error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
     logger.warn("⚠️  Erro de conexão detectado. Tentando reconexão...");
     try {
       await reconnectWithBackoff(3);
       logger.info("✅ Reconexão bem-sucedida após erro de conexão");
-      
+
       // Resetar contador de erros após reconexão bem-sucedida
       botHealth.errorCount = 0;
       botHealth.lastError = null;
@@ -1968,7 +1936,7 @@ function decodeMeteoraDBCTxn(tx: VersionedTransactionResponse) {
   if (!METEORA_DBC_MONITORING_ENABLED || !METEORA_DBC_PROGRAM_ID_OBJ || !METEORA_DBC_IX_PARSER || !METEORA_DBC_EVENT_PARSER) {
     return null;
   }
-  
+
   if (tx.meta?.err) return;
 
   const paredIxs = METEORA_DBC_IX_PARSER.parseTransactionData(
@@ -1981,7 +1949,7 @@ function decodeMeteoraDBCTxn(tx: VersionedTransactionResponse) {
   );
 
   if (meteoraDbcIxs.length === 0) return null;
-  
+
   const events = METEORA_DBC_EVENT_PARSER.parseEvent(tx);
   const result = { instructions: meteoraDbcIxs, events };
   bnLayoutFormatter(result);
@@ -1993,7 +1961,7 @@ function decodeBonkFunTxn(tx: VersionedTransactionResponse) {
   if (!BONK_FUN_MONITORING_ENABLED || !BONK_FUN_PROGRAM_ID_OBJ || !BONK_FUN_IX_PARSER || !BONK_FUN_EVENT_PARSER) {
     return null;
   }
-  
+
   if (tx.meta?.err) return;
 
   const paredIxs = BONK_FUN_IX_PARSER.parseTransactionData(
@@ -2006,7 +1974,7 @@ function decodeBonkFunTxn(tx: VersionedTransactionResponse) {
   );
 
   if (bonkFunIxs.length === 0) return null;
-  
+
   const events = BONK_FUN_EVENT_PARSER.parseEvent(tx);
   const result = { instructions: bonkFunIxs, events };
   bnLayoutFormatter(result);
@@ -2018,7 +1986,7 @@ function decodeDaosFunTxn(tx: VersionedTransactionResponse) {
   if (!DAOS_FUN_MONITORING_ENABLED || !DAOS_FUN_PROGRAM_ID_OBJ || !DAOS_FUN_IX_PARSER || !DAOS_FUN_EVENT_PARSER) {
     return null;
   }
-  
+
   if (tx.meta?.err) return;
 
   const paredIxs = DAOS_FUN_IX_PARSER.parseTransactionData(
@@ -2031,7 +1999,7 @@ function decodeDaosFunTxn(tx: VersionedTransactionResponse) {
   );
 
   if (daosFunIxs.length === 0) return null;
-  
+
   const events = DAOS_FUN_EVENT_PARSER.parseEvent(tx);
   const result = { instructions: daosFunIxs, events };
   bnLayoutFormatter(result);
@@ -2043,7 +2011,7 @@ function decodeMoonshotTxn(tx: VersionedTransactionResponse) {
   if (!MOONSHOT_MONITORING_ENABLED || !MOONSHOT_PROGRAM_ID_OBJ || !MOONSHOT_IX_PARSER || !MOONSHOT_EVENT_PARSER) {
     return null;
   }
-  
+
   if (tx.meta?.err) return;
 
   const paredIxs = MOONSHOT_IX_PARSER.parseTransactionData(
@@ -2056,7 +2024,7 @@ function decodeMoonshotTxn(tx: VersionedTransactionResponse) {
   );
 
   if (moonshotIxs.length === 0) return null;
-  
+
   const events = MOONSHOT_EVENT_PARSER.parseEvent(tx);
   const result = { instructions: moonshotIxs, events };
   bnLayoutFormatter(result);
@@ -2068,7 +2036,7 @@ function decodeAnoncoinTxn(tx: VersionedTransactionResponse) {
   if (!ANONCOIN_MONITORING_ENABLED || !ANONCOIN_PROGRAM_ID_OBJ || !ANONCOIN_IX_PARSER || !ANONCOIN_EVENT_PARSER) {
     return null;
   }
-  
+
   if (tx.meta?.err) return;
 
   const paredIxs = ANONCOIN_IX_PARSER.parseTransactionData(
@@ -2081,7 +2049,7 @@ function decodeAnoncoinTxn(tx: VersionedTransactionResponse) {
   );
 
   if (anoncoinIxs.length === 0) return null;
-  
+
   const events = ANONCOIN_EVENT_PARSER.parseEvent(tx);
   const result = { instructions: anoncoinIxs, events };
   bnLayoutFormatter(result);

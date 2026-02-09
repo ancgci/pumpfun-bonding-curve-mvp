@@ -1,18 +1,26 @@
-import { 
-  Connection, 
-  PublicKey, 
-  Transaction, 
+import {
+  Connection,
+  PublicKey,
+  Transaction,
   sendAndConfirmTransaction,
   Keypair,
   ComputeBudgetProgram,
   SystemProgram,
-  TransactionInstruction
+  TransactionInstruction,
+  VersionedTransaction,
+  TransactionMessage
 } from "@solana/web3.js";
 import { BN } from "@project-serum/anchor";
 import { decode } from "bs58";
 import { createJupiterApiClient } from "@jup-ag/api";
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import logger from "./logger";
+import { recordApiCall, recordError } from "./performanceMonitor";
+import { sendJitoBundle } from "./jitoManager";
+import { circuitBreaker } from "./circuitBreaker";
+import { rpcPool } from "./rpcPool";
+import { getCachedDynamicGasPrice } from "./gasPriceOracle";
+import { getCachedOptimalSlippage } from "./slippageCalculator";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -61,7 +69,7 @@ const PUMPFUN_PROGRAM_ID = new PublicKey(process.env.PUMPFUN_PROGRAM_ID || "6EF8
 const BUY_AMOUNT_SOL = parseFloat(process.env.BUY_AMOUNT_SOL || "0.1");
 const TAKE_PROFIT_PERCENT = parseFloat(process.env.TAKE_PROFIT_PERCENT || "20");
 const STOP_LOSS_PERCENT = parseFloat(process.env.STOP_LOSS_PERCENT || "25");
-const SLIPPAGE_BPS = parseInt(process.env.SLIPPAGE_BPS || "50");
+const DEFAULT_SLIPPAGE_BPS = parseInt(process.env.SLIPPAGE_BPS || "50"); // Fallback se slippage adaptativo falhar
 // Exportar a variável para testes
 export { STOP_LOSS_PERCENT };
 // Para testes, podemos forçar a ativação da compra automática
@@ -71,6 +79,7 @@ const AUTO_BUY_ENABLED = process.env.AUTO_BUY_ENABLED === "true";
 logger.info(`AUTO_BUY_ENABLED value: ${AUTO_BUY_ENABLED}`);
 const AUTO_SELL_TAKE_PROFIT = process.env.AUTO_SELL_TAKE_PROFIT !== "false";
 const AUTO_SELL_STOP_LOSS = process.env.AUTO_SELL_STOP_LOSS !== "false";
+const SELL_PERCENT_ON_TP = parseInt(process.env.SELL_PERCENT_ON_TP || "100", 10); // Padrão: 100% (vende tudo)
 
 // Nova configuração para controle de trades simultâneos
 const SINGLE_TRADE_MODE = process.env.SINGLE_TRADE_MODE === "true";
@@ -78,15 +87,46 @@ const SINGLE_TRADE_MODE = process.env.SINGLE_TRADE_MODE === "true";
 // Nova configuração para filtro de tipo de trade
 const TRADE_TYPE_FILTER = process.env.TRADE_TYPE_FILTER || "BOTH"; // "BUY", "SELL", ou "BOTH"
 
-// Conexão com a Solana
-const connection = new Connection(RPC_URL, "confirmed");
+// OTIMIZAÇÃO: Usar RPC Pool em vez de conexão única
+// Conexão legada (mantida como fallback)
+const legacyConnection = new Connection(RPC_URL, "confirmed");
+
+// Função helper para obter conexão otimizada
+async function getConnection(): Promise<Connection> {
+  try {
+    return await rpcPool.getBestConnection();
+  } catch (error: any) {
+    logger.warn("⚠️  RPC Pool falhou, usando conexão legada:", error.message);
+    return legacyConnection;
+  }
+}
 
 // Cliente da Jupiter API
-const jupiterApi = createJupiterApiClient();
+const JUPITER_API_BASE = process.env.JUPITER_API_BASE || "https://quote-api.jup.ag/v6";
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY || undefined;
+const jupiterApi = createJupiterApiClient({
+  basePath: JUPITER_API_BASE,
+  apiKey: JUPITER_API_KEY,
+});
 
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 500): Promise<T> {
+  let lastError: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      recordError();
+      const jitter = Math.floor(Math.random() * baseDelayMs);
+      const delay = baseDelayMs * Math.pow(2, i) + jitter;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastError;
+}
 // Carregar carteira
 let keypair: Keypair | null = null;
-logger.info(`SECRET_KEY_JSON: ${process.env.SECRET_KEY_JSON}`);
+logger.info(`SECRET_KEY_JSON presente: ${process.env.SECRET_KEY_JSON ? "true" : "false"}`);
 if (process.env.SECRET_KEY_JSON) {
   try {
     const secretKeyArray = JSON.parse(process.env.SECRET_KEY_JSON);
@@ -119,14 +159,14 @@ export function hasActiveTrade(): boolean {
   if (!SINGLE_TRADE_MODE) {
     return false; // Se o modo single trade não estiver habilitado, permitir múltiplos trades
   }
-  
+
   // Verificar se há posições ativas
   for (const position of openPositions.values()) {
     if (position.isActive) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -139,7 +179,7 @@ export function isTradeTypeAllowed(tradeType: string): boolean {
   if (TRADE_TYPE_FILTER === "BOTH") {
     return true; // Permitir ambos os tipos
   }
-  
+
   return tradeType === TRADE_TYPE_FILTER;
 }
 
@@ -155,38 +195,42 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
   }
 
   logger.info(`🛒 Iniciando compra do token ${tokenMint} na PumpFun`);
-  
+
   try {
+    // OTIMIZAÇÃO: Obter conexão do pool de RPCs
+    const connection = await getConnection();
+
     // Converter amountSol para lamports (1 SOL = 10^9 lamports)
     const amountLamports = Math.floor(amountSol * 1e9);
-    
+
     // Obter endereços necessários
     const mintPublicKey = new PublicKey(tokenMint);
     const globalAccount = PublicKey.findProgramAddressSync(
       [Buffer.from("global")],
       PUMPFUN_PROGRAM_ID
     )[0];
-    
+
     const feeRecipient = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
-    
+
     const bondingCurve = PublicKey.findProgramAddressSync(
       [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
       PUMPFUN_PROGRAM_ID
     )[0];
-    
+
     const associatedBondingCurve = await getAssociatedTokenAddress(
       mintPublicKey,
       bondingCurve,
       true
     );
-    
+
     const associatedUser = await getAssociatedTokenAddress(
       mintPublicKey,
       keypair.publicKey
     );
 
-    // Calcular maxSolCost com slippage
-    const maxSolCost = Math.floor(amountLamports * (1 + SLIPPAGE_BPS / 10000));
+    // OTIMIZAÇÃO: Slippage adaptativo baseado na liquidez do token
+    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+    const maxSolCost = Math.floor(amountLamports * (1 + slippageBps / 10000));
 
     // Criar instrução de compra
     const buyInstruction = new TransactionInstruction({
@@ -212,21 +256,49 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
     });
 
     // Criar transação
-    const transaction = new Transaction().add(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
-      buyInstruction
-    );
+    const latestBlockhash = await connection.getLatestBlockhash();
 
-    // Enviar e confirmar transação
-    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
-      commitment: "confirmed",
-      skipPreflight: false,
-    });
+    // OTIMIZAÇÃO: Gas pricing dinâmico
+    const gasPrice = await getCachedDynamicGasPrice(connection).catch(() => 10000);
 
-    logger.info(`✅ Compra realizada com sucesso: ${signature}`);
-    
-    return signature;
+    // Preparar mensagem da transação (v0 para Jito, legacy para fallback)
+    const messageV0 = new TransactionMessage({
+      payerKey: keypair.publicKey,
+      recentBlockhash: latestBlockhash.blockhash,
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        buyInstruction
+      ],
+    }).compileToV0Message();
+
+    const versionedTransaction = new VersionedTransaction(messageV0);
+    versionedTransaction.sign([keypair]);
+
+    // Tentar enviar via Jito primeiro
+    try {
+      logger.info("⚡ Tentando enviar via Jito Bundle...");
+      const signature = await sendJitoBundle([versionedTransaction], keypair, connection);
+      logger.info(`✅ Compra realizada com sucesso via Jito: ${signature}`);
+      return signature;
+    } catch (jitoError) {
+      logger.warn("⚠️  Falha no envio Jito, tentando fallback para RPC padrão:", jitoError.message);
+
+      // Fallback para envio padrão
+      const transaction = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        buyInstruction
+      );
+
+      const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+        commitment: "confirmed",
+        skipPreflight: false,
+      });
+
+      logger.info(`✅ Compra realizada com sucesso (Standard RPC): ${signature}`);
+      return signature;
+    }
   } catch (error) {
     logger.error(`❌ Erro na compra do token ${tokenMint}:`, error);
     throw error;
@@ -245,31 +317,46 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
   }
 
   logger.info(`📉 Iniciando venda do token ${tokenMint} na PumpFun`);
-  
+
   try {
-    // Converter amountToken para integer
-    const amount = Math.floor(amountToken);
-    
+    // OT IMIZAÇÃO: Obter conexão do pool de RPCs
+    const connection = await getConnection();
+
+    // Calcular quantidade parcial baseado no SELL_PERCENT_ON_TP
+    const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
+    const amountToSell = Math.floor(amountToken * sellPercentDecimal);
+    const amountToKeep = amountToken - amountToSell;
+
+    if (SELL_PERCENT_ON_TP < 100) {
+      logger.info(`💰 Venda parcial ativa: ${SELL_PERCENT_ON_TP}%`);
+      logger.info(`   Total: ${amountToken.toLocaleString()} tokens`);
+      logger.info(`   💸 Vender: ${amountToSell.toLocaleString()} tokens`);
+      logger.info(`   📦 Manter: ${amountToKeep.toLocaleString()} tokens para moon shot`);
+    }
+
+    // Converter amountToSell para integer
+    const amount = amountToSell;
+
     // Obter endereços necessários
     const mintPublicKey = new PublicKey(tokenMint);
     const globalAccount = PublicKey.findProgramAddressSync(
       [Buffer.from("global")],
       PUMPFUN_PROGRAM_ID
     )[0];
-    
+
     const feeRecipient = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
-    
+
     const bondingCurve = PublicKey.findProgramAddressSync(
       [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
       PUMPFUN_PROGRAM_ID
     )[0];
-    
+
     const associatedBondingCurve = await getAssociatedTokenAddress(
       mintPublicKey,
       bondingCurve,
       true
     );
-    
+
     const associatedUser = await getAssociatedTokenAddress(
       mintPublicKey,
       keypair.publicKey
@@ -301,21 +388,50 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
     });
 
     // Criar transação
-    const transaction = new Transaction().add(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
-      sellInstruction
-    );
+    const latestBlockhash = await connection.getLatestBlockhash();
 
-    // Enviar e confirmar transação
-    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
-      commitment: "confirmed",
-      skipPreflight: false,
-    });
+    // OTIMIZAÇÃO: Gas pricing dinâmico
+    const gasPrice = await getCachedDynamicGasPrice(connection).catch(() => 10000);
 
-    logger.info(`✅ Venda realizada com sucesso: ${signature}`);
-    
-    return signature;
+    // Preparar mensagem da transação (v0 para Jito, legacy para fallback)
+    const messageV0 = new TransactionMessage({
+      payerKey: keypair.publicKey,
+      recentBlockhash: latestBlockhash.blockhash,
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        sellInstruction
+      ],
+    }).compileToV0Message();
+
+    const versionedTransaction = new VersionedTransaction(messageV0);
+    versionedTransaction.sign([keypair]);
+
+    // Tentar enviar via Jito primeiro
+    try {
+      logger.info("⚡ Tentando enviar VENDA via Jito Bundle...");
+      const signature = await sendJitoBundle([versionedTransaction], keypair, connection);
+      logger.info(`✅ Venda realizada com sucesso via Jito: ${signature}`);
+      return signature;
+    } catch (jitoError) {
+      logger.warn("⚠️  Falha no envio Jito (Venda), tentando fallback para RPC padrão:", jitoError.message);
+
+      // Fallback para envio padrão
+      const transaction = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        sellInstruction
+      );
+
+      const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+        commitment: "confirmed",
+        skipPreflight: false,
+      });
+
+      logger.info(`✅ Venda realizada com sucesso (Standard RPC): ${signature}`);
+
+      return signature;
+    }
   } catch (error) {
     logger.error(`❌ Erro na venda do token ${tokenMint}:`, error);
     throw error;
@@ -334,11 +450,23 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
   }
 
   logger.info(`🔁 Iniciando venda do token ${tokenMint} via Jupiter`);
-  
+
   try {
-    // Converter amountToken para integer
-    const amount = Math.floor(amountToken);
-    
+    // Calcular quantidade parcial baseado no SELL_PERCENT_ON_TP
+    const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
+    const amountToSell = Math.floor(amountToken * sellPercentDecimal);
+    const amountToKeep = amountToken - amountToSell;
+
+    if (SELL_PERCENT_ON_TP < 100) {
+      logger.info(`💰 Venda parcial ativa: ${SELL_PERCENT_ON_TP}%`);
+      logger.info(`   Total: ${amountToken.toLocaleString()} tokens`);
+      logger.info(`   💸 Vender: ${amountToSell.toLocaleString()} tokens`);
+      logger.info(`   📦 Manter: ${amountToKeep.toLocaleString()} tokens para moon shot`);
+    }
+
+    // Converter amountToSell para integer
+    const amount = amountToSell;
+
     // Obter endereço da token account do usuário
     const mintPublicKey = new PublicKey(tokenMint);
     const userTokenAccount = await getAssociatedTokenAddress(
@@ -347,25 +475,34 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
     );
 
     // Obter cotação da Jupiter API (token -> SOL)
-    const quote = await jupiterApi.quoteGet({
-      inputMint: tokenMint,
-      outputMint: "So11111111111111111111111111111111111111112", // SOL mint
-      amount: amount,
-      slippageBps: SLIPPAGE_BPS,
-    });
+    const connection = await getConnection();
+    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+
+    const quote = await withRetry(async () => {
+      recordApiCall();
+      return await jupiterApi.quoteGet({
+        inputMint: tokenMint,
+        outputMint: "So11111111111111111111111111111111111111112",
+        amount: amount,
+        slippageBps: slippageBps,
+      });
+    }, 3, 400);
 
     if (!quote) {
       throw new Error("Não foi possível obter cotação da Jupiter API");
     }
 
     // Obter instruções de swap
-    const swapResult = await jupiterApi.swapInstructionsPost({
-      swapRequest: {
-        quoteResponse: quote,
-        userPublicKey: keypair.publicKey.toString(),
-        wrapAndUnwrapSol: true,
-      },
-    });
+    const swapResult = await withRetry(async () => {
+      recordApiCall();
+      return await jupiterApi.swapInstructionsPost({
+        swapRequest: {
+          quoteResponse: quote,
+          userPublicKey: keypair.publicKey.toString(),
+          wrapAndUnwrapSol: true,
+        },
+      });
+    }, 3, 600);
 
     if (!swapResult) {
       throw new Error("Não foi possível obter instruções de swap da Jupiter API");
@@ -427,7 +564,7 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
     });
 
     logger.info(`✅ Venda via Jupiter realizada com sucesso: ${signature}`);
-    
+
     return signature;
   } catch (error) {
     logger.error(`❌ Erro na venda do token ${tokenMint} via Jupiter:`, error);
@@ -443,33 +580,38 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
 export async function executeHybridTrade(tokenData: TokenData, tradeType: string = "BUY"): Promise<void> {
   try {
     logger.info(`🔄 Executando trade híbrido para token ${tokenData.mint} (Tipo: ${tradeType})`);
-    
+
     // Verificar se a compra automática está habilitada
     if (!AUTO_BUY_ENABLED) {
       logger.info(`ℹ️  Compra automática desativada. AUTO_BUY_ENABLED=${process.env.AUTO_BUY_ENABLED}`);
       return;
     }
-    
+
+    // Checking Circuit Breaker
+    if (!circuitBreaker.canTrade()) {
+      return;
+    }
+
     // Verificar se o tipo de trade é permitido
     if (!isTradeTypeAllowed(tradeType)) {
       logger.info(`⚠️  Tipo de trade ${tradeType} não permitido. Filtro configurado para ${TRADE_TYPE_FILTER}`);
       return;
     }
-    
+
     // Verificar se estamos no modo de trade único e se já há um trade ativo
     if (SINGLE_TRADE_MODE && hasActiveTrade()) {
       logger.info(`⚠️  Trade único habilitado e já existe uma posição aberta. Ignorando trade para token ${tokenData.mint}`);
       return;
     }
-    
+
     // Comprar quando atingir ponto ideal na curva (apenas se for trade de compra)
-    if (tradeType === "BUY" && tokenData.mode === "CURVE" && 
-        tokenData.curvePercent >= 97.7 && 
-        tokenData.curvePercent < 100) {
-      
+    if (tradeType === "BUY" && tokenData.mode === "CURVE" &&
+      tokenData.curvePercent >= 97.7 &&
+      tokenData.curvePercent < 100) {
+
       logger.info(`💰 Comprando token ${tokenData.mint} na curva (${tokenData.curvePercent}%)`);
       const signature = await buyOnPumpFun(tokenData.mint, BUY_AMOUNT_SOL);
-      
+
       // Registrar posição aberta
       const position: Position = {
         mint: tokenData.mint,
@@ -485,6 +627,9 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
 
       openPositions.set(tokenData.mint, position);
 
+      // Registrar sucesso no monitoramento (não necessariamente lucro financeiro ainda, mas execução OK)
+      circuitBreaker.recordSuccess(0);
+
       // Log de informações de lucro/prejuízo
       logger.info(`📊 COMPRA REALIZADA PARA TOKEN ${tokenData.mint}`);
       logger.info(`   Valor investido: ${BUY_AMOUNT_SOL} SOL`);
@@ -494,36 +639,36 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
 
       logger.info(`📌 Posição registrada para token ${tokenData.mint}`);
     }
-    
+
     // Verificar posições abertas para venda (apenas se for trade de venda)
     if (tradeType === "SELL") {
       const position = openPositions.get(tokenData.mint);
       if (position && position.isActive) {
         // Verificar Take Profit e Stop Loss
         // Na implementação real, aqui teríamos a lógica para verificar o preço atual
-        
+
         // Exemplo simplificado de verificação
         const shouldTakeProfit = Math.random() > 0.7; // Simulação
         const shouldStopLoss = Math.random() > 0.9;   // Simulação
-        
+
         // Log de informações de lucro/prejuízo
         logger.info(`📊 MONITORAMENTO DE POSIÇÃO PARA TOKEN ${tokenData.mint}`);
         logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
         logger.info(`   Take Profit configurado: ${position.takeProfit}%`);
         logger.info(`   Stop Loss configurado: -${position.stopLoss}%`);
-        
+
         // Na implementação real, aqui seria calculado o lucro/prejuízo atual
         // Exemplo de como seria o cálculo:
         // const currentPrice = getCurrentTokenPrice(tokenData.mint);
         // const currentValue = position.buyTokenAmount * currentPrice;
         // const profitLossPercent = ((currentValue - position.buySolAmount) / position.buySolAmount) * 100;
         // logger.info(`   Lucro/Prejuízo atual: ${profitLossPercent.toFixed(2)}%`);
-        
+
         if (shouldTakeProfit && AUTO_SELL_TAKE_PROFIT) {
           logger.info(`📈 TAKE PROFIT ACIONADO para token ${tokenData.mint}`);
           logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
           logger.info(`   Lucro esperado: ${position.takeProfit}%`);
-          
+
           if (tokenData.mode === "CURVE") {
             logger.info(`💰 Take Profit atingido para token ${tokenData.mint} (CURVE)`);
             const signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
@@ -539,7 +684,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
           logger.info(`📉 STOP LOSS ACIONADO para token ${tokenData.mint}`);
           logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
           logger.info(`   Prejuízo esperado: -${position.stopLoss}%`);
-          
+
           if (tokenData.mode === "CURVE") {
             logger.info(`❌ Stop Loss atingido para token ${tokenData.mint} (CURVE)`);
             const signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
@@ -552,7 +697,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
             logger.info(`✅ Posição fechada via Jupiter: ${signature}`);
           }
         }
-        
+
         // Atualizar posição no mapa
         if (!position.isActive) {
           openPositions.delete(tokenData.mint);
@@ -563,5 +708,6 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
     }
   } catch (error) {
     logger.error(`❌ Erro ao executar trade híbrido para token ${tokenData.mint}:`, error);
+    circuitBreaker.recordFailure(error);
   }
 }

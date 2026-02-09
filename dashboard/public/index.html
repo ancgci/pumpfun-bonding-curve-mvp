@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🤖 Trading Bot Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🤖 Trading Bot Dashboard</h1>
+      <p class="subtitle">Real-Time Monitoring</p>
+    </header>
+
+    <!-- General Statistics -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon">💰</div>
+        <div class="stat-value" id="totalInvested">-- SOL</div>
+        <div class="stat-label">Total Invested</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon">📊</div>
+        <div class="stat-value" id="winRate">--%</div>
+        <div class="stat-label">Win Rate</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon">✅</div>
+        <div class="stat-value" id="wins">--</div>
+        <div class="stat-label">Wins</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon">❌</div>
+        <div class="stat-value" id="losses">--</div>
+        <div class="stat-label">Losses</div>
+      </div>
+    </section>
+
+    <!-- Circuit Breaker Status -->
+    <section class="cb-section">
+      <h2>🛡️ Circuit Breaker</h2>
+      <div class="cb-card" id="cbCard">
+        <div class="cb-status" id="cbStatus">
+          <span class="status-dot"></span>
+          <span id="cbText">Loading...</span>
+        </div>
+        <div class="cb-details" id="cbDetails"></div>
+      </div>
+    </section>
+
+    <!-- Active Positions -->
+    <section class="positions-section">
+      <h2>📌 Active Positions (<span id="activeCount">0</span>)</h2>
+      <div class="positions-list" id="positionsList">
+        <p class="loading">Loading positions...</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>Last update: <span id="lastUpdate">--</span></p>
+      <p class="auto-refresh">Auto-refresh every 5 seconds</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
