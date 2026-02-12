@@ -706,8 +706,40 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
         }
       }
     }
-  } catch (error) {
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
     logger.error(`❌ Erro ao executar trade híbrido para token ${tokenData.mint}:`, error);
-    circuitBreaker.recordFailure(error);
+
+    // Classificar o tipo de erro
+    const isRpcError = [
+      'failed to get info',
+      'failed to fetch',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'ENOTFOUND',
+      'socket hang up',
+      'getaddrinfo',
+      'Network request failed',
+      'timeout',
+      'rate limit',
+      '429',
+      '503',
+      '502',
+      'Server responded with',
+      'could not find account',
+      'AccountNotFound',
+      'Invalid param',
+      'block height exceeded',
+      'Blockhash not found',
+    ].some(pattern => errorMsg.toLowerCase().includes(pattern.toLowerCase()));
+
+    if (isRpcError) {
+      // Erros de RPC/rede: logar como warning, NÃO contar no circuit breaker
+      logger.warn(`⚠️  Erro de RPC/rede (não conta para Circuit Breaker): ${errorMsg.substring(0, 100)}`);
+    } else {
+      // Erros reais de trading: contar no circuit breaker
+      logger.error(`🚨 Erro de trading registrado no Circuit Breaker: ${errorMsg.substring(0, 100)}`);
+      circuitBreaker.recordFailure(error);
+    }
   }
 }

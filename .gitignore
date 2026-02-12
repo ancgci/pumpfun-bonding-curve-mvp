@@ -7,3 +7,6 @@ data/
 website/build/
 website/.docusaurus/
 website/node_modules/.cache/
+
+# Local Netlify folder
+.netlify

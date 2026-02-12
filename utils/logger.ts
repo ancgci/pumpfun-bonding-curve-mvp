@@ -28,7 +28,7 @@ const logger = winston.createLogger({
       maxsize: 5242880, // 5MB
       maxFiles: 5
     }),
-    
+
     // Escreve todos os logs de erro para `error.log`
     new winston.transports.File({
       filename: path.join(logsDir, 'error.log'),
@@ -36,7 +36,7 @@ const logger = winston.createLogger({
       maxsize: 5242880, // 5MB
       maxFiles: 5
     }),
-    
+
     // Escreve logs de alerta para `alerts.log`
     new winston.transports.File({
       filename: path.join(logsDir, 'alerts.log'),
@@ -52,7 +52,12 @@ if (process.env.NODE_ENV !== 'production') {
   logger.add(new winston.transports.Console({
     format: winston.format.combine(
       winston.format.colorize(),
-      winston.format.simple()
+      winston.format.timestamp({
+        format: 'YYYY-MM-DD HH:mm:ss'
+      }),
+      winston.format.printf(({ level, message, timestamp }) => {
+        return `${timestamp} ${level}: ${message}`;
+      })
     )
   }));
 }
