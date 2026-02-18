@@ -621,12 +621,47 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     const currentPrice = solBalance > 0 && tokenAmount > 0 ?
       (solBalance * 1000000000) / tokenAmount : 0;
 
+    // ── Risk Engine Analysis ──
+    let riskSection = "";
+    if (RISK_CONFIG.enabled) {
+      try {
+        const riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata);
+
+        // 🚫 NOVO FILTRO: Se LP não lockado/burnado -> IGNORAR (sem alert, sem trade)
+        if (RISK_CONFIG.detection.blockUnlockedLP &&
+          !riskAnalysis.flags.LP_LOCKED &&
+          !riskAnalysis.flags.LP_BURNED) {
+          logger.warn(`🚫 [RiskEngine] Token ${tOutput.mint} IGNORADO: LP não lockado/burnado. (RISK_BLOCK_UNLOCKED_LP=true)`);
+          return;
+        }
+
+        riskSection = formatRiskForTelegram(riskAnalysis);
+
+        // Start post-curve monitoring for approved trades
+        if (riskAnalysis.decision === "ALLOW_TRADE" || riskAnalysis.decision === "ALLOW_ALERT") {
+          postCurveMonitor.startMonitoring(
+            tOutput.mint,
+            riskAnalysis.metrics.liquiditySol,
+            tokenMetadata
+          );
+        }
+
+        // Record honeypot in circuit breaker
+        if (riskAnalysis.flags.HONEYPOT_OP) {
+          circuitBreaker.recordHoneypot(tOutput.mint);
+        }
+      } catch (riskError: any) {
+        logger.warn(`⚠️  [RiskEngine] Falha na análise para alerta: ${riskError.message}`);
+        riskSection = "\n⚠️ Risk: análise indisponível";
+      }
+    }
+
     // Preparar dados do token para o executor híbrido
     const tokenData: TokenData = {
       mint: tOutput.mint,
       bondingCurve: tOutput.bondingCurve,
       curvePercent: Number(progress),
-      isLaunched: Number(progress) >= 100, // Simplificação - na prática, verificaria se migrou para Raydium
+      isLaunched: Number(progress) >= 100,
       mode: Number(progress) >= 100 ? "DEX" : "CURVE"
     };
 
@@ -636,19 +671,24 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       recordError();
     });
 
-    // Preparar mensagem com metadados, se disponíveis
-    // Preparar mensagem customizada
-    const tokenName = tokenMetadata?.name || "Unknown";
-    const tokenSymbol = tokenMetadata?.symbol || "UNK";
+    // Preparar mensagem com metadados + risco
+    let tokenName = tokenMetadata?.name || "Unknown";
+    let tokenSymbol = tokenMetadata?.symbol || "UNK";
+
+    // Sanitize HTML to prevent Telegram parse errors
+    tokenName = tokenName.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    tokenSymbol = tokenSymbol.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
     const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : "N/A";
     const priceSol = tokenMetadata?.price ? tokenMetadata.price.toFixed(9) : currentPrice.toFixed(9);
 
-    // Enviar alerta formatado
+    // Enviar alerta formatado com risk score
     sendMessage(
       `🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-      `Token: <a href="https://www.dextools.io/app/en/solana/pair-explorer/${tOutput.mint}">${tokenName}</a>\n` +
+      `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tokenName}</a>\n` +
       `Symbol: <b>${tokenSymbol}</b>\n` +
-      `Source: <b>🚀 PumpFun</b>\n` +
+      `Source: <b>🚀 PumpFun</b>` +
+      riskSection + `\n` +
       `Market Cap: <b>${marketCap}</b>\n` +
       `Current Price: <b>${priceSol} SOL</b>\n` +
       `Type: <b>${tOutput.type}</b>\n` +
@@ -2059,3 +2099,7 @@ function decodeAnoncoinTxn(tx: VersionedTransactionResponse) {
 import { executeHybridTrade, TokenData } from "./utils/hybridExecutor";
 import { getCachedTokenMetadata } from "./utils/metadataCache";
 import { recordTransaction, recordCacheHit, recordCacheMiss, recordApiCall, recordError, reportPerformance } from "./utils/performanceMonitor";
+import { analyzeToken, formatRiskForTelegram } from "./utils/riskEngine";
+import { RISK_CONFIG } from "./utils/riskConfig";
+import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
+import { circuitBreaker } from "./utils/circuitBreaker";

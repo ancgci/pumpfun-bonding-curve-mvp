@@ -21,6 +21,8 @@ import { circuitBreaker } from "./circuitBreaker";
 import { rpcPool } from "./rpcPool";
 import { getCachedDynamicGasPrice } from "./gasPriceOracle";
 import { getCachedOptimalSlippage } from "./slippageCalculator";
+import { analyzeToken } from "./riskEngine";
+import { RISK_CONFIG } from "./riskConfig";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -135,6 +137,7 @@ if (process.env.SECRET_KEY_JSON) {
       const secretKey = Uint8Array.from(secretKeyArray);
       keypair = Keypair.fromSecretKey(secretKey);
       logger.info("✅ Chave privada carregada com sucesso");
+      logger.info(`💰 Carteira do Bot: ${keypair.publicKey.toBase58()}`);
     } else {
       logger.error("❌ Formato inválido para SECRET_KEY_JSON - deve ser um array com 64 elementos");
     }
@@ -609,8 +612,39 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
       tokenData.curvePercent >= 97.7 &&
       tokenData.curvePercent < 100) {
 
+      // ── Risk Engine Gate ──
+      let tradeSolAmount = BUY_AMOUNT_SOL;
+      if (RISK_CONFIG.enabled) {
+        try {
+          const riskAnalysis = await analyzeToken(tokenData.mint);
+
+          if (riskAnalysis.decision === "BLOCK") {
+            logger.warn(`🚫 [RiskEngine] BLOQUEADO: ${tokenData.mint} score=${riskAnalysis.score}/100`);
+            logger.warn(`   Razões: ${riskAnalysis.reasons.map(r => r.detail).join("; ")}`);
+
+            // Record honeypot in circuit breaker if detected
+            if (riskAnalysis.flags.HONEYPOT_OP) {
+              circuitBreaker.recordHoneypot(tokenData.mint);
+              circuitBreaker.recordRugSignal();
+            }
+            return;
+          }
+
+          if (riskAnalysis.decision === "ALLOW_ALERT") {
+            // Reduce trade size for MED risk
+            const reduction = RISK_CONFIG.trading.tradeSizeReductionMed / 100;
+            tradeSolAmount = BUY_AMOUNT_SOL * (1 - reduction);
+            logger.info(`⚠️  [RiskEngine] MED risk (${riskAnalysis.score}/100) — trade reduzido para ${tradeSolAmount} SOL`);
+          } else {
+            logger.info(`✅ [RiskEngine] LOW risk (${riskAnalysis.score}/100) — trade aprovado`);
+          }
+        } catch (riskError: any) {
+          logger.warn(`⚠️  [RiskEngine] Análise falhou, prosseguindo com trade padrão: ${riskError.message}`);
+        }
+      }
+
       logger.info(`💰 Comprando token ${tokenData.mint} na curva (${tokenData.curvePercent}%)`);
-      const signature = await buyOnPumpFun(tokenData.mint, BUY_AMOUNT_SOL);
+      const signature = await buyOnPumpFun(tokenData.mint, tradeSolAmount);
 
       // Registrar posição aberta
       const position: Position = {

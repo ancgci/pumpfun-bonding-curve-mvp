@@ -4,6 +4,45 @@ Histórico de todas as melhorias implementadas no projeto.
 
 ---
 
+## [Sprint 5] - 2026-02-17
+
+### ✅ Adicionado
+- **Risk Engine** (`utils/riskEngine.ts` + `utils/riskEngine/`)
+  - Score anti-rug 0–100 com decisão automática (ALLOW_TRADE / ALLOW_ALERT / BLOCK)
+  - 5 filtros: Token Authorities, Liquidity, Holders, Trading Sanity, Honeypot
+  - **Novo**: Contract Age (tokens <1h) e Metadata Quality (imagem, descrição, socials)
+  - **Novo**: Strict LP Blocking (`RISK_BLOCK_UNLOCKED_LP=true`) - ignora tokens sem LP locked/burned
+  - Post-curve monitor (re-verifica authorities e LP a cada 30s por 10 min)
+  - Configuração via 30+ variáveis `RISK_*` no `.env`
+
+- **Testes do Risk Engine** (`test/testRiskEngine.ts`, `test/testTokenAuthorities.ts`, `test/testPostCurveMonitor.ts`)
+  - 84 testes total (45 unit + 14 integration + 8 lifecycle + 12 new filters)
+
+- **Documentação** (`docs/RISK_ENGINE.md`)
+  - Arquitetura, filtros, tuning guide, config reference
+
+### 🔧 Modificado
+- **Circuit Breaker** (`utils/circuitBreaker.ts`)
+  - 4 novos métodos anti-rug: `recordHoneypot`, `isDeployerBlocked`, `recordRugSignal`, `triggerLPDropExit`
+  - Pause automático após 2 rug signals em 3 min
+
+- **Hybrid Executor** (`utils/hybridExecutor.ts`)
+  - Risk gate antes de cada compra (BLOCK → cancela, ALLOW_ALERT → reduz 50%)
+
+- **Index** (`index.ts`)
+  - Telegram alerts com score, flags e métricas do Risk Engine
+  - Auto-start do post-curve monitor para trades aprovados
+
+- **Configuração** (`.env`)
+  - 30+ variáveis `RISK_*` (pesos, thresholds, monitor, anti-rug)
+
+### 📊 Impacto
+- **Proteção Anti-Rug:** Token authorities, LP e honeypot verificados antes de cada trade
+- **Decisão Automática:** BLOCK para score > 60, trade reduzido para 31–60
+- **Monitoramento Pós-Curva:** Detecta rug pulls até 10 min após entrada
+
+---
+
 ## [Sprint 4] - 2026-02-08
 
 ### ✅ Adicionado
@@ -139,6 +178,17 @@ Histórico de todas as melhorias implementadas no projeto.
 ---
 
 ## Notas de Versão
+
+### v2.1.0 - 2026-02-17
+**Feature Release** - Risk Engine Anti-Rug
+
+- ✅ Sprint 5: Risk Engine + Post-Curve Monitor + Anti-Rug Circuit Breaker
+
+**Breaking Changes:** Nenhum
+
+**Upgrade Path:**
+1. Adicionar variáveis `RISK_*` ao `.env` (ver docs/RISK_ENGINE.md)
+2. Reiniciar o bot
 
 ### v2.0.0 - 2026-02-08
 **Major Release** - Dashboard + Otimizações
