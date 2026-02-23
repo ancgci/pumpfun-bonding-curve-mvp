@@ -64,7 +64,7 @@ export async function checkContractAge(
                 reasons.push({
                     filter: "CONTRACT_AGE",
                     impact: RISK_CONFIG.weights.veryNewToken,
-                    detail: `Token muito novo (<${minAgeHours}h): ${ageHours.toFixed(2)}h de histórico`
+                    detail: `Token muito novo (&lt;${minAgeHours}h): ${ageHours.toFixed(2)}h de histórico`
                 });
             }
         } else {

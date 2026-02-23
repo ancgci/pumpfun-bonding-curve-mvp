@@ -18,6 +18,9 @@ import { SolanaEventParser } from "./utils/event-parser";
 import { bnLayoutFormatter } from "./utils/bn-layout-formatter";
 import { transactionOutput } from "./utils/transactionOutput";
 import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
+import { calculateCurveProgress } from "./utils/curveConstants";
+import { alertQueue } from "./utils/alertQueue";
+import { CONFIG, validateConfig } from "./utils/config";
 import logger from "./utils/logger";
 
 import dotenv from "dotenv";
@@ -26,74 +29,57 @@ import fs from "fs";
 import path from "path";
 import Bottleneck from "bottleneck";
 
-
 // Carregar variáveis de ambiente
 dotenv.config();
 
-const SHYFT_GRPC = process.env.SHYFT_GRPC as string;
-const token = process.env.TELEGRAM_BOT_TOKEN as string;
-const chatId = process.env.TELEGRAM_CHAT_ID as string;
-const ALERT_THRESHOLD = parseFloat(process.env.ALERT_THRESHOLD as string) || 97.7;
-
-// Configuração de protocolos de monitoramento
-const MONITORING_PROTOCOL = process.env.MONITORING_PROTOCOL || "PUMPFUN"; // "PUMPFUN", "METEORA_DBC", "BONK_FUN", "DAOS_FUN", "MOONSHOT", "ANONCOIN", ou "BOTH"
-
-// Configurações da Meteora DBC
-const METEORA_DBC_MONITORING_ENABLED = process.env.METEORA_DBC_MONITORING_ENABLED === "true";
-const METEORA_DBC_ALERT_THRESHOLD = parseFloat(process.env.METEORA_DBC_ALERT_THRESHOLD as string) || 97.7;
-const METEORA_DBC_PROGRAM_ID = process.env.METEORA_DBC_PROGRAM_ID as string || "METEORA_DBC_PROGRAM_ID_PLACEHOLDER";
-
-// Configurações do Bonk.fun
-const BONK_FUN_MONITORING_ENABLED = process.env.BONK_FUN_MONITORING_ENABLED === "true";
-const BONK_FUN_ALERT_THRESHOLD = parseFloat(process.env.BONK_FUN_ALERT_THRESHOLD as string) || 97.7;
-const BONK_FUN_PROGRAM_ID = process.env.BONK_FUN_PROGRAM_ID as string || "BONK_FUN_PROGRAM_ID_PLACEHOLDER";
-
-// Configurações do daos.fun
-const DAOS_FUN_MONITORING_ENABLED = process.env.DAOS_FUN_MONITORING_ENABLED === "true";
-const DAOS_FUN_ALERT_THRESHOLD = parseFloat(process.env.DAOS_FUN_ALERT_THRESHOLD as string) || 97.7;
-const DAOS_FUN_PROGRAM_ID = process.env.DAOS_FUN_PROGRAM_ID as string || "DAOS_FUN_PROGRAM_ID_PLACEHOLDER";
-
-// Configurações do Moonshot Screener
-const MOONSHOT_MONITORING_ENABLED = process.env.MOONSHOT_MONITORING_ENABLED === "true";
-const MOONSHOT_ALERT_THRESHOLD = parseFloat(process.env.MOONSHOT_ALERT_THRESHOLD as string) || 97.7;
-const MOONSHOT_PROGRAM_ID = process.env.MOONSHOT_PROGRAM_ID as string || "MOONSHOT_PROGRAM_ID_PLACEHOLDER";
-
-// Configurações do anoncoin.it
-const ANONCOIN_MONITORING_ENABLED = process.env.ANONCOIN_MONITORING_ENABLED === "true";
-const ANONCOIN_ALERT_THRESHOLD = parseFloat(process.env.ANONCOIN_ALERT_THRESHOLD as string) || 97.7;
-const ANONCOIN_PROGRAM_ID = process.env.ANONCOIN_PROGRAM_ID as string || "ANONCOIN_PROGRAM_ID_PLACEHOLDER";
-
-// Verificação do token do bot
-if (!token) {
-  logger.error("❌ Token do bot não encontrado. Verifique o arquivo .env");
+// Validate configuration
+const validation = validateConfig();
+if (!validation.valid) {
+  logger.error("Invalid configuration:");
+  validation.errors.forEach(err => logger.error(`  - ${err}`));
   process.exit(1);
 }
 
-// Verificação do Chat ID
-if (!chatId) {
-  logger.error("❌ Chat ID não encontrado. Verifique a variável TELEGRAM_CHAT_ID no arquivo .env");
-  process.exit(1);
+if (validation.warnings && validation.warnings.length > 0) {
+  logger.warn("Configuration warnings:");
+  validation.warnings.forEach(warn => logger.warn(`  - ${warn}`));
 }
 
-// Verificação do limite de alerta
-if (isNaN(ALERT_THRESHOLD) || ALERT_THRESHOLD <= 0) {
-  logger.error("❌ Limite de alerta inválido. Verifique a variável ALERT_THRESHOLD no arquivo .env");
-  process.exit(1);
-}
+const { 
+  SHYFT_GRPC,
+  GRPC_URL,
+  GRPC_TOKEN,
+  TELEGRAM_BOT_TOKEN: token, 
+  TELEGRAM_CHAT_ID: chatId, 
+  ALERT_THRESHOLD,
+  MONITORING_PROTOCOL,
+  METEORA_DBC_MONITORING_ENABLED,
+  METEORA_DBC_ALERT_THRESHOLD,
+  METEORA_DBC_PROGRAM_ID,
+  BONK_FUN_MONITORING_ENABLED,
+  BONK_FUN_ALERT_THRESHOLD,
+  BONK_FUN_PROGRAM_ID,
+  DAOS_FUN_MONITORING_ENABLED,
+  DAOS_FUN_ALERT_THRESHOLD,
+  DAOS_FUN_PROGRAM_ID,
+  MOONSHOT_MONITORING_ENABLED,
+  MOONSHOT_ALERT_THRESHOLD,
+  MOONSHOT_PROGRAM_ID,
+  ANONCOIN_MONITORING_ENABLED,
+  ANONCOIN_ALERT_THRESHOLD,
+  ANONCOIN_PROGRAM_ID,
+  HTTPS_PROXY,
+  HTTP_PROXY,
+  TOKEN_VIEWER_URL,
+  MIN_MESSAGE_INTERVAL
+} = CONFIG;
 
 // Replace with your channel ID or username (e.g., '@your_channel_username')
-// O ID do canal agora é carregado via variável de ambiente TELEGRAM_CHAT_ID
-
-const a = 0.00022500443612959005;
-const b = -0.04465309899499017;
-const c = 3.3439469804363813;
-const d = 1.7232697904532974;
-var value = 0;
 // Create a bot instance with additional options for better error handling
 const bot = new TelegramBot(token, {
   polling: true,
   request: {
-    proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
+    proxy: HTTPS_PROXY || HTTP_PROXY,
     url: '',
     agentOptions: {
       keepAlive: true,
@@ -108,224 +94,45 @@ const bot = new TelegramBot(token, {
   baseApiUrl: 'https://api.telegram.org'
 });
 
+// Configurar callback da fila de alertas
+alertQueue.setSendCallback(async (message: string) => {
+  await bot.sendMessage(chatId, message, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true
+  });
+});
+
 // Create a Set to track sent addresses
 let sentAddresses = new Set();
 
-// Caminho do arquivo de persistência
+// Persistence file path
 const SENT_ADDRESSES_FILE = path.join(__dirname, 'sent_addresses.json');
-const PID_FILE = path.join(__dirname, 'bot.pid');
 
-// Função para salvar os endereços monitorados
+// Function to save monitored addresses
 function saveSentAddresses() {
   try {
     fs.writeFileSync(SENT_ADDRESSES_FILE, JSON.stringify([...sentAddresses]));
-    logger.info(`✅ ${sentAddresses.size} endereços salvos em ${SENT_ADDRESSES_FILE}`);
-  } catch (error) {
-    logger.error("❌ Erro ao salvar endereços monitorados:", error.message);
+    logger.info(`Saved ${sentAddresses.size} addresses to ${SENT_ADDRESSES_FILE}`);
+  } catch (error: any) {
+    logger.error("Error saving addresses:", error.message);
   }
 }
 
-// Função para carregar os endereços monitorados
+// Function to load monitored addresses
 function loadSentAddresses() {
   try {
     if (fs.existsSync(SENT_ADDRESSES_FILE)) {
       const data = fs.readFileSync(SENT_ADDRESSES_FILE, 'utf8');
       const addresses = JSON.parse(data);
       sentAddresses = new Set(addresses);
-      logger.info(`✅ ${sentAddresses.size} endereços carregados de ${SENT_ADDRESSES_FILE}`);
+      logger.info(`Loaded ${sentAddresses.size} addresses from ${SENT_ADDRESSES_FILE}`);
     } else {
-      logger.info("📝 Nenhum arquivo de endereços encontrado. Iniciando com conjunto vazio.");
+      logger.info("No address file found. Starting with empty set.");
       sentAddresses = new Set();
     }
-  } catch (error) {
-    logger.error("❌ Erro ao carregar endereços monitorados:", error.message);
-    logger.info("📝 Iniciando com conjunto vazio de endereços.");
-    sentAddresses = new Set();
+  } catch (error: any) {
+    logger.error("Error loading addresses:", error.message);
   }
-}
-
-// Carregar endereços ao iniciar o aplicativo
-loadSentAddresses();
-
-// Salvar endereços periodicamente (a cada 5 minutos)
-setInterval(() => {
-  saveSentAddresses();
-}, 300000); // 5 minutos
-
-// Salvar endereços ao encerrar o aplicativo
-process.on('SIGINT', () => {
-  logger.info("🛑 Recebido sinal SIGINT. Salvando endereços antes de encerrar...");
-  saveSentAddresses();
-  removePidFile();
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  logger.info("🛑 Recebido sinal SIGTERM. Salvando endereços antes de encerrar...");
-  saveSentAddresses();
-  removePidFile();
-  process.exit(0);
-});
-
-// Função para criar arquivo de PID
-function createPidFile() {
-  try {
-    fs.writeFileSync(PID_FILE, process.pid.toString());
-    logger.info(`✅ Arquivo PID criado: ${PID_FILE} com PID ${process.pid}`);
-  } catch (error) {
-    logger.error("❌ Erro ao criar arquivo PID:", error.message);
-  }
-}
-
-// Função para remover arquivo de PID
-function removePidFile() {
-  try {
-    if (fs.existsSync(PID_FILE)) {
-      fs.unlinkSync(PID_FILE);
-      logger.info(`✅ Arquivo PID removido: ${PID_FILE}`);
-    }
-  } catch (error) {
-    logger.error("❌ Erro ao remover arquivo PID:", error.message);
-  }
-}
-
-// Criar arquivo de PID ao iniciar
-createPidFile();
-
-// Remover arquivo de PID ao encerrar
-
-// Variável para controlar o último envio de mensagem
-let lastMessageTime = 0;
-const minMessageInterval = parseInt(process.env.MIN_MESSAGE_INTERVAL || "5000"); // Aumentar para 5 segundos entre mensagens (ou valor do .env)
-
-// Create rate limiter using Bottleneck
-const limiter = new Bottleneck({
-  minTime: 1000,  // 1 second between requests
-  maxConcurrent: 1  // Only 1 request at a time
-});
-
-// Variável para controlar o estado de saúde do bot
-let botHealth = {
-  isHealthy: true,
-  lastCheck: Date.now(),
-  errorCount: 0,
-  lastError: null as string | null
-};
-
-// Função para atualizar o estado de saúde do bot
-function updateBotHealth(status: boolean, error: string | null = null) {
-  botHealth.isHealthy = status;
-  botHealth.lastCheck = Date.now();
-  if (!status) {
-    botHealth.errorCount++;
-    botHealth.lastError = error;
-  } else {
-    botHealth.errorCount = 0;
-    botHealth.lastError = null;
-  }
-  logger.info(`🏥 Status do bot atualizado: ${status ? 'Saudável' : 'Problemas detectados'}`);
-}
-
-// Função para verificar a saúde do bot
-async function checkBotHealth() {
-  try {
-    // Verificar se o bot ainda está respondendo
-    await bot.getMe();
-    updateBotHealth(true);
-    return true;
-  } catch (error) {
-    updateBotHealth(false, error.message);
-    logger.error("❌ Health check falhou:", error.message);
-    return false;
-  }
-}
-
-// Executar health check a cada 30 segundos
-setInterval(async () => {
-  await checkBotHealth();
-}, 30000);
-
-// Function to send message with rate limiting and improved error handling
-async function sendMessage(message: string) {
-  // Use Bottleneck for rate limiting
-  return await limiter.schedule(async () => {
-    try {
-      // Adicionar timeout para requisições
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
-
-      const result = await bot.sendMessage(chatId, message, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-
-      clearTimeout(timeoutId);
-      lastMessageTime = Date.now();
-      logger.info("✅ Message sent successfully");
-
-      // Log alert for backtest analysis (async, non-blocking)
-      try {
-        const alertLog = {
-          timestamp: Date.now(),
-          message: message,
-          // Extract mint if present in message (between href=" and ")
-          mint: message.match(/href="[^"]*\/([A-Za-z0-9]{32,44})"/)?.[1] || null
-        };
-        const logPath = path.join(__dirname, 'data', 'telegram-alerts.jsonl');
-        fs.appendFileSync(logPath, JSON.stringify(alertLog) + '\n');
-      } catch { }
-
-      return result;
-    } catch (error: any) {
-      logger.error("❌ Error sending message:", error.response?.body || error.message || error);
-
-      // Tratamento específico para erros de rate limit
-      if (error.response?.body?.error_code === 429) {
-        const retryAfter = error.response.body.parameters?.retry_after || 30;
-        logger.warn(`⚠️  Rate limit atingido. Aguardando ${retryAfter} segundos antes de tentar novamente.`);
-        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-        throw error; // Re-throw para tentar novamente
-      }
-
-      // Tratamento específico para erros fatais
-      if (error.code === 'EFATAL' || error.name === 'AggregateError') {
-        logger.error("🚨 Erro fatal na comunicação com Telegram. Tentando reconectar...");
-        logger.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
-        logger.info("📝 Chat ID:", chatId);
-
-        // Tentar reconectar com backoff exponencial
-        try {
-          logger.info("🔄 Iniciando processo de reconexão com backoff exponencial...");
-          await reconnectWithBackoff(5);
-
-          // Criar nova instância do bot após reconexão bem-sucedida
-          const newBot = new TelegramBot(token, {
-            polling: true,
-            request: {
-              proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
-              url: '' // Adicionando a propriedade url necessária
-            }
-          });
-
-          const retryResult = await limiter.schedule(() => newBot.sendMessage(chatId, message, { parse_mode: "HTML" }));
-          logger.info("✅ Mensagem enviada com sucesso após reconexão");
-          // Substituir a instância do bot
-          Object.assign(bot, newBot);
-          lastMessageTime = Date.now();
-          return retryResult;
-        } catch (reconnectError) {
-          logger.error("❌ Falha ao reconectar após múltiplas tentativas:", reconnectError.message);
-          logger.info("📋 Verifique:");
-          logger.info("  1. Se o token do bot está correto no arquivo .env");
-          logger.info("  2. Se o bot foi adicionado como administrador do canal");
-          logger.info("  3. Se você tem conexão com a internet");
-          logger.info("  4. Se o nome do canal está correto:", chatId);
-        }
-      }
-
-      throw error;
-    }
-  });
 }
 
 interface SubscribeRequest {
@@ -339,6 +146,38 @@ interface SubscribeRequest {
   commitment?: CommitmentLevel | undefined;
   accountsDataSlice: SubscribeRequestAccountsDataSlice[];
   ping?: SubscribeRequestPing | undefined;
+}
+
+// Rate limiter
+let lastMessageTime = 0;
+const limiter = new Bottleneck({
+  minTime: MIN_MESSAGE_INTERVAL,
+  maxConcurrent: 1
+});
+
+// Send message via alert queue (async, non-blocking)
+function sendMessage(message: string) {
+  const useQueue = process.env.ALERT_QUEUE_ENABLED !== "false";
+  
+  if (useQueue) {
+    alertQueue.enqueue(message, 'normal');
+    logger.debug("Message added to alert queue");
+  } else {
+    return limiter.schedule(async () => {
+      try {
+        const result = await bot.sendMessage(chatId, message, {
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        lastMessageTime = Date.now();
+        logger.info("Message sent successfully");
+        return result;
+      } catch (error: any) {
+        logger.error("Error sending message:", error.message || error);
+        throw error;
+      }
+    });
+  }
 }
 
 const TXN_FORMATTER = new TransactionFormatter();
@@ -384,9 +223,36 @@ let MOONSHOT_PROGRAM_ID_OBJ: PublicKey | null = null;
 if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID) {
   try {
     MOONSHOT_PROGRAM_ID_OBJ = new PublicKey(MOONSHOT_PROGRAM_ID);
-    logger.info(`✅ Program ID do Moonshot Screener configurado: ${MOONSHOT_PROGRAM_ID}`);
-  } catch (error) {
-    logger.error("❌ Erro ao configurar Program ID do Moonshot Screener:", error);
+    logger.info(`Program ID do Moonshot Screener configurado: ${MOONSHOT_PROGRAM_ID}`);
+  } catch (error: any) {
+    logger.error("Erro ao configurar Program ID do Moonshot Screener:", error.message);
+  }
+}
+
+// Bot health tracking
+interface BotHealth {
+  isHealthy: boolean;
+  errorCount: number;
+  lastError: string | null;
+}
+
+const botHealth: BotHealth = {
+  isHealthy: true,
+  errorCount: 0,
+  lastError: null
+};
+
+function updateBotHealth(isHealthy: boolean, error?: string) {
+  botHealth.isHealthy = isHealthy;
+  if (!isHealthy && error) {
+    botHealth.errorCount++;
+    botHealth.lastError = error;
+    if (botHealth.errorCount > 10) {
+      sendMessage(`⚠️ Bot health critical: ${botHealth.errorCount} consecutive errors\nLast error: ${error}`);
+    }
+  } else if (isHealthy) {
+    botHealth.errorCount = 0;
+    botHealth.lastError = null;
   }
 }
 
@@ -412,66 +278,78 @@ PUMP_FUN_EVENT_PARSER.addParserFromIdl(
   pumpFunIdl as Idl
 );
 
-// Parser para Meteora DBC (será configurado quando tivermos o IDL)
+// Parser para Meteora DBC (ATENÇÃO: Requer IDL para funcionar corretamente)
 let METEORA_DBC_IX_PARSER: SolanaParser | null = null;
 let METEORA_DBC_EVENT_PARSER: SolanaEventParser | null = null;
 if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
   METEORA_DBC_IX_PARSER = new SolanaParser([]);
   METEORA_DBC_EVENT_PARSER = new SolanaEventParser([], console);
-  // Os parsers serão configurados quando tivermos o IDL da Meteora DBC
+  logger.warn("⚠️  Meteora DBC parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
 }
 
-// Parser para Bonk.fun (será configurado quando tivermos o IDL)
+// Parser para Bonk.fun (ATENÇÃO: Requer IDL para funcionar corretamente)
 let BONK_FUN_IX_PARSER: SolanaParser | null = null;
 let BONK_FUN_EVENT_PARSER: SolanaEventParser | null = null;
 if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
   BONK_FUN_IX_PARSER = new SolanaParser([]);
   BONK_FUN_EVENT_PARSER = new SolanaEventParser([], console);
-  // Os parsers serão configurados quando tivermos o IDL do Bonk.fun
+  logger.warn("⚠️  Bonk.fun parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
 }
 
-// Parser para daos.fun (será configurado quando tivermos o IDL)
+// Parser para daos.fun (ATENÇÃO: Requer IDL para funcionar corretamente)
 let DAOS_FUN_IX_PARSER: SolanaParser | null = null;
 let DAOS_FUN_EVENT_PARSER: SolanaEventParser | null = null;
 if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
   DAOS_FUN_IX_PARSER = new SolanaParser([]);
   DAOS_FUN_EVENT_PARSER = new SolanaEventParser([], console);
-  // Os parsers serão configurados quando tivermos o IDL do daos.fun
+  logger.warn("⚠️  daos.fun parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
 }
 
-// Parser para Moonshot Screener (será configurado quando tivermos o IDL)
+// Parser para Moonshot Screener (ATENÇÃO: Requer IDL para funcionar corretamente)
 let MOONSHOT_IX_PARSER: SolanaParser | null = null;
 let MOONSHOT_EVENT_PARSER: SolanaEventParser | null = null;
 if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
   MOONSHOT_IX_PARSER = new SolanaParser([]);
   MOONSHOT_EVENT_PARSER = new SolanaEventParser([], console);
-  // Os parsers serão configurados quando tivermos o IDL do Moonshot Screener
+  logger.warn("⚠️  Moonshot parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
 }
 
-// Parser para anoncoin.it (será configurado quando tivermos o IDL)
+// Parser para anoncoin.it (ATENÇÃO: Requer IDL para funcionar corretamente)
 let ANONCOIN_IX_PARSER: SolanaParser | null = null;
 let ANONCOIN_EVENT_PARSER: SolanaEventParser | null = null;
 if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
   ANONCOIN_IX_PARSER = new SolanaParser([]);
   ANONCOIN_EVENT_PARSER = new SolanaEventParser([], console);
-  // Os parsers serão configurados quando tivermos o IDL do anoncoin.it
+  logger.warn("⚠️  anoncoin parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
 }
 
 async function handleStream(client: Client, args: SubscribeRequest) {
   // Subscribe for events
   const stream = await client.subscribe();
 
+  // Cleanup function to remove all listeners and prevent memory leaks
+  const cleanup = () => {
+    try {
+      stream.removeAllListeners();
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  };
+
   // Create `error` / `end` handler
   const streamClosed = new Promise<void>((resolve, reject) => {
     stream.on("error", (error) => {
       logger.error("ERROR", error);
+      cleanup();
       reject(error);
       stream.end();
     });
     stream.on("end", () => {
+      cleanup();
       resolve();
     });
     stream.on("close", () => {
+      cleanup();
       resolve();
     });
   });
@@ -577,11 +455,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   }
 
   const balance = await getBondingCurveAddress(tOutput.bondingCurve);
-  const progress =
-    a * Number(balance) ** 3 +
-    b * Number(balance) ** 2 +
-    c * Number(balance) +
-    d;
+  const progress = calculateCurveProgress(Number(balance));
   logger.info(
     `
     TYPE : ${tOutput.type}
@@ -613,6 +487,9 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   ) {
     // Registrar transação no monitor de desempenho
     recordTransaction(tOutput.mint);
+
+    // Adicionar imediatamente aos endereços enviados para evitar duplicatas em alta concorrência
+    sentAddresses.add(tOutput.mint);
 
     // Calcular informações adicionais
     const solBalance = Number(balance);
@@ -665,11 +542,39 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       mode: Number(progress) >= 100 ? "DEX" : "CURVE"
     };
 
-    // Executar trade híbrido passando o tipo de trade
-    executeHybridTrade(tokenData, tOutput.type).catch(error => {
-      logger.error(`❌ Erro ao executar trade híbrido para token ${tOutput.mint}:`, error);
-      recordError();
-    });
+    // Executar trade híbrido passando o tipo de trade com retry
+    const executeTradeWithRetry = async () => {
+      const maxRetries = 3;
+      const baseDelay = 1000;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await executeHybridTrade(tokenData, tOutput.type);
+          logger.info(`✅ Trade executado com sucesso para token ${tOutput.mint}`);
+          return;
+        } catch (error: any) {
+          logger.warn(`⚠️ Tentativa ${attempt}/${maxRetries} falhou para ${tOutput.mint}: ${error.message}`);
+          
+          if (attempt < maxRetries) {
+            const delay = baseDelay * Math.pow(2, attempt - 1);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          } else {
+            logger.error(`❌ Todas as tentativas falharam para token ${tOutput.mint}`);
+            recordError();
+            
+            // Enviar notificação de falha
+            sendMessage(
+              `❌ <b>FALHA NO TRADE</b>\n\n` +
+              `Token: ${tOutput.mint}\n` +
+              `Tipo: ${tOutput.type}\n` +
+              `Erro: ${error.message}`
+            ).catch(err => logger.error("Erro ao enviar notificação de falha:", err));
+          }
+        }
+      }
+    };
+    
+    executeTradeWithRetry();
 
     // Preparar mensagem com metadados + risco
     let tokenName = tokenMetadata?.name || "Unknown";
@@ -685,7 +590,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     // Enviar alerta formatado com risk score
     sendMessage(
       `🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-      `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tokenName}</a>\n` +
+      `Token: <a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tokenName}</a>\n` +
       `Symbol: <b>${tokenSymbol}</b>\n` +
       `Source: <b>🚀 PumpFun</b>` +
       riskSection + `\n` +
@@ -696,8 +601,6 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 8)}...</a>`
     );
 
-    // Adicionar endereço aos enviados
-    sentAddresses.add(tOutput.mint);
   }
 }
 
@@ -799,8 +702,15 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
 
     // Calcular o progresso da curva
     logger.debug(`🔍 Calculando progresso da curva para bondingCurve: ${tOutput.bondingCurve}`);
-    const progress = await calculateMeteoraDBCCurveProgress(tOutput.bondingCurve);
-    logger.debug(`🔍 Progresso calculado: ${progress}`);
+
+    let progress = 0;
+    // Validar se é um endereço Solana válido (32-44 chars)
+    if (tOutput.bondingCurve && tOutput.bondingCurve.length >= 32 && tOutput.bondingCurve.length <= 44) {
+      progress = await calculateMeteoraDBCCurveProgress(tOutput.bondingCurve);
+      logger.debug(`🔍 Progresso calculado: ${progress}`);
+    } else {
+      logger.debug(`⚠️ Bonding Curve inválida (${tOutput.bondingCurve}), pulando cálculo de progresso.`);
+    }
 
     logger.info(
       `
@@ -1632,21 +1542,37 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
 
 
 async function subscribeCommand(client: Client, args: SubscribeRequest) {
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 10;
+  const baseDelay = 1000;
+  
   while (true) {
     try {
+      reconnectAttempts = 0;
       await handleStream(client, args);
-    } catch (error) {
-      logger.error("Stream error, restarting in 1 second...", error);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } catch (error: any) {
+      reconnectAttempts++;
+      const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts), 30000);
+      
+      logger.error(`⚠️ Stream error (tentativa ${reconnectAttempts}/${maxReconnectAttempts}), reconnecting em ${delay}ms...`, error.message || error);
+      
+      if (reconnectAttempts >= maxReconnectAttempts) {
+        logger.error("❌ Max reconnect attempts reached, waiting 60s before restart...");
+        await new Promise((resolve) => setTimeout(resolve, 60000));
+        reconnectAttempts = 0;
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
   }
 }
 
-const SHYFT_GRPC_TOKEN = process.env.SHYFT_GRPC_TOKEN;
+const GRPC_ENDPOINT = GRPC_URL || SHYFT_GRPC;
+const GRPC_AUTH_TOKEN = GRPC_TOKEN || process.env.SHYFT_GRPC_TOKEN || "";
 
 const client = new Client(
-  SHYFT_GRPC,
-  SHYFT_GRPC_TOKEN,
+  GRPC_ENDPOINT,
+  GRPC_AUTH_TOKEN,
   undefined
 );
 
@@ -1762,24 +1688,21 @@ if (Object.keys(req.transactions).length === 0) {
 
 subscribeCommand(client, req);
 
-// Função de reconexão com backoff exponencial
+// Reconnection with exponential backoff
 async function reconnectWithBackoff(maxRetries = 5) {
-  // Aumentar o tempo de espera entre tentativas
-  const baseDelay = 2000; // 2 segundos
+  const baseDelay = 2000;
 
   for (let i = 0; i < maxRetries; i++) {
     try {
-      logger.info(`🔄 Tentativa de reconexão ${i + 1}/${maxRetries}`);
-      // Tentar reconectar com delay exponencial
+      logger.info(`Reconnection attempt ${i + 1}/${maxRetries}`);
       const delay = baseDelay * Math.pow(2, i);
-      logger.info(`⏳ Aguardando ${delay}ms antes de tentar reconectar...`);
+      logger.info(`Waiting ${delay}ms before reconnecting...`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
-      // Se chegou aqui, a reconexão foi bem-sucedida
-      logger.info("✅ Reconexão bem-sucedida");
+      logger.info("Reconnection successful");
       return true;
-    } catch (error) {
-      logger.error(`❌ Falha na tentativa de reconexão ${i + 1}:`, error.message);
+    } catch (error: any) {
+      logger.error(`Reconnection attempt ${i + 1} failed:`, error.message);
       if (i === maxRetries - 1) throw error;
     }
   }
@@ -1893,7 +1816,7 @@ bot.on('polling_error', async (error: any) => {
       const newBot = new TelegramBot(token, {
         polling: true,
         request: {
-          proxy: process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
+          proxy: HTTPS_PROXY || HTTP_PROXY,
           url: '',
           agentOptions: {
             keepAlive: true,

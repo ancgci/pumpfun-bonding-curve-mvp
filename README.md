@@ -1,110 +1,132 @@
 # 🤖 PumpFun Trading Bot
 
-Bot de trading automático para Solana com suporte a múltiplos protocolos DeFi.
+Automated trading bot for Solana with support for multiple DeFi protocols.
 
-## 📚 Documentação
+## 📚 Documentation
 
-Toda a documentação do projeto está na pasta `/docs`:
+All project documentation is in the `/docs` folder:
 
-- **[README](docs/README.md)** - Visão geral e início rápido
-- **[ARCHITECTURE](docs/ARCHITECTURE.md)** - Arquitetura técnica do sistema
-- **[USAGE](docs/USAGE.md)** - Guia completo de uso
-- **[CONFIGURATION](docs/CONFIGURATION.md)** - Referência de todas as variáveis de ambiente
-- **[RISK_ENGINE](docs/RISK_ENGINE.md)** - Filtros anti-rug, score de risco e tuning
-- **[API](docs/API.md)** - Documentação da API do dashboard
-- **[CHANGELOG](docs/CHANGELOG.md)** - Histórico de melhorias
+- **[README](docs/README.md)** - Overview and quick start
+- **[ARCHITECTURE](docs/ARCHITECTURE.md)** - Technical system architecture
+- **[USAGE](docs/USAGE.md)** - Complete usage guide
+- **[CONFIGURATION](docs/CONFIGURATION.md)** - Environment variables reference
+- **[RISK_ENGINE](docs/RISK_ENGINE.md)** - Anti-rug filters, risk score and tuning
+- **[API](docs/API.md)** - Dashboard API documentation
+- **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
 
-## 🚀 Início Rápido
+## 🚀 Quick Start
 
-### Opção 1: Tudo de Uma Vez (Recomendado) 🚀
+### Option 1: Everything at Once (Recommended)
 
 ```bash
-# 1. Instalar dependências
+# 1. Install dependencies
 npm install
 
-# 2. Configurar .env
+# 2. Configure .env
 cp .env.example .env
-# Editar .env com suas credenciais
+# Edit .env with your credentials
 
-# 3. Iniciar bot + dashboard simultaneamente
+# 3. Start bot + dashboard simultaneously
 npm run start:all
 ```
 
-**Resultado:** Bot e Dashboard iniciam juntos. Acesse: http://localhost:3001
+**Result:** Bot and Dashboard start together. Access: http://localhost:3001
 
 ---
 
-### Opção 2: Separadamente
+### Option 2: Separately
 
 **Bot:**
 ```bash
 npm start
 ```
 
-**Dashboard (terminal separado):**
+**Dashboard (separate terminal):**
 ```bash
 npm run start:dashboard
 ```
 
-## 🆕 Recent Changes (Feb 17, 2026)
+## 🆕 Recent Changes (Feb 22, 2026)
 
-### 🛡️ Risk Engine — Anti-Rug Post-Curve
-- 🔍 **Risk Score 0–100**: Cada token é analisado antes do trade com score automático
-- 🚫 **Decisão Automática**: `ALLOW_TRADE` (0–30) / `ALLOW_ALERT` (31–60, trade reduzido) / `BLOCK` (61–100)
-- 🔒 **Token Authorities**: Detecta Mint/Freeze Authority ativos e extensões Token-2022
-- 💧 **LP Analysis**: Verifica LP lock/burn via rugcheck.xyz, L/M ratio (opcional: block silencioso se unlocked)
-- 👥 **Holder Distribution**: Top-10 concentração, dev wallet %, cluster detection (bundling)
-- 📊 **Trading Sanity**: Volume fake, buy/sell imbalance, honeypot simulation via Jupiter
-- � **Contract Age**: Detecta tokens muito novos (<1h) via histórico de transações
-- 🖼️ **Metadata Quality**: Valida imagem, links sociais e descrição para evitar scams low-effort
-- �🔄 **Post-Curve Monitor**: Re-verifica authorities e LP a cada 30s por 10 min após trade
-- ⏸️ **Anti-Rug Pause**: 2 rug signals em 3 min → pause automático de 10 min
-- 🚨 **Telegram Alerts**: Score, flags e métricas incluídos em cada alerta
+### 🔴 Critical Fixes
 
-**[📋 Full Changelog](CHANGELOG_2026-02-17.md)** | **[🛡️ Risk Engine Docs](docs/RISK_ENGINE.md)** | **[📖 Configuration Guide](docs/CONFIGURATION.md)**
+| Fix | Description |
+|-----|-------------|
+| **Hardcoded Variables Removed** | Removed unused `a, b, c, d` variables, created `utils/curveConstants.ts` |
+| **Adaptive Slippage on Sell** | Now uses `getCachedOptimalSlippage()` instead of fixed 0.5% |
+| **Position Manager Integration** | Replaced local Map with persistent `positionManager` |
 
-<details>
-<summary>📜 Previous Changes (Feb 9, 2026)</summary>
+### 🟠 Stability Improvements
 
-### New Features
-- 🚀 **Unified Start**: `npm run start:all` launches bot + dashboard
-- 💎 **Moon Shot Mode**: Keep 5% of position on profit (configurable via `SELL_PERCENT_ON_TP`)
-- 📡 **Protocol Source**: Telegram alerts now show token source
-- 🎨 **Dark Dashboard**: Black theme + American English
+| Improvement | Description |
+|-------------|-------------|
+| **Real TP/SL Verification** | Replaced `Math.random()` with real price checking via Solana RPC |
+| **Retry Logic + Notifications** | 3 retries with exponential backoff, Telegram notification on failure |
+| **Metadata Cache Fixed** | Fixed import issue, cache working with configurable TTL |
+| **Alert Queue** | Async queue with priority (high/normal/low), retry, and backoff |
 
-### Optimizations  
-- 🎯 **Memecoin Strategy**: TP=100% (2x), SL=30%, Slippage=3%
-- 🔗 **DexTools Integration**: Switched from DexScreener
-- ✅ **Fixed Program IDs**: daos.fun now using correct contract
+### 🟡 Performance Improvements
 
-**[📋 Full Changelog](CHANGELOG_2026-02-09.md)**
-</details>
+| Improvement | Description |
+|-------------|-------------|
+| **Centralized Config** | Created `utils/config.ts` with all settings + validation |
+| **Parser Warnings** | Added warnings when IDLs are missing for Meteora/Bonk/daos.fun/Moonshot |
+| **Memory Leak Fix** | Added `stream.removeAllListeners()` in cleanup function |
+| **Auto-Reconnect gRPC** | Exponential backoff (1s→30s max), 10 retries before 60s pause |
+
+### 🔵 Code Improvements
+
+| Improvement | Description |
+|-------------|-------------|
+| **Type Safety** | Added specific types for error catching |
+| **Configurable URLs** | `TOKEN_VIEWER_URL` via env (default: solscan.io) |
+| **English Logging** | Main logs standardized to English |
+| **PID File Removed** | Now uses `process.pid` directly |
+
+### 🟣 Security Improvements
+
+| Improvement | Description |
+|-------------|-------------|
+| **Secret Exposure Fixed** | Removed RPC URL and keys from logs |
+| **Retry Limits** | Max 10 retries with exponential backoff |
+| **Input Validation** | Enhanced `validateConfig()` with format and range checks |
+
+### 🆕 New Features
+
+- **Yellowstone gRPC Support**: New endpoint configuration via `GRPC_URL` and `GRPC_TOKEN`
+- **Bot Health Tracking**: Monitors consecutive errors and sends alerts
+- **Config Validation**: New validation with warnings for incomplete setup
+
+**[📋 Full Changelog](docs/CHANGELOG.md)** | **[🛡️ Risk Engine Docs](docs/RISK_ENGINE.md)** | **[📖 Configuration Guide](docs/CONFIGURATION.md)**
+
+---
 
 ## ✨ Features
 
-- ✅ **Position Persistence** - Zero perda de dados em crash
-- ✅ **Circuit Breaker + Telegram Alerts** - Notificações instantâneas
-- ✅ **RPC Pool com Failover** - 99.9% uptime
-- ✅ **Dynamic Gas Pricing** - Economia de 50-70%
-- ✅ **Adaptive Slippage** - +25% taxa de sucesso
-- ✅ **Dashboard Web** - Monitoramento visual
-- ✅ **Backtester CLI** - Otimização segura
-- 🆕 **Risk Engine** - Score anti-rug 0–100 com 5 filtros + post-curve monitor
-- 🆕 **Performance Backtest** - Simula resultados de alertas do Telegram
+- ✅ **Position Persistence** - Zero data loss on crash
+- ✅ **Circuit Breaker + Telegram Alerts** - Instant notifications
+- ✅ **RPC Pool with Failover** - 99.9% uptime
+- ✅ **Dynamic Gas Pricing** - 50-70% savings
+- ✅ **Adaptive Slippage** - +25% success rate
+- ✅ **Web Dashboard** - Visual monitoring
+- ✅ **Backtester CLI** - Safe optimization
+- ✅ **Risk Engine** - Anti-rug score 0–100 with 5 filters + post-curve monitor
+- ✅ **Alert Queue** - Async, prioritized, with retry
+- ✅ ** Yellowstone gRPC** - New high-availability endpoint
 
-## 📊 Impacto
+## 📊 Impact
 
-| Métrica | Melhoria |
-|---------|----------|
-| Risco | -80% |
-| Lucro | +20-30% |
-| Custos | -60% |
+| Metric | Improvement |
+|--------|-------------|
+| Risk | -80% |
+| Profit | +20-30% |
+| Costs | -60% |
 | Uptime | 99.9% |
 
-## 📖 Leia Mais
+## 📖 Read More
 
-Consulte a [documentação completa](docs/README.md) para detalhes.
+See the [complete documentation](docs/README.md) for details.
 
-## 📝 Licença
+## 📝 License
 
 MIT

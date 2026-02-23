@@ -1,6 +1,133 @@
 # Changelog
 
-Histórico de todas as melhorias implementadas no projeto.
+History of all improvements implemented in the project.
+
+---
+
+## [Sprint 6] - 2026-02-22
+
+### 🔴 Critical Fixes
+
+- **Hardcoded Variables Removed**
+  - Removed unused `a, b, c, d` variables in `index.ts`
+  - Created `utils/curveConstants.ts` with shared constants and `calculateCurveProgress()` function
+
+- **Adaptive Slippage on Sell**
+  - Fixed hardcoded 0.5% slippage in `sellOnPumpFun()`
+  - Now uses `getCachedOptimalSlippage()` for dynamic slippage
+
+- **Position Manager Integration**
+  - Replaced local `Map<string, Position>` with persistent `positionManager`
+  - Positions now saved to `data/positions.json`
+  - Automatic recovery after bot restart
+
+### 🟠 Stability Improvements
+
+- **Real TP/SL Verification**
+  - Replaced `Math.random()` simulation with real price checking
+  - Added `getTokenPrice()` function to fetch live prices
+  - Added `checkTakeProfitStopLoss()` for P/L calculation
+
+- **Retry Logic + Notifications**
+  - 3 retries with exponential backoff in trade execution
+  - Telegram notification on all failures
+  - Detailed logging of each attempt
+
+- **Metadata Cache Fixed**
+  - Fixed `require` to `import` in `metadataCache.ts`
+  - Cache working with configurable TTL (default: 30 min)
+
+- **Alert Queue** (`utils/alertQueue.ts` - NEW)
+  - Async queue with priority (high/normal/low)
+  - Automatic retry (3 attempts)
+  - Exponential backoff between retries
+  - Configurable via `ALERT_QUEUE_ENABLED`
+
+### 🟡 Performance Improvements
+
+- **Centralized Config** (`utils/config.ts` - NEW)
+  - All settings in one place
+  - `validateConfig()` function with validation
+  - Environment variables organized by category
+
+- **Parser Warnings**
+  - Added warnings when IDLs are missing for Meteora/Bonk/daos.fun/Moonshot/anoncoin
+  - Clear documentation that these need IDLs to work
+
+- **Memory Leak Fix**
+  - Added `cleanup()` function in `handleStream()`
+  - `stream.removeAllListeners()` called on error/end/close
+  - Prevents listener accumulation on reconnects
+
+- **Auto-Reconnect gRPC**
+  - Exponential backoff (1s → 2s → 4s → ... → 30s max)
+  - Max 10 attempts before 60s pause
+  - Detailed logging of each reconnection attempt
+
+### 🔵 Code Improvements
+
+- **Type Safety**
+  - Added specific types for error catching (`error: any`)
+  - Added `BotHealth` interface for health tracking
+
+- **Configurable URLs**
+  - `TOKEN_VIEWER_URL` configurable via env (default: solscan.io)
+  - Dynamic links for tokens and transactions
+
+- **English Logging**
+  - Main logs standardized to English
+  - Removed Portuguese accents from logs
+
+- **PID File Removed**
+  - Removed `bot.pid` file logic
+  - Uses `process.pid` directly when needed
+
+### 🟣 Security Improvements
+
+- **Secret Exposure Fixed**
+  - Removed full RPC URL from logs
+  - Only logs whether config exists (boolean)
+  - Logs standardized in English
+
+- **Retry Limits**
+  - `reconnectWithBackoff()` has configurable max retries
+  - `subscribeCommand` has 10 retry limit
+  - Exponential backoff capped at 30s
+
+- **Input Validation** (`validateConfig()`)
+  - Telegram Bot Token format validation
+  - Numeric range validation (BUY_AMOUNT, TAKE_PROFIT, STOP_LOSS, SLIPPAGE)
+  - SECRET_KEY_JSON format validation
+  - URL format validation
+  - Warnings for incomplete configuration
+
+### 🆕 New Features
+
+- **Yellowstone gRPC Support**
+  - New config: `GRPC_URL` and `GRPC_TOKEN`
+  - Falls back to `SHYFT_GRPC` if not configured
+  - Endpoint: `https://solana-yellowstone-grpc.publicnode.com:443`
+
+- **Bot Health Tracking**
+  - `botHealth` object tracks: `isHealthy`, `errorCount`, `lastError`
+  - `updateBotHealth()` function
+  - Auto-alert after 10 consecutive errors
+
+- **Config Validation**
+  - Returns `{ valid, errors, warnings }`
+  - Validates format and ranges
+  - Shows warnings for incomplete setup
+
+### 📁 New Files Created
+- `utils/config.ts` - Centralized configuration
+- `utils/alertQueue.ts` - Async alert queue
+- `utils/curveConstants.ts` - Shared curve constants
+
+### 📁 Files Modified
+- `index.ts` - Multiple improvements
+- `utils/hybridExecutor.ts` - TP/SL, PositionManager
+- `utils/metadataCache.ts` - Import fix
+- `tsconfig.json` - Excluded test/tools/website
 
 ---
 

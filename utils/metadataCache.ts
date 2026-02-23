@@ -1,5 +1,4 @@
-// Importação simplificada para evitar problemas de tipos
-const NodeCache = require('node-cache');
+import NodeCache from 'node-cache';
 import logger from './logger';
 import { fetchCombinedMetadata } from './fetchTokenMetadata';
 import { TokenMetadata } from './fetchTokenMetadata';

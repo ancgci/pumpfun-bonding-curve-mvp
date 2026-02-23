@@ -13,7 +13,7 @@
 | `utils/riskEngine/holderAnalyzer.ts` | Distribuição de holders: Top-10%, dev wallet, detecção de clusters (bundling) |
 | `utils/riskEngine/tradingSanity.ts` | Volume fake, buy/sell imbalance, price impact e honeypot simulation via Jupiter quote |
 | `utils/riskEngine/postCurveMonitor.ts` | Monitor pós-curva: re-verifica authorities e LP a cada 30s por 10 min |
-| `utils/riskEngine/contractAge.ts` | Filtro de idade do contrato (<1h via histórico de transações) |
+| `utils/riskEngine/contractAge.ts` | Filtro de idade do contrato (<1h) + **Fix HTML Sanitization** |
 | `utils/riskEngine/metadataCheck.ts` | Validação de metadados (imagem, descrição e redes sociais) |
 | `index.ts` (modificado) | Strict LP Blocking + **HTML Sanitization** (previne crashes no Telegram) |
 | `test/testRiskEngine.ts` | 50 unit tests determinísticos para scoring, decisão e formato Telegram |

@@ -23,6 +23,8 @@ import { getCachedDynamicGasPrice } from "./gasPriceOracle";
 import { getCachedOptimalSlippage } from "./slippageCalculator";
 import { analyzeToken } from "./riskEngine";
 import { RISK_CONFIG } from "./riskConfig";
+import { positionManager } from "./positionManager";
+import type { Position } from "./positionManager";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -48,23 +50,13 @@ export interface TokenData {
   mode: "CURVE" | "DEX";
 }
 
-export interface Position {
-  mint: string;
-  bondingCurve: string;
-  buySignature: string;
-  buySolAmount: number;
-  buyTokenAmount: number;
-  buyTimestamp: number;
-  takeProfit: number;
-  stopLoss: number;
-  isActive: boolean;
-}
+export type { Position } from "./positionManager";
 
 // Configurações do ambiente
-logger.info("🔄 Carregando configurações do ambiente");
-logger.info(`RPC_URL: ${process.env.RPC_URL}`);
-logger.info(`SECRET_KEY_JSON presente: ${!!process.env.SECRET_KEY_JSON}`);
-logger.info(`PUMPFUN_PROGRAM_ID: ${process.env.PUMPFUN_PROGRAM_ID}`);
+logger.info("Loading environment configuration");
+logger.info(`SECRET_KEY_JSON present: ${!!process.env.SECRET_KEY_JSON}`);
+logger.info(`PUMPFUN_PROGRAM_ID: ${process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}`);
+logger.info(`RPC configured: ${!!process.env.RPC_URL}`);
 
 const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 const PUMPFUN_PROGRAM_ID = new PublicKey(process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -126,30 +118,78 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 50
   }
   throw lastError;
 }
-// Carregar carteira
+
+interface PriceInfo {
+  pricePerToken: number;
+  pricePerTokenExceeds: number;
+}
+
+async function getTokenPrice(tokenMint: string): Promise<PriceInfo | null> {
+  try {
+    const connection = await getConnection();
+    const mintPublicKey = new PublicKey(tokenMint);
+    const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, keypair!.publicKey);
+    
+    const accountInfo = await connection.getParsedAccountInfo(userTokenAccount);
+    if (!accountInfo.value || !accountInfo.value.data) {
+      return null;
+    }
+    
+    const data = accountInfo.value.data as any;
+    const tokenAmount = data.parsed?.info?.tokenAmount?.amount;
+    if (!tokenAmount || tokenAmount === "0") {
+      return null;
+    }
+    
+    const balance = await connection.getBalance(mintPublicKey);
+    const solBalance = balance / 1e9;
+    const pricePerToken = solBalance / (parseInt(tokenAmount) / 1e9);
+    
+    return {
+      pricePerToken,
+      pricePerTokenExceeds: parseInt(tokenAmount)
+    };
+  } catch (error) {
+    logger.debug(`Erro ao buscar preco para ${tokenMint}:`, error);
+    return null;
+  }
+}
+
+function checkTakeProfitStopLoss(
+  currentPrice: number,
+  buyPrice: number,
+  takeProfitPercent: number,
+  stopLossPercent: number
+): { shouldTakeProfit: boolean; shouldStopLoss: boolean; profitLossPercent: number } {
+  const profitLossPercent = ((currentPrice - buyPrice) / buyPrice) * 100;
+  const shouldTakeProfit = profitLossPercent >= takeProfitPercent;
+  const shouldStopLoss = profitLossPercent <= -stopLossPercent;
+  
+  return { shouldTakeProfit, shouldStopLoss, profitLossPercent };
+}
+// Load wallet
 let keypair: Keypair | null = null;
-logger.info(`SECRET_KEY_JSON presente: ${process.env.SECRET_KEY_JSON ? "true" : "false"}`);
+logger.info(`SECRET_KEY_JSON present: ${!!process.env.SECRET_KEY_JSON}`);
 if (process.env.SECRET_KEY_JSON) {
   try {
     const secretKeyArray = JSON.parse(process.env.SECRET_KEY_JSON);
-    logger.info(`Tamanho do array de chave: ${secretKeyArray.length}`);
+    logger.info(`Key array size: ${secretKeyArray.length}`);
     if (Array.isArray(secretKeyArray) && secretKeyArray.length === 64) {
       const secretKey = Uint8Array.from(secretKeyArray);
       keypair = Keypair.fromSecretKey(secretKey);
-      logger.info("✅ Chave privada carregada com sucesso");
-      logger.info(`💰 Carteira do Bot: ${keypair.publicKey.toBase58()}`);
+      logger.info("Private key loaded successfully");
+      logger.info(`Bot Wallet: ${keypair.publicKey.toBase58()}`);
     } else {
-      logger.error("❌ Formato inválido para SECRET_KEY_JSON - deve ser um array com 64 elementos");
+      logger.error("Invalid SECRET_KEY_JSON format - must be an array with 64 elements");
     }
-  } catch (error) {
-    logger.error("❌ Erro ao carregar chave privada:", error);
+  } catch (error: any) {
+    logger.error("Error loading private key:", error.message);
   }
 } else {
-  logger.warn("⚠️  SECRET_KEY_JSON não configurada - operações de trading serão simuladas");
+  logger.warn("SECRET_KEY_JSON not configured - trading operations will be simulated");
 }
 
-// Mapa para rastrear posições abertas
-const openPositions: Map<string, Position> = new Map();
+// Usar PositionManager para persistência de posições
 
 // Variável para controlar se há um trade ativo
 let activeTrade: boolean = false;
@@ -164,13 +204,8 @@ export function hasActiveTrade(): boolean {
   }
 
   // Verificar se há posições ativas
-  for (const position of openPositions.values()) {
-    if (position.isActive) {
-      return true;
-    }
-  }
-
-  return false;
+  const activePositions = positionManager.getActivePositions();
+  return activePositions.length > 0;
 }
 
 /**
@@ -365,8 +400,9 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
       keypair.publicKey
     );
 
-    // Calcular minSolOutput com slippage (0.5% de proteção)
-    const minSolOutput = Math.floor(amount * 0.995);
+    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+    const slippageMultiplier = 1 - (slippageBps / 10000);
+    const minSolOutput = Math.floor(amount * slippageMultiplier);
 
     // Criar instrução de venda
     const sellInstruction = new TransactionInstruction({
@@ -659,7 +695,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
         isActive: true
       };
 
-      openPositions.set(tokenData.mint, position);
+      await positionManager.savePosition(position);
 
       // Registrar sucesso no monitoramento (não necessariamente lucro financeiro ainda, mas execução OK)
       circuitBreaker.recordSuccess(0);
@@ -676,27 +712,32 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
 
     // Verificar posições abertas para venda (apenas se for trade de venda)
     if (tradeType === "SELL") {
-      const position = openPositions.get(tokenData.mint);
-      if (position && position.isActive) {
-        // Verificar Take Profit e Stop Loss
-        // Na implementação real, aqui teríamos a lógica para verificar o preço atual
+      const position = positionManager.getPosition(tokenData.mint);
+      if (position && position.isActive && position.buyTokenAmount > 0) {
+        const priceInfo = await getTokenPrice(tokenData.mint);
+        
+        if (!priceInfo) {
+          logger.debug(`Nao foi possivel obter preco para ${tokenData.mint}, pulando verificacao TP/SL`);
+          return;
+        }
 
-        // Exemplo simplificado de verificação
-        const shouldTakeProfit = Math.random() > 0.7; // Simulação
-        const shouldStopLoss = Math.random() > 0.9;   // Simulação
+        const currentPrice = priceInfo.pricePerToken;
+        const buyPrice = position.buySolAmount / (position.buyTokenAmount / 1e9);
+        
+        const { shouldTakeProfit, shouldStopLoss, profitLossPercent } = checkTakeProfitStopLoss(
+          currentPrice,
+          buyPrice,
+          position.takeProfit,
+          position.stopLoss
+        );
 
-        // Log de informações de lucro/prejuízo
-        logger.info(`📊 MONITORAMENTO DE POSIÇÃO PARA TOKEN ${tokenData.mint}`);
+        logger.info(`📊 MONITORAMENTO DE POSICAO PARA TOKEN ${tokenData.mint}`);
         logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
+        logger.info(`   Preco atual: ${currentPrice.toFixed(9)} SOL`);
+        logger.info(`   Preco de compra: ${buyPrice.toFixed(9)} SOL`);
+        logger.info(`   Lucro/Prejuizo atual: ${profitLossPercent.toFixed(2)}%`);
         logger.info(`   Take Profit configurado: ${position.takeProfit}%`);
         logger.info(`   Stop Loss configurado: -${position.stopLoss}%`);
-
-        // Na implementação real, aqui seria calculado o lucro/prejuízo atual
-        // Exemplo de como seria o cálculo:
-        // const currentPrice = getCurrentTokenPrice(tokenData.mint);
-        // const currentValue = position.buyTokenAmount * currentPrice;
-        // const profitLossPercent = ((currentValue - position.buySolAmount) / position.buySolAmount) * 100;
-        // logger.info(`   Lucro/Prejuízo atual: ${profitLossPercent.toFixed(2)}%`);
 
         if (shouldTakeProfit && AUTO_SELL_TAKE_PROFIT) {
           logger.info(`📈 TAKE PROFIT ACIONADO para token ${tokenData.mint}`);
@@ -734,9 +775,9 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
 
         // Atualizar posição no mapa
         if (!position.isActive) {
-          openPositions.delete(tokenData.mint);
+          await positionManager.closePosition(tokenData.mint);
         } else {
-          openPositions.set(tokenData.mint, position);
+          await positionManager.updatePosition(tokenData.mint, position);
         }
       }
     }
