@@ -20,6 +20,8 @@ import { transactionOutput } from "./utils/transactionOutput";
 import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
 import { calculateCurveProgress } from "./utils/curveConstants";
 import { alertQueue } from "./utils/alertQueue";
+import { getAgentDecision, executeAgentTrade } from "./utils/agentOrchestrator";
+import { recordPriceSample } from "./utils/volatilityMonitor";
 import { CONFIG, validateConfig } from "./utils/config";
 import logger from "./utils/logger";
 
@@ -74,33 +76,48 @@ const {
   MIN_MESSAGE_INTERVAL
 } = CONFIG;
 
-// Replace with your channel ID or username (e.g., '@your_channel_username')
-// Create a bot instance with additional options for better error handling
-const bot = new TelegramBot(token, {
-  polling: true,
-  request: {
-    proxy: HTTPS_PROXY || HTTP_PROXY,
-    url: '',
-    agentOptions: {
-      keepAlive: true,
-      keepAliveMsecs: 10000,
-      timeout: 30000
-    }
-  },
-  retry: 10,
-  retryTimeout: 15000,
-  pollingTimeout: 120000,
-  onlyFirstMatch: true,
-  baseApiUrl: 'https://api.telegram.org'
-});
+const telegramEnabled = Boolean(token && chatId);
+let telegramActive = false;
+let bot: TelegramBot | null = null;
 
-// Configurar callback da fila de alertas
-alertQueue.setSendCallback(async (message: string) => {
-  await bot.sendMessage(chatId, message, {
-    parse_mode: "HTML",
-    disable_web_page_preview: true
+if (telegramEnabled) {
+  // Create a bot instance with additional options for better error handling
+  bot = new TelegramBot(token, {
+    polling: true,
+    request: {
+      proxy: HTTPS_PROXY || HTTP_PROXY,
+      url: "",
+      agentOptions: {
+        keepAlive: true,
+        keepAliveMsecs: 10000,
+        timeout: 30000,
+      },
+    },
+    retry: 5,
+    retryTimeout: 10000,
+    pollingTimeout: 120000,
+    onlyFirstMatch: true,
+    baseApiUrl: "https://api.telegram.org",
   });
-});
+  telegramActive = true;
+
+  // Configurar callback da fila de alertas
+  alertQueue.setSendCallback(async (message: string) => {
+    if (!telegramActive || !bot) {
+      logger.warn("Telegram desativado, alerta não enviado.");
+      return;
+    }
+    await bot.sendMessage(chatId, message, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+  });
+} else {
+  logger.warn("Telegram desabilitado (sem token/chat id); alertas não serão enviados.");
+  alertQueue.setSendCallback(async (message: string) => {
+    logger.info(`(TELEGRAM OFF) ${message}`);
+  });
+}
 
 // Create a Set to track sent addresses
 let sentAddresses = new Set();
@@ -472,6 +489,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
   // Buscar metadados do token, se disponível
   let tokenMetadata = null;
+  let riskAnalysis: any = null;
   if (tOutput.mint) {
     try {
       tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
@@ -480,11 +498,9 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     }
   }
 
-  if (
-    Number(progress) >= ALERT_THRESHOLD &&
-    Number(progress) <= 100 &&
-    !sentAddresses.has(tOutput.mint)
-  ) {
+  const withinAlertBand = Number(progress) >= ALERT_THRESHOLD && Number(progress) <= 100;
+
+  if (withinAlertBand && !sentAddresses.has(tOutput.mint)) {
     // Registrar transação no monitor de desempenho
     recordTransaction(tOutput.mint);
 
@@ -497,12 +513,14 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     // Calcular preço atual do token (SOL/token)
     const currentPrice = solBalance > 0 && tokenAmount > 0 ?
       (solBalance * 1000000000) / tokenAmount : 0;
+    // registrar amostra para volatilidade intraday
+    recordPriceSample(tOutput.mint, currentPrice);
 
     // ── Risk Engine Analysis ──
     let riskSection = "";
     if (RISK_CONFIG.enabled) {
       try {
-        const riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata);
+        riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata);
 
         // 🚫 NOVO FILTRO: Se LP não lockado/burnado -> IGNORAR (sem alert, sem trade)
         if (RISK_CONFIG.detection.blockUnlockedLP &&
@@ -542,11 +560,11 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       mode: Number(progress) >= 100 ? "DEX" : "CURVE"
     };
 
-    // Executar trade híbrido passando o tipo de trade com retry
+    // Retry wrapper para execução real (LIVE)
     const executeTradeWithRetry = async () => {
       const maxRetries = 3;
       const baseDelay = 1000;
-      
+
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           await executeHybridTrade(tokenData, tOutput.type);
@@ -554,14 +572,14 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
           return;
         } catch (error: any) {
           logger.warn(`⚠️ Tentativa ${attempt}/${maxRetries} falhou para ${tOutput.mint}: ${error.message}`);
-          
+
           if (attempt < maxRetries) {
             const delay = baseDelay * Math.pow(2, attempt - 1);
             await new Promise(resolve => setTimeout(resolve, delay));
           } else {
             logger.error(`❌ Todas as tentativas falharam para token ${tOutput.mint}`);
             recordError();
-            
+
             // Enviar notificação de falha
             sendMessage(
               `❌ <b>FALHA NO TRADE</b>\n\n` +
@@ -573,8 +591,35 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         }
       }
     };
-    
-    executeTradeWithRetry();
+
+    // ── AI Agent orchestration (SIM/LIVE) ──
+    const agentEnabled = process.env.AGENT_ENABLED === "true";
+    if (agentEnabled) {
+    const tokenAnalysis: any = {
+      mint: tOutput.mint,
+      symbol: tokenMetadata?.symbol || "UNK",
+      price: Number(currentPrice) || 0,
+      bondingCurvePercent: Number(progress),
+      holders: riskAnalysis?.metrics?.totalHolders ?? 0,
+      volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
+      liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+      riskScore: riskAnalysis?.score ?? 0,
+      honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
+      volWindows: undefined, // preenchido no orchestrator
+    };
+
+      try {
+        const decision = await getAgentDecision(tokenAnalysis);
+        await executeAgentTrade(tokenAnalysis, decision, async () => {
+          await executeTradeWithRetry();
+        });
+      } catch (agentErr: any) {
+        logger.error(`❌ [Agent] Falha na decisão/execução: ${agentErr.message}`);
+      }
+    } else {
+      // fallback legacy: executar trade direto
+      executeTradeWithRetry();
+    }
 
     // Preparar mensagem com metadados + risco
     let tokenName = tokenMetadata?.name || "Unknown";
@@ -1570,11 +1615,16 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
 const GRPC_ENDPOINT = GRPC_URL || SHYFT_GRPC;
 const GRPC_AUTH_TOKEN = GRPC_TOKEN || process.env.SHYFT_GRPC_TOKEN || "";
 
-const client = new Client(
-  GRPC_ENDPOINT,
-  GRPC_AUTH_TOKEN,
-  undefined
-);
+let client: Client | null = null;
+if (GRPC_ENDPOINT) {
+  client = new Client(
+    GRPC_ENDPOINT,
+    GRPC_AUTH_TOKEN,
+    undefined
+  );
+} else {
+  logger.warn("⚠️ Nenhum endpoint gRPC configurado. Streaming desabilitado; apenas componentes HTTP funcionarão.");
+}
 
 const req: SubscribeRequest = {
   accounts: {},
@@ -1686,7 +1736,11 @@ if (Object.keys(req.transactions).length === 0) {
   logger.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
 }
 
-subscribeCommand(client, req);
+if (client) {
+  subscribeCommand(client, req);
+} else {
+  logger.warn("⚠️ gRPC não iniciado. Configure GRPC_URL ou SHYFT_GRPC para monitorar em tempo real.");
+}
 
 // Reconnection with exponential backoff
 async function reconnectWithBackoff(maxRetries = 5) {
@@ -1776,31 +1830,32 @@ setTimeout(async () => {
 }, 5000); // Aumentar o tempo de espera para 5 segundos
 
 // Adicionar tratamento de erros mais robusto para polling
-bot.on('polling_error', async (error: any) => {
+bot?.on('polling_error', async (error: any) => {
   logger.error('❌ Erro de polling:', error.message);
+
+  botHealth.errorCount++;
+  botHealth.lastError = error.message;
+
+  // Se houver muitos erros consecutivos, parar polling para evitar loop
+  if (botHealth.errorCount >= 5) {
+    logger.warn("⚠️ Desabilitando Telegram após falhas consecutivas.");
+    telegramActive = false;
+    try {
+      await bot?.stopPolling();
+    } catch (e) {
+      logger.debug(`Erro ao parar polling: ${(e as any)?.message}`);
+    }
+    return;
+  }
 
   // Tratamento específico para redirecionamentos 301
   if (error.message && error.message.includes('301')) {
     logger.warn("⚠️  Redirecionamento 301 detectado. Atualizando baseApiUrl...");
-    // Atualizar a URL base para lidar com redirecionamentos
-    bot.options.baseApiUrl = 'https://api.telegram.org';
-
-    // Esperar um pouco antes de tentar novamente
+    if (bot) bot.options.baseApiUrl = 'https://api.telegram.org';
     await new Promise(resolve => setTimeout(resolve, 5000));
     return;
   }
 
-  // Incrementar contador de erros
-  botHealth.errorCount++;
-  botHealth.lastError = error.message;
-
-  // Se houver muitos erros consecutivos, esperar mais antes de tentar reconectar
-  if (botHealth.errorCount > 10) {
-    logger.warn("⚠️  Muitos erros consecutivos. Aguardando 60 segundos antes de tentar reconectar...");
-    await new Promise(resolve => setTimeout(resolve, 60000));
-  }
-
-  // Tratamento específico para erros fatais
   if (error.code === 'EFATAL' || error.name === 'AggregateError' ||
     error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
     logger.error("🚨 Erro de conexão detectado. Tentando reconectar...");
@@ -1808,46 +1863,11 @@ bot.on('polling_error', async (error: any) => {
     logger.info("📝 Chat ID:", chatId);
 
     try {
-      // Tentar reconectar com backoff exponencial
-      await reconnectWithBackoff(5);
-
-      // Recriar a instância do bot após reconexão bem-sucedida
-      logger.info("🔄 Recriando instância do bot após reconexão...");
-      const newBot = new TelegramBot(token, {
-        polling: true,
-        request: {
-          proxy: HTTPS_PROXY || HTTP_PROXY,
-          url: '',
-          agentOptions: {
-            keepAlive: true,
-            keepAliveMsecs: 10000,
-            timeout: 30000
-          }
-        },
-        retry: 5,
-        retryTimeout: 10000,
-        pollingTimeout: 60000,
-        baseApiUrl: 'https://api.telegram.org'
-      });
-
-      // Transferir listeners do bot antigo para o novo
-      const listeners = bot.eventNames();
-      listeners.forEach(event => {
-        const callbacks = bot.listeners(event);
-        callbacks.forEach(callback => {
-          newBot.on(event, callback);
-        });
-      });
-
-      // Substituir a instância do bot
-      Object.assign(bot, newBot);
-      logger.info("✅ Bot recriado com sucesso após reconexão");
-
-      // Resetar contador de erros após reconexão bem-sucedida
+      await reconnectWithBackoff(3);
       botHealth.errorCount = 0;
       botHealth.lastError = null;
     } catch (reconnectError) {
-      logger.error("❌ Falha ao reconectar o bot:", reconnectError.message);
+      logger.error("❌ Falha ao reconectar o bot:", (reconnectError as any).message);
     }
   }
 });

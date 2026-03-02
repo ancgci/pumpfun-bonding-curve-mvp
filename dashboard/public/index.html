@@ -40,6 +40,108 @@
       </div>
     </section>
 
+    <!-- AI Agent Status -->
+    <section class="agent-section">
+      <h2>🤖 AI Agent Status</h2>
+      <div class="agent-grid">
+        <div class="agent-card">
+          <div class="agent-label">Status</div>
+          <div class="agent-value" id="agentStatus">Initializing...</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">Mode</div>
+          <div class="agent-value" id="agentMode">SIMULATION</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">Confidence</div>
+          <div class="agent-value" id="agentConfidence">--%</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">Learning</div>
+          <div class="agent-value" id="agentLearning">Disabled</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">LLM Status</div>
+          <div class="agent-value" id="agentRateLimit">--</div>
+        </div>
+      </div>
+    </section>
+    <section class="agent-controls">
+      <h2>⚙️ Agent Controls</h2>
+      <div class="control-row">
+        <button id="btnToggleAgent">Toggle Agent</button>
+        <button id="btnToggleMode">Switch SIM/LIVE</button>
+      </div>
+    </section>
+
+    <!-- Learning Progress -->
+    <section class="learning-section">
+      <h2>📈 Learning Progress</h2>
+      <div class="learning-card">
+        <div class="progress-label">
+          <span>Optimization Progress</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <div class="learning-stats">
+          <div class="learning-stat">
+            <span>Trades Analyzed</span>
+            <span id="tradesAnalyzed">0</span>
+          </div>
+          <div class="learning-stat">
+            <span>Win Rate Improvement</span>
+            <span id="winRateImprovement">+0%</span>
+          </div>
+          <div class="learning-stat">
+            <span>Next Optimization</span>
+            <span id="nextOptimization">--</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Simulation Status -->
+    <section class="simulation-section">
+      <h2>🧪 Simulation Readiness</h2>
+      <div class="simulation-grid">
+        <div class="simulation-card">
+          <div class="simulation-label">Mode</div>
+          <div class="simulation-value" id="simMode">SIMULATION</div>
+        </div>
+        <div class="simulation-card">
+          <div class="simulation-label">Readiness</div>
+          <div class="simulation-value" id="simReadiness">--/100</div>
+        </div>
+        <div class="simulation-card">
+          <div class="simulation-label">Win Rate</div>
+          <div class="simulation-value" id="simWinRate">--%</div>
+        </div>
+        <div class="simulation-card">
+          <div class="simulation-label">Total Trades</div>
+          <div class="simulation-value" id="simTotalTrades">--</div>
+        </div>
+        <div class="simulation-card">
+          <div class="simulation-label">Total P&L</div>
+          <div class="simulation-value" id="simTotalPnl">-- SOL</div>
+        </div>
+        <div class="simulation-card">
+          <div class="simulation-label">Max Drawdown</div>
+          <div class="simulation-value" id="simDrawdown">-- SOL</div>
+        </div>
+      </div>
+      <div class="sim-reasons" id="simReasons"></div>
+    </section>
+
+    <!-- Simulation Trades -->
+    <section class="sim-trades-section">
+      <h2>🧪 Recent Simulation Trades</h2>
+      <div class="sim-trades-list" id="simTradesList">
+        <p class="loading">Loading simulation trades...</p>
+      </div>
+    </section>
+
     <!-- Circuit Breaker Status -->
     <section class="cb-section">
       <h2>🛡️ Circuit Breaker</h2>
@@ -57,6 +159,22 @@
       <h2>📌 Active Positions (<span id="activeCount">0</span>)</h2>
       <div class="positions-list" id="positionsList">
         <p class="loading">Loading positions...</p>
+      </div>
+    </section>
+
+    <!-- Trade History with Confidence Scores -->
+    <section class="trade-history-section">
+      <h2>📊 Recent Trades (Last 10)</h2>
+      <div class="trade-history-list" id="tradeHistoryList">
+        <p class="loading">Loading trade history...</p>
+      </div>
+    </section>
+
+    <!-- Pattern Recognition -->
+    <section class="patterns-section">
+      <h2>🧠 Learned Trading Patterns</h2>
+      <div class="patterns-grid" id="patternsGrid">
+        <p class="loading">No patterns learned yet...</p>
       </div>
     </section>
 

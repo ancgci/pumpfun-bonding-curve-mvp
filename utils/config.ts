@@ -8,7 +8,7 @@ export const CONFIG = {
   SHYFT_GRPC: process.env.SHYFT_GRPC || "",
   
   // Yellowstone gRPC
-  GRPC_URL: process.env.GRPC_URL || "https://solana-yellowstone-grpc.publicnode.com:443",
+  GRPC_URL: process.env.GRPC_URL || "",
   GRPC_TOKEN: process.env.GRPC_TOKEN || "",
   
   // Telegram
@@ -104,8 +104,10 @@ export function validateConfig(): { valid: boolean; errors: string[]; warnings: 
     errors.push("RPC_URL must start with http or https");
   }
   
-  if (!CONFIG.SHYFT_GRPC && !CONFIG.GRPC_URL) {
-    errors.push("SHYFT_GRPC or GRPC_URL is required");
+  if (!CONFIG.SHYFT_GRPC && !CONFIG.GRPC_URL && !CONFIG.RPC_URL) {
+    errors.push("RPC_URL is required when no GRPC endpoints are set");
+  } else if (!CONFIG.SHYFT_GRPC && !CONFIG.GRPC_URL) {
+    warnings.push("No GRPC endpoint configured - gRPC streaming will be disabled");
   }
   
   if (CONFIG.BUY_AMOUNT_SOL <= 0 || CONFIG.BUY_AMOUNT_SOL > 10) {

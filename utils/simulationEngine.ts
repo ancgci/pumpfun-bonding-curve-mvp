@@ -1,0 +1,390 @@
+import logger from "./logger";
+import { CONFIG } from "./config";
+import * as fs from "fs";
+import * as path from "path";
+
+/**
+ * SIMULATION ENGINE
+ * 
+ * Real-world simulation mode:
+ * - Monitors newly launched tokens in real-time
+ * - Simulates buy/sell decisions with REAL TOKEN PRICES
+ * - Records simulated trades to learn from patterns
+ * - Provides metrics to validate strategy before going LIVE
+ * 
+ * This enables the AI agent to practice on real market data without
+ * risking actual funds
+ */
+
+interface SimulatedTrade {
+  tokenMint: string;
+  tokenSymbol: string;
+  entryTime: number;
+  entryPrice: number;
+  exitTime: number | null;
+  exitPrice: number | null;
+  pnl: number; // P&L in SOL
+  pnlPercent: number;
+  confidence: number; // AI decision confidence 0-100
+  status: "OPEN" | "CLOSED_TP" | "CLOSED_SL" | "EXPIRED";
+  reason?: string;
+}
+
+interface SimulationMetrics {
+  totalTrades: number;
+  winTrades: number;
+  lossTrades: number;
+  winRate: number;
+  totalPnL: number;
+  avgPnL: number;
+  maxDrawdown: number;
+  sharpRatio: number;
+  expectedValue: number;
+  riskRewardRatio: number;
+  lastUpdate: number;
+}
+
+const SIMULATION_DATA_DIR = path.join(__dirname, "../data/simulation");
+const SIMULATION_TRADES_FILE = path.join(SIMULATION_DATA_DIR, "trades.json");
+const SIMULATION_METRICS_FILE = path.join(SIMULATION_DATA_DIR, "metrics.json");
+
+// Ensure simulation data directory exists
+function ensureSimulationDir() {
+  if (!fs.existsSync(SIMULATION_DATA_DIR)) {
+    fs.mkdirSync(SIMULATION_DATA_DIR, { recursive: true });
+  }
+}
+
+/**
+ * Record a simulated trade
+ * Called when the agent makes a BUY decision on a real token
+ */
+export async function recordSimulatedTrade(
+  tokenMint: string,
+  tokenSymbol: string,
+  entryPrice: number,
+  confidence: number,
+  agentAnalysis: any
+): Promise<void> {
+  ensureSimulationDir();
+
+  const trade: SimulatedTrade = {
+    tokenMint,
+    tokenSymbol,
+    entryTime: Date.now(),
+    entryPrice,
+    exitTime: null,
+    exitPrice: null,
+    pnl: 0,
+    pnlPercent: 0,
+    confidence,
+    status: "OPEN",
+    reason: `AI Agent confidence: ${confidence}%`,
+  };
+
+  // Load existing trades
+  let trades: SimulatedTrade[] = [];
+  try {
+    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
+      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+      trades = JSON.parse(data);
+    }
+  } catch (error) {
+    logger.error(`Error loading simulation trades:`, error);
+  }
+
+  trades.push(trade);
+
+  // Keep only last 1000 trades
+  if (trades.length > 1000) {
+    trades = trades.slice(-1000);
+  }
+
+  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
+  logger.info(
+    `📊 [SIMULATION] Recorded trade entry: ${tokenSymbol} at ${entryPrice.toFixed(8)} (confidence: ${confidence}%)`
+  );
+}
+
+/**
+ * Update a simulated trade with exit price
+ * Called when token reaches TP, SL, or expires
+ */
+export async function updateSimulatedTradeExit(
+  tokenMint: string,
+  exitPrice: number,
+  status: "CLOSED_TP" | "CLOSED_SL" | "EXPIRED",
+  reason?: string
+): Promise<SimulatedTrade | null> {
+  ensureSimulationDir();
+
+  let trades: SimulatedTrade[] = [];
+  try {
+    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
+      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+      trades = JSON.parse(data);
+    }
+  } catch (error) {
+    logger.error(`Error loading simulation trades:`, error);
+    return null;
+  }
+
+  // Find the trade
+  const trade = trades.find((t) => t.tokenMint === tokenMint && t.status === "OPEN");
+  if (!trade) {
+    logger.warn(`⚠️  No open simulation trade found for ${tokenMint}`);
+    return null;
+  }
+
+  // Calculate P&L
+  trade.exitTime = Date.now();
+  trade.exitPrice = exitPrice;
+  trade.status = status;
+  trade.pnlPercent = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+  trade.pnl = CONFIG.BUY_AMOUNT_SOL * (trade.pnlPercent / 100);
+  trade.reason = reason || `Exited with status: ${status}`;
+
+  // Save updated trades
+  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
+
+  // Update metrics
+  await recalculateSimulationMetrics(trades);
+
+  const emoji = trade.pnl > 0 ? "✅" : "❌";
+  logger.info(
+    `📊 [SIMULATION] Trade closed: ${trade.tokenSymbol} ${emoji} ${trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(4)} SOL (${trade.pnlPercent.toFixed(2)}%)`
+  );
+
+  return trade;
+}
+
+/**
+ * Recalculate simulation metrics
+ */
+async function recalculateSimulationMetrics(trades: SimulatedTrade[]): Promise<void> {
+  const closedTrades = trades.filter((t) => t.status !== "OPEN");
+
+  if (closedTrades.length === 0) {
+    return;
+  }
+
+  const winTrades = closedTrades.filter((t) => t.pnl > 0);
+  const lossTrades = closedTrades.filter((t) => t.pnl < 0);
+  const totalPnL = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const avgPnL = totalPnL / closedTrades.length;
+
+  // Calculate Sharpe Ratio
+  const returns = closedTrades.map((t) => t.pnl);
+  const meanReturn = totalPnL / closedTrades.length;
+  const variance =
+    returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / closedTrades.length;
+  const stdDev = Math.sqrt(variance);
+  const sharpeRatio = stdDev === 0 ? 0 : meanReturn / stdDev;
+
+  // Calculate Max Drawdown
+  let cumulativePnL = 0;
+  let maxCumulativePnL = 0;
+  let maxDrawdown = 0;
+
+  for (const trade of closedTrades) {
+    cumulativePnL += trade.pnl;
+    if (cumulativePnL > maxCumulativePnL) {
+      maxCumulativePnL = cumulativePnL;
+    }
+    const drawdown = maxCumulativePnL - cumulativePnL;
+    if (drawdown > maxDrawdown) {
+      maxDrawdown = drawdown;
+    }
+  }
+
+  // Calculate Risk/Reward Ratio
+  const avgWin = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + t.pnl, 0) / winTrades.length : 0;
+  const avgLoss = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + Math.abs(t.pnl), 0) / lossTrades.length : 0;
+  const riskRewardRatio = avgLoss > 0 ? avgWin / avgLoss : 0;
+
+  // Expected Value
+  const winRate = winTrades.length / closedTrades.length;
+  const expectedValue = winRate * avgWin - (1 - winRate) * avgLoss;
+
+  const metrics: SimulationMetrics = {
+    totalTrades: closedTrades.length,
+    winTrades: winTrades.length,
+    lossTrades: lossTrades.length,
+    winRate: (winTrades.length / closedTrades.length) * 100,
+    totalPnL,
+    avgPnL,
+    maxDrawdown,
+    sharpRatio: sharpeRatio,
+    expectedValue,
+    riskRewardRatio,
+    lastUpdate: Date.now(),
+  };
+
+  // Save metrics
+  ensureSimulationDir();
+  fs.writeFileSync(SIMULATION_METRICS_FILE, JSON.stringify(metrics, null, 2));
+
+  logger.info(`📈 [SIMULATION] Metrics updated:`);
+  logger.info(`   Trades: ${metrics.totalTrades} (W: ${metrics.winTrades} | L: ${metrics.lossTrades})`);
+  logger.info(`   Win Rate: ${metrics.winRate.toFixed(1)}%`);
+  logger.info(`   Total P&L: ${metrics.totalPnL > 0 ? '+' : ''}${metrics.totalPnL.toFixed(4)} SOL`);
+  logger.info(`   Avg P&L: ${metrics.avgPnL > 0 ? '+' : ''}${metrics.avgPnL.toFixed(4)} SOL`);
+  logger.info(`   Max Drawdown: ${metrics.maxDrawdown.toFixed(4)} SOL`);
+  logger.info(`   Sharpe Ratio: ${metrics.sharpRatio.toFixed(2)}`);
+  logger.info(`   Expected Value: ${metrics.expectedValue > 0 ? '+' : ''}${metrics.expectedValue.toFixed(4)} SOL`);
+}
+
+/**
+ * Get current simulation metrics
+ */
+export function getSimulationMetrics(): SimulationMetrics | null {
+  ensureSimulationDir();
+
+  try {
+    if (fs.existsSync(SIMULATION_METRICS_FILE)) {
+      const data = fs.readFileSync(SIMULATION_METRICS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    logger.error(`Error loading simulation metrics:`, error);
+  }
+
+  return null;
+}
+
+/**
+ * Get open simulated trades for a specific token
+ */
+export function getOpenTradeForToken(tokenMint: string): SimulatedTrade | null {
+  ensureSimulationDir();
+
+  try {
+    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
+      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+      const trades: SimulatedTrade[] = JSON.parse(data);
+      return trades.find((t) => t.tokenMint === tokenMint && t.status === "OPEN") || null;
+    }
+  } catch (error) {
+    logger.error(`Error loading simulation trades:`, error);
+  }
+
+  return null;
+}
+
+/**
+ * Get last N closed trades
+ */
+export function getRecentTrades(limit: number = 20): SimulatedTrade[] {
+  ensureSimulationDir();
+
+  try {
+    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
+      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+      const trades: SimulatedTrade[] = JSON.parse(data);
+      const closedTrades = trades.filter((t) => t.status !== "OPEN");
+      return closedTrades.slice(-limit).reverse();
+    }
+  } catch (error) {
+    logger.error(`Error loading simulation trades:`, error);
+  }
+
+  return [];
+}
+
+/**
+ * Check if simulation is ready for live trading
+ * Criteria:
+ * - At least 50 closed trades
+ * - Win rate > 40%
+ * - Expected value > 0
+ * - Max drawdown < 10 SOL
+ */
+export function isSimulationReadyForLive(): {
+  ready: boolean;
+  score: number;
+  reasons: string[];
+} {
+  const metrics = getSimulationMetrics();
+
+  const reasons: string[] = [];
+  let score = 0;
+
+  if (!metrics) {
+    return {
+      ready: false,
+      score: 0,
+      reasons: ["No simulation metrics found"],
+    };
+  }
+
+  // Check minimum trades
+  if (metrics.totalTrades < 50) {
+    reasons.push(`Only ${metrics.totalTrades}/50 trades completed`);
+  } else {
+    score += 20;
+  }
+
+  // Check win rate
+  if (metrics.winRate < 40) {
+    reasons.push(`Win rate ${metrics.winRate.toFixed(1)}% < 40%`);
+  } else {
+    score += 20;
+  }
+
+  // Check expected value
+  if (metrics.expectedValue <= 0) {
+    reasons.push(`Expected value ${metrics.expectedValue.toFixed(4)} ≤ 0`);
+  } else {
+    score += 20;
+  }
+
+  // Check max drawdown
+  if (metrics.maxDrawdown > 10) {
+    reasons.push(`Max drawdown ${metrics.maxDrawdown.toFixed(4)} SOL > 10 SOL`);
+  } else {
+    score += 20;
+  }
+
+  // Check Sharpe ratio
+  if (metrics.sharpRatio > 1) {
+    score += 20;
+  } else {
+    reasons.push(`Sharpe Ratio ${metrics.sharpRatio.toFixed(2)} < 1`);
+  }
+
+  return {
+    ready: score >= 80,
+    score,
+    reasons:
+      reasons.length > 0
+        ? reasons
+        : ["✅ Simulation metrics meet live trading criteria"],
+  };
+}
+
+/**
+ * Export simulation data for analysis
+ */
+export function exportSimulationData(): {
+  metrics: SimulationMetrics | null;
+  trades: SimulatedTrade[];
+} {
+  ensureSimulationDir();
+
+  let trades: SimulatedTrade[] = [];
+  try {
+    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
+      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+      trades = JSON.parse(data);
+    }
+  } catch (error) {
+    logger.error(`Error exporting simulation data:`, error);
+  }
+
+  return {
+    metrics: getSimulationMetrics(),
+    trades,
+  };
+}
+
+logger.info(`✅ Simulation Engine initialized`);

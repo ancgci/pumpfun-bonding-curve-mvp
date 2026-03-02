@@ -69,12 +69,13 @@ async function fetchPriceHistory(mint: string, fromTimestamp: number): Promise<P
             timeout: 5000
         });
 
-        if (!response.data || !response.data.pairs || response.data.pairs.length === 0) {
+        const data = response.data as any;
+        if (!data || !data.pairs || data.pairs.length === 0) {
             return [];
         }
 
         // Get current price from the first pair
-        const pair = response.data.pairs[0];
+        const pair = data.pairs[0];
         const currentPrice = parseFloat(pair.priceUsd) / 100; // Convert to SOL estimate
 
         // For now, return current price as snapshot
@@ -177,12 +178,12 @@ function generateReport(results: TradeResult[]) {
 
     const bestTrade = results.reduce((best, r) =>
         r.profitLoss > best.profitLoss ? r : best,
-        results[0] || { profitLoss: 0, mint: 'N/A' }
+        results[0] || { profitLoss: 0, profitLossPercent: 0, mint: 'N/A' } as TradeResult
     );
 
     const worstTrade = results.reduce((worst, r) =>
         r.profitLoss < worst.profitLoss ? r : worst,
-        results[0] || { profitLoss: 0, mint: 'N/A' }
+        results[0] || { profitLoss: 0, profitLossPercent: 0, mint: 'N/A' } as TradeResult
     );
 
     console.log('\n═══════════════════════════════════════');
