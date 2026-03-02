@@ -94,8 +94,6 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       throw new Error(`LLM returned unparseable content: ${content.slice(0, 200)}`);
     }
 
-    logger.info(`🤖 [Agent] LLM Output: "${content.slice(0, 500)}"`);
-
     const decision: AgentDecision = {
       action: parsed.action === "BUY" ? "BUY" : "SKIP",
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
@@ -104,7 +102,6 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       takeProfit: tokenAnalysis.price * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100),
       stopLoss: tokenAnalysis.price * (1 - CONFIG.STOP_LOSS_PERCENT / 100),
     };
-    logger.info(`🤖 [Agent] Decision: ${JSON.stringify(decision)}`);
     return decision;
   } catch (err: any) {
     const status = err.response?.status;
