@@ -36,7 +36,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
 
   const sysPrompt = [
     "You are a high-frequency Solana memecoin trading agent.",
-    "Return JSON only: {\"action\":\"BUY|SKIP\",\"confidence\":0-100,\"reason\":\"short\"}.",
+    "Return JSON ONLY. No conversational text. No markdown. Output ONLY valid JSON in this exact format: {\"action\":\"BUY\"|\"SKIP\",\"confidence\":0-100,\"reason\":\"short string\"}.",
     "Prioritize risk controls: block if honeypotRisk true, low liquidity (<2 SOL), very young tokens, extreme drawdown.",
     "Use confidence as probability of profitable scalp in next 1-3 minutes."
   ].join(" ");
@@ -55,7 +55,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
 
   const payload = {
     model: LLM_MODEL,
-    max_tokens: 256,
+    max_tokens: 1024,
     temperature: 0.3,
     top_p: 0.9,
     stream: false,
@@ -94,6 +94,8 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       throw new Error(`LLM returned unparseable content: ${content.slice(0, 200)}`);
     }
 
+    logger.info(`🤖 [Agent] LLM Output: "${content.slice(0, 500)}"`);
+
     const decision: AgentDecision = {
       action: parsed.action === "BUY" ? "BUY" : "SKIP",
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
@@ -102,6 +104,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       takeProfit: tokenAnalysis.price * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100),
       stopLoss: tokenAnalysis.price * (1 - CONFIG.STOP_LOSS_PERCENT / 100),
     };
+    logger.info(`🤖 [Agent] Decision: ${JSON.stringify(decision)}`);
     return decision;
   } catch (err: any) {
     const status = err.response?.status;
