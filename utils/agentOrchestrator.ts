@@ -80,16 +80,18 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     );
 
     const data: any = resp.data;
-    const content = data?.choices?.[0]?.message?.content || "";
+    // Kimi K2.5 returns content=null with JSON inside reasoning_content
+    const message = data?.choices?.[0]?.message;
+    const content = (message?.content || message?.reasoning_content || message?.reasoning || "").trim();
     let parsed: any;
     try {
       parsed = JSON.parse(content);
     } catch {
-      const match = content.match(/\\{[^}]+\\}/);
+      const match = content.match(/\{[^}]+\}/);
       parsed = match ? JSON.parse(match[0]) : null;
     }
     if (!parsed || !parsed.action) {
-      throw new Error("LLM returned unparseable content");
+      throw new Error(`LLM returned unparseable content: ${content.slice(0, 200)}`);
     }
 
     const decision: AgentDecision = {
