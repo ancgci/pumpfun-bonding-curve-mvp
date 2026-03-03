@@ -1,10 +1,6 @@
-import { Connection, PublicKey } from "@solana/web3.js";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const shyft = process.env.SHYFT_RPC as string;
-const connection = new Connection(shyft, 'confirmed')
+import { PublicKey } from "@solana/web3.js";
+import { rpcPool } from "./rpcPool";
+import logger from "./logger";
 
 // Cache to avoid flooding the RPC with repeated calls to the same bonding curve
 const bondingCache: Map<string, { balance: number; ts: number }> = new Map();
@@ -17,16 +13,23 @@ export async function getBondingCurveAddress(bondingCurve: string) {
     return cached.balance;
   }
 
-  let solBalance;
-  const address = new PublicKey(bondingCurve)
-  const systemOwner = await connection.getAccountInfo(address);
-  if (systemOwner) {
-    solBalance = systemOwner.lamports;
-    const result = Number(solBalance / 1000000000).toFixed(2);
-    bondingCache.set(bondingCurve, { balance: Number(result), ts: Date.now() });
+  try {
+    const result = await rpcPool.executeWithFallback(async (connection) => {
+      const address = new PublicKey(bondingCurve);
+      const systemOwner = await connection.getAccountInfo(address);
+      if (systemOwner) {
+        const solBalance = systemOwner.lamports;
+        return Number((solBalance / 1000000000).toFixed(2));
+      }
+      return 0;
+    }, 3);
+
+    bondingCache.set(bondingCurve, { balance: result, ts: Date.now() });
     return result;
+  } catch (error: any) {
+    logger.debug(`⚠️ getBondingCurveAddress failed for ${bondingCurve.substring(0, 8)}...: ${error.message}`);
+    return 0;
   }
-  else return 0
 }
 
 // Função para calcular o Market Cap
