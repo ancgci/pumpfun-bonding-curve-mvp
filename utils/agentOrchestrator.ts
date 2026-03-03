@@ -55,12 +55,13 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
   }
 
   const sysPrompt = [
-    "You are a high-frequency Solana memecoin trading agent.",
+    "You are an aggressive high-frequency scalper targeting Solana memecoins on pump.fun.",
     `Return JSON ONLY. No conversational text. No markdown. Output ONLY valid JSON in this exact format: {"action":"BUY"|"SKIP","confidence":0-100,"reason":"short string","takeProfitPercent":number,"stopLossPercent":number}.`,
-    "takeProfitPercent = how much % gain you recommend before selling (e.g. 150 for high-volatility, 30 for safer plays).",
-    "stopLossPercent = how much % loss before cutting the position (e.g. 15 for risky, 5 for safe).",
-    "Prioritize risk controls: block if honeypotRisk true, low liquidity (<2 SOL), very young tokens, extreme drawdown.",
-    "Use confidence as probability of profitable scalp in next 1-3 minutes.",
+    "takeProfitPercent = how much % gain you recommend before selling (e.g. 100-150 for extreme momentum spikes, 30 for safer plays).",
+    "stopLossPercent = how much % loss before cutting the position (default 30).",
+    "CRITICAL SCALPING RULES: Ignore long-term fundamentals. You do NOT hold. You buy extreme early momentum (e.g., fast bonding curve progress, high initial volume bursts) and sell into the immediate spike to secure 100-150% profit.",
+    "Do NOT penalize very young tokens or tokens with only 1 or 2 holders if the momentum is explosive. Your goal is to enter at $15k-$20k MCAP and exit at $45k-$60k MCAP.",
+    "Use confidence as probability of a profitable scalp in the next 1-3 minutes.",
   ].join(" ") + learnedRules;
 
   const userPrompt = [
@@ -241,9 +242,9 @@ export async function getAgentDecision(
       logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: liquidity ${tokenAnalysis.liquiditySol.toFixed(2)} SOL < 2 SOL`);
       return { action: "SKIP", confidence: 0, reasoning: "PreFilter: low liquidity" };
     }
-    if (tokenAnalysis.holders > 0 && tokenAnalysis.holders < 5) {
+    if (tokenAnalysis.holders > 0 && tokenAnalysis.holders < 10) {
       logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: only ${tokenAnalysis.holders} holders`);
-      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: too few holders" };
+      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: too few holders (< 10)" };
     }
     if (tokenAnalysis.riskScore > 70) {
       logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: riskScore ${tokenAnalysis.riskScore} > 70`);

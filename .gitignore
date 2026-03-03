@@ -11,3 +11,20 @@ website/node_modules/.cache/
 
 # Local Netlify folder
 .netlify
+
+# Build outputs
+/dist/
+/.next/
+/build/
+
+# Logs and debug files
+*.log
+/logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS specific files
+.DS_Store
+Thumbs.db

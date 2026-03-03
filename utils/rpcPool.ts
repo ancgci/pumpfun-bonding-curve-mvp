@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Connection } from "@solana/web3.js";
 import logger from "./logger";
 
@@ -10,38 +11,36 @@ interface RPCConfig {
     isHealthy: boolean;
 }
 
-// Configurações de RPCs (múltiplos endpoints)
-const rpcConfigs: RPCConfig[] = [
-    {
-        url: process.env.RPC_URL || "https://mainnet.helius-rpc.com/?api-key=",
-        name: "Helius",
-        priority: 1,
-        latency: 0,
-        isHealthy: true,
-    },
-    {
-        url: process.env.RPC_URL_FALLBACK_1 || "https://api.mainnet-beta.solana.com",
-        name: "Solana Public",
-        priority: 2,
-        latency: 0,
-        isHealthy: true,
-    },
-    {
-        url: process.env.RPC_URL_FALLBACK_2 || "https://api.mainnet-beta.solana.com",
-        name: "Fallback 2",
-        priority: 3,
-        latency: 0,
-        isHealthy: true,
-    },
-];
-
 class RPCPool {
     private rpcs: RPCConfig[];
     private currentConnection: Connection | null = null;
     private currentRPC: RPCConfig | null = null;
 
     constructor() {
-        this.rpcs = rpcConfigs.filter(rpc => rpc.url && rpc.url.length > 0);
+        this.rpcs = [
+            {
+                url: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+                name: "Primary RPC",
+                priority: 1,
+                latency: 0,
+                isHealthy: true,
+            },
+            {
+                url: process.env.RPC_URL_FALLBACK_1 || "https://mainnet.helius-rpc.com/?api-key=",
+                name: "Helius Fallback",
+                priority: 2,
+                latency: 0,
+                isHealthy: true,
+            },
+            {
+                url: process.env.RPC_URL_FALLBACK_2 || "https://solana-mainnet.gateway.tatum.io/",
+                name: "Tatum Fallback",
+                priority: 3,
+                latency: 0,
+                isHealthy: true,
+            },
+        ].filter(rpc => rpc.url && rpc.url.length > 10); // Simple validation
+
         logger.info(`🔗 RPC Pool inicializado com ${this.rpcs.length} endpoints`);
     }
 

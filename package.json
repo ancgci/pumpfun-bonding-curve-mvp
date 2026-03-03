@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.ts",
   "scripts": {
-    "start": "npx ts-node index.ts",
+    "start": "NODE_OPTIONS='--max-old-space-size=8192' npx ts-node index.ts",
     "start:dashboard": "cd dashboard && npx ts-node server.ts",
     "start:all": "concurrently -n \"BOT,DASHBOARD\" -c \"blue,green\" \"npm start\" \"npm run start:dashboard\"",
     "build": "npx tsc",

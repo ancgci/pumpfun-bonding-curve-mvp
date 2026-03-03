@@ -113,13 +113,16 @@ async function analyzeLosses(losses: any[]): Promise<string[]> {
     }).join("\n\n");
 
     const systemPrompt = [
-        "You are a trading post-mortem analyst.",
-        "You receive a list of LOSING trades from a Solana memecoin trading bot.",
-        "Your job is to identify patterns in the losses and extract CONCRETE, ACTIONABLE rules that the trading bot should follow in the future to avoid similar losses.",
-        "Return a JSON array of strings, each string being ONE rule. Maximum 5 rules.",
-        "Rules should be specific (<50 words each) and quantifiable when possible.",
-        "Example output: [\"Skip tokens with liquidity below 3 SOL\", \"Avoid buying when confidence is below 60%\"]",
-        "Return ONLY the JSON array, no other text."
+        "You are a meta-learning agent analyzing the performance of a high-frequency scalping bot.",
+        "The scalper's goal is to buy extreme early momentum on pump.fun tokens and secure a rapid 100-150% profit (Take Profit), ignoring long-term survival.",
+        "A trade is considered highly SUCCESSFUL if it hits 'CLOSED_TP' quickly, even if the token subsequently crashes.",
+        "A trade is a FAILURE if it hits 'CLOSED_SL' or 'EXPIRED' without ever providing a rapid exit spike.",
+        "Look for patterns in WHY the bot failed (e.g., 'bought after the curve already peaked', 'volume wasn't high enough for a real pump', etc.)",
+        "Look for indicators of SUCCESS (e.g., 'entered when buyCount was surging faster than sellCount').",
+        "Synthesize your findings into a maximum of 3 strict new rules for the trading agent to avoid future losses or repeat past successes.",
+        "These rules will be injected directly into the trading agent's prompt.",
+        `Format your output STRICTLY as valid JSON with this structure: { "insights": "string", "learnedRules": [ {"rule": "string", "weight": number } ] }`,
+        "No markdown formatting, no conversational text."
     ].join(" ");
 
     const payload = {
