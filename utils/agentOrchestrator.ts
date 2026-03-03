@@ -4,6 +4,7 @@ import * as path from "path";
 import axios from "axios";
 import Bottleneck from "bottleneck";
 import { CONFIG } from "./config";
+import { getActiveSkillsPrompt } from "./skillRegistry";
 import {
   recordSimulatedTrade,
   updateSimulatedTradeExit,
@@ -54,15 +55,19 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     logger.debug(`⚠️  Could not load learned patterns: ${(err as any).message}`);
   }
 
-  const sysPrompt = [
-    "You are an aggressive high-frequency scalper targeting Solana memecoins on pump.fun.",
+  // ── Base system prompt (strategy details come from Skills) ──
+  const basePrompt = [
+    "You are an AI trading agent for Solana tokens. Follow the skill instructions provided below.",
     `Return JSON ONLY. No conversational text. No markdown. Output ONLY valid JSON in this exact format: {"action":"BUY"|"SKIP","confidence":0-100,"reason":"short string","takeProfitPercent":number,"stopLossPercent":number}.`,
-    "takeProfitPercent = how much % gain you recommend before selling (e.g. 100-150 for extreme momentum spikes, 30 for safer plays).",
-    "stopLossPercent = how much % loss before cutting the position (default 30).",
-    "CRITICAL SCALPING RULES: Ignore long-term fundamentals. You do NOT hold. You buy extreme early momentum (e.g., fast bonding curve progress, high initial volume bursts) and sell into the immediate spike to secure 100-150% profit.",
-    "Do NOT penalize very young tokens or tokens with only 1 or 2 holders if the momentum is explosive. Your goal is to enter at $15k-$20k MCAP and exit at $45k-$60k MCAP.",
-    "Use confidence as probability of a profitable scalp in the next 1-3 minutes.",
-  ].join(" ") + learnedRules;
+    "takeProfitPercent = how much % gain you recommend before selling.",
+    "stopLossPercent = how much % loss before cutting the position.",
+    "Use confidence as probability of a profitable trade.",
+  ].join(" ");
+
+  // ── Inject active skills into system prompt ──
+  const skillContext = getActiveSkillsPrompt({ action: "token_analysis" });
+
+  const sysPrompt = basePrompt + skillContext + learnedRules;
 
   const userPrompt = [
     `Token ${tokenAnalysis.symbol} (${tokenAnalysis.mint})`,

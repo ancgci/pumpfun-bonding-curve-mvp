@@ -28,7 +28,10 @@
     "backtest:6h": "npx ts-node tools/backtest-telegram.ts --period 6h",
     "backtest:12h": "npx ts-node tools/backtest-telegram.ts --period 12h",
     "backtest:24h": "npx ts-node tools/backtest-telegram.ts --period 24h",
-    "backtest:7d": "npx ts-node tools/backtest-telegram.ts --period 7d"
+    "backtest:7d": "npx ts-node tools/backtest-telegram.ts --period 7d",
+    "skill:list": "npx ts-node tools/import-skill.ts --list",
+    "skill:import": "npx ts-node tools/import-skill.ts",
+    "skill:delete": "npx ts-node tools/import-skill.ts --delete"
   },
   "author": "",
   "license": "ISC",
