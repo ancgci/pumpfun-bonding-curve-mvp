@@ -52,124 +52,110 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
     logger.info(`🔍 [RiskEngine] Analisando token ${tokenAddr}...`);
 
     // ═══════════════════════════════════════════════════════
-    // Step 1: Token Authorities (cheapest — single RPC call)
+    // PHASE 1: Parallel fetch of base data (Authorities, Age, Metadata)
     // ═══════════════════════════════════════════════════════
-    try {
-        const authResult = await checkTokenAuthorities(tokenAddr);
-        totalScore += authResult.score;
-        reasons.push(...authResult.reasons);
+    const [authRes, ageRes, metaRes] = await Promise.allSettled([
+        checkTokenAuthorities(tokenAddr),
+        rpcPool.getBestConnection().then(conn => checkContractAge(conn, tokenAddr)),
+        (async () => {
+            if (cachedMetadata) return cachedMetadata;
+            const cached = await getCachedTokenMetadata(tokenAddr);
+            if (cached) return cached;
+            return await fetchCombinedMetadata(tokenAddr);
+        })()
+    ]);
 
-        flags.MINT_AUTH = authResult.mintAuthority ? "ON" : "OFF";
-        flags.FREEZE_AUTH = authResult.freezeAuthority ? "ON" : "OFF";
-        flags.TOKEN_STANDARD = authResult.tokenStandard;
-        flags.EXTENSIONS = authResult.extensions;
+    // Apply Phase 1 Results
+    if (authRes.status === "fulfilled") {
+        const auth = authRes.value;
+        totalScore += auth.score;
+        reasons.push(...auth.reasons);
+        flags.MINT_AUTH = auth.mintAuthority ? "ON" : "OFF";
+        flags.FREEZE_AUTH = auth.freezeAuthority ? "ON" : "OFF";
+        flags.TOKEN_STANDARD = auth.tokenStandard;
+        flags.EXTENSIONS = auth.extensions;
+        logger.debug(`[RiskEngine] Auth check: score+${auth.score}`);
+    } else {
+        logger.error(`[RiskEngine] Auth check falhou: ${authRes.reason.message}`);
+    }
 
-        logger.debug(`[RiskEngine] Auth check: score+${authResult.score} (mint=${flags.MINT_AUTH}, freeze=${flags.FREEZE_AUTH})`);
-    } catch (error: any) {
-        logger.error(`[RiskEngine] Auth check falhou: ${error.message}`);
+    if (ageRes.status === "fulfilled") {
+        const age = ageRes.value;
+        totalScore += age.score;
+        reasons.push(...age.reasons);
+        metrics.tokenAgeHours = age.ageHours;
+        flags.VERY_NEW_TOKEN = age.isVeryNew;
+        logger.debug(`[RiskEngine] Age check: score+${age.score} (${age.ageHours.toFixed(2)}h)`);
+    } else {
+        logger.error(`[RiskEngine] Age check falhou: ${ageRes.reason.message}`);
+    }
+
+    let tokenMetadata: TokenMetadata | null = null;
+    if (metaRes.status === "fulfilled") {
+        tokenMetadata = metaRes.value;
+    } else {
+        logger.debug(`[RiskEngine] Metadata fetch falhou: ${metaRes.reason.message}`);
     }
 
     // ═══════════════════════════════════════════════════════
-    // Step 1.5: Contract Age (history check)
+    // PHASE 2: Parallel fetch of Analysis (Liquidity, Holders, Metadata Quality)
     // ═══════════════════════════════════════════════════════
-    try {
-        const connection = await rpcPool.getBestConnection();
-        const ageResult = await checkContractAge(connection, tokenAddr);
-        totalScore += ageResult.score;
-        reasons.push(...ageResult.reasons);
+    const [liqRes, holderRes, metaQualRes] = await Promise.allSettled([
+        analyzeLiquidity(tokenAddr, tokenMetadata),
+        analyzeHolders(tokenAddr, tokenMetadata?.creator),
+        checkMetadataQuality(tokenMetadata)
+    ]);
 
-        metrics.tokenAgeHours = ageResult.ageHours;
-        flags.VERY_NEW_TOKEN = ageResult.isVeryNew;
-
-        logger.debug(`[RiskEngine] Age check: score+${ageResult.score} (age=${ageResult.ageHours.toFixed(2)}h)`);
-    } catch (error: any) {
-        logger.error(`[RiskEngine] Age check falhou: ${error.message}`);
+    // Apply Phase 2 Results
+    if (liqRes.status === "fulfilled") {
+        const liq = liqRes.value;
+        totalScore += liq.score;
+        reasons.push(...liq.reasons);
+        metrics.liquiditySol = liq.liquiditySol;
+        metrics.liquidityUsd = liq.liquidityUsd;
+        metrics.liquidityToMcap = liq.liquidityToMcap;
+        flags.LP_LOCKED = liq.lpLocked;
+        flags.LP_BURNED = liq.lpBurned;
+        flags.LOW_LIQUIDITY = liq.liquiditySol < RISK_CONFIG.detection.minLiquiditySol;
+        logger.debug(`[RiskEngine] Liquidity check: score+${liq.score} (${liq.liquiditySol.toFixed(2)} SOL)`);
+    } else {
+        logger.error(`[RiskEngine] Liquidity check falhou: ${liqRes.reason.message}`);
     }
 
-    // ═══════════════════════════════════════════════════════
-    // Step 2: Fetch token metadata (for creator info + base data)
-    // ═══════════════════════════════════════════════════════
-    let tokenMetadata: TokenMetadata | null = cachedMetadata || null;
-    if (!tokenMetadata) {
-        try {
-            // Try cache first if not provided
-            tokenMetadata = await getCachedTokenMetadata(tokenAddr);
-            if (!tokenMetadata) {
-                // Fetch fresh if not in cache
-                tokenMetadata = await fetchCombinedMetadata(tokenAddr);
-            }
-        } catch (error: any) {
-            logger.debug(`[RiskEngine] Metadata fetch falhou: ${error.message}`);
-        }
+    if (holderRes.status === "fulfilled") {
+        const holder = holderRes.value;
+        totalScore += holder.score;
+        reasons.push(...holder.reasons);
+        metrics.totalHolders = holder.totalHolders;
+        metrics.top10Percent = holder.top10Percent;
+        metrics.devWalletPercent = holder.devWalletPercent;
+        flags.TOP_HOLDERS_HIGH = holder.top10Percent > RISK_CONFIG.detection.top10MaxPercent;
+        flags.DEV_WALLET_HIGH = holder.devWalletPercent > RISK_CONFIG.detection.devMaxPercent;
+        flags.CLUSTERING = holder.clustering;
+        logger.debug(`[RiskEngine] Holder check: score+${holder.score} (holders=${holder.totalHolders})`);
+    } else {
+        logger.error(`[RiskEngine] Holder check falhou: ${holderRes.reason.message}`);
     }
 
-    // ═══════════════════════════════════════════════════════
-    // Step 2.5: Metadata Quality Check
-    // ═══════════════════════════════════════════════════════
-    try {
-        const metaResult = await checkMetadataQuality(tokenMetadata);
-        totalScore += metaResult.score;
-        reasons.push(...metaResult.reasons);
-        flags.POOR_METADATA = metaResult.isPoorQuality;
-        // Basic flags derived
+    if (metaQualRes.status === "fulfilled") {
+        const metaQual = metaQualRes.value;
+        totalScore += metaQual.score;
+        reasons.push(...metaQual.reasons);
+        flags.POOR_METADATA = metaQual.isPoorQuality;
         if (tokenMetadata && !tokenMetadata.twitter && !tokenMetadata.telegram && !tokenMetadata.website) flags.NO_SOCIALS = true;
         if (tokenMetadata && (!tokenMetadata.image || tokenMetadata.image.includes("placeholder"))) flags.NO_IMAGE = true;
-
-        logger.debug(`[RiskEngine] Metadata check: score+${metaResult.score}`);
-    } catch (error: any) {
-        logger.error(`[RiskEngine] Metadata check falhou: ${error.message}`);
+        logger.debug(`[RiskEngine] Metadata check: score+${metaQual.score}`);
+    } else {
+        logger.error(`[RiskEngine] Metadata check falhou: ${metaQualRes.reason.message}`);
     }
 
     // ═══════════════════════════════════════════════════════
-    // Step 3: Liquidity Analysis (DexScreener + rugcheck.xyz)
-    // ═══════════════════════════════════════════════════════
-    try {
-        const liqResult = await analyzeLiquidity(tokenAddr, tokenMetadata);
-        totalScore += liqResult.score;
-        reasons.push(...liqResult.reasons);
-
-        metrics.liquiditySol = liqResult.liquiditySol;
-        metrics.liquidityUsd = liqResult.liquidityUsd;
-        metrics.liquidityToMcap = liqResult.liquidityToMcap;
-        flags.LP_LOCKED = liqResult.lpLocked;
-        flags.LP_BURNED = liqResult.lpBurned;
-        flags.LOW_LIQUIDITY = liqResult.liquiditySol < RISK_CONFIG.detection.minLiquiditySol;
-
-        logger.debug(`[RiskEngine] Liquidity check: score+${liqResult.score} (${liqResult.liquiditySol.toFixed(2)} SOL)`);
-    } catch (error: any) {
-        logger.error(`[RiskEngine] Liquidity check falhou: ${error.message}`);
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // Step 4: Holder Analysis (Shyft/Helius — more expensive)
-    // ═══════════════════════════════════════════════════════
-    try {
-        const holderResult = await analyzeHolders(tokenAddr, tokenMetadata?.creator);
-        totalScore += holderResult.score;
-        reasons.push(...holderResult.reasons);
-
-        metrics.totalHolders = holderResult.totalHolders;
-        metrics.top10Percent = holderResult.top10Percent;
-        metrics.devWalletPercent = holderResult.devWalletPercent;
-        flags.TOP_HOLDERS_HIGH = holderResult.top10Percent > RISK_CONFIG.detection.top10MaxPercent;
-        flags.DEV_WALLET_HIGH = holderResult.devWalletPercent > RISK_CONFIG.detection.devMaxPercent;
-        flags.CLUSTERING = holderResult.clustering;
-
-        logger.debug(
-            `[RiskEngine] Holder check: score+${holderResult.score} (holders=${holderResult.totalHolders}, top10=${holderResult.top10Percent.toFixed(1)}%, cluster=${holderResult.clustering})`
-        );
-    } catch (error: any) {
-        logger.error(`[RiskEngine] Holder check falhou: ${error.message}`);
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // Step 5: Trading Sanity (DexScreener txns + Jupiter honeypot sim)
+    // PHASE 3: Trading Sanity (depends on holders count)
     // ═══════════════════════════════════════════════════════
     try {
         const tradingResult = await checkTradingSanity(tokenAddr, metrics.totalHolders, tokenMetadata);
         totalScore += tradingResult.score;
         reasons.push(...tradingResult.reasons);
-
         metrics.buySellRatio = tradingResult.buySellRatio;
         metrics.priceImpactPercent = tradingResult.priceImpactPercent;
         flags.VOLUME_FAKE = tradingResult.volumeToHoldersRatio > RISK_CONFIG.detection.volumeToHoldersThreshold;
@@ -177,10 +163,7 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
             (tradingResult.buySellRatio > 0 && tradingResult.buySellRatio < 1 / RISK_CONFIG.detection.buySellImbalanceThreshold);
         flags.HONEYPOT_OP = tradingResult.honeypotDetected;
         honeypotDetected = tradingResult.honeypotDetected;
-
-        logger.debug(
-            `[RiskEngine] Trading check: score+${tradingResult.score} (B/S=${tradingResult.buySellRatio.toFixed(2)}, honeypot=${tradingResult.honeypotDetected})`
-        );
+        logger.debug(`[RiskEngine] Trading check: score+${tradingResult.score} (honeypot=${tradingResult.honeypotDetected})`);
     } catch (error: any) {
         logger.error(`[RiskEngine] Trading sanity check falhou: ${error.message}`);
     }

@@ -23,7 +23,7 @@ import { alertQueue } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade } from "./utils/agentOrchestrator";
 import { recordPriceSample } from "./utils/volatilityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
-import { CONFIG, validateConfig } from "./utils/config";
+import { CONFIG, validateConfig, getRuntimeConfig } from "./utils/config";
 import logger from "./utils/logger";
 
 import dotenv from "dotenv";
@@ -76,6 +76,18 @@ const {
   TOKEN_VIEWER_URL,
   MIN_MESSAGE_INTERVAL
 } = CONFIG;
+
+// Configurações Dinâmicas (Dashboard)
+let ACTIVE_CONFIG = getRuntimeConfig();
+
+// Atualizar config periodicamente em background (não bloqueia o stream)
+setInterval(() => {
+  try {
+    ACTIVE_CONFIG = getRuntimeConfig();
+  } catch (err) {
+    // Silently continue with last known good config
+  }
+}, 2000); // 2 segundos de delay para resposta rápida do dashboard
 
 const telegramEnabled = Boolean(token && chatId);
 let telegramActive = false;
@@ -382,7 +394,8 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         );
 
         // Verificar transações PumpFun se o monitoramento estiver habilitado
-        if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+        const pumpFunEnabled = (ACTIVE_CONFIG as any).PUMPFUN_ENABLED !== false;
+        if (pumpFunEnabled && (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedPumpFunTxn = decodePumpFunTxn(txn);
           if (parsedPumpFunTxn) {
             await processPumpFunTransaction(txn, parsedPumpFunTxn);
@@ -390,7 +403,7 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações Meteora DBC se o monitoramento estiver habilitado
-        if (METEORA_DBC_MONITORING_ENABLED &&
+        if (ACTIVE_CONFIG.METEORA_DBC_MONITORING_ENABLED &&
           (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedMeteoraDBCTxn = decodeMeteoraDBCTxn(txn);
           if (parsedMeteoraDBCTxn) {
@@ -399,7 +412,7 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações Bonk.fun se o monitoramento estiver habilitado
-        if (BONK_FUN_MONITORING_ENABLED &&
+        if (ACTIVE_CONFIG.BONK_FUN_MONITORING_ENABLED &&
           (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedBonkFunTxn = decodeBonkFunTxn(txn);
           if (parsedBonkFunTxn) {
@@ -408,7 +421,7 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações daos.fun se o monitoramento estiver habilitado
-        if (DAOS_FUN_MONITORING_ENABLED &&
+        if (ACTIVE_CONFIG.DAOS_FUN_MONITORING_ENABLED &&
           (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedDaosFunTxn = decodeDaosFunTxn(txn);
           if (parsedDaosFunTxn) {
@@ -417,7 +430,7 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações Moonshot Screener se o monitoramento estiver habilitado
-        if (MOONSHOT_MONITORING_ENABLED &&
+        if (ACTIVE_CONFIG.MOONSHOT_MONITORING_ENABLED &&
           (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
           const parsedMoonshotTxn = decodeMoonshotTxn(txn);
           if (parsedMoonshotTxn) {
@@ -499,7 +512,14 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     }
   }
 
-  const withinAlertBand = Number(progress) >= ALERT_THRESHOLD && Number(progress) <= 100;
+  // 🚨 EMERGENCY STOP CHECK
+  if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) {
+    logger.warn(`🛑 EMERGENCY STOP ATIVO! Ignorando transação para ${tOutput.mint}`);
+    return;
+  }
+
+  const currentAlertThreshold = (ACTIVE_CONFIG as any).ALERT_THRESHOLD || ALERT_THRESHOLD;
+  const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
 
   if (withinAlertBand && !sentAddresses.has(tOutput.mint)) {
     // Registrar transação no monitor de desempenho
@@ -771,9 +791,14 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       `
     );
 
-    // Verificar se atingiu o limiar de alerta
+    // 🚨 EMERGENCY STOP CHECK
+    if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
+
+    // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const currentMeteoraThreshold = ACTIVE_CONFIG.METEORA_DBC_ALERT_THRESHOLD || METEORA_DBC_ALERT_THRESHOLD;
+
     if (
-      Number(progress) >= METEORA_DBC_ALERT_THRESHOLD &&
+      Number(progress) >= currentMeteoraThreshold &&
       Number(progress) <= 100 &&
       !sentAddresses.has(tOutput.mint)
     ) {
@@ -947,9 +972,14 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
       `
     );
 
-    // Verificar se atingiu o limiar de alerta
+    // 🚨 EMERGENCY STOP CHECK
+    if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
+
+    // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const currentBonkThreshold = ACTIVE_CONFIG.BONK_FUN_ALERT_THRESHOLD || BONK_FUN_ALERT_THRESHOLD;
+
     if (
-      Number(progress) >= BONK_FUN_ALERT_THRESHOLD &&
+      Number(progress) >= currentBonkThreshold &&
       Number(progress) <= 100 &&
       !sentAddresses.has(tOutput.mint)
     ) {
@@ -1124,9 +1154,14 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
       `
     );
 
-    // Verificar se atingiu o limiar de alerta
+    // 🚨 EMERGENCY STOP CHECK
+    if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
+
+    // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const currentMoonshotThreshold = ACTIVE_CONFIG.MOONSHOT_ALERT_THRESHOLD || MOONSHOT_ALERT_THRESHOLD;
+
     if (
-      Number(progress) >= MOONSHOT_ALERT_THRESHOLD &&
+      Number(progress) >= currentMoonshotThreshold &&
       Number(progress) <= 100 &&
       !sentAddresses.has(tOutput.mint)
     ) {
@@ -1300,9 +1335,14 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
       `
     );
 
-    // Verificar se atingiu o limiar de alerta
+    // 🚨 EMERGENCY STOP CHECK
+    if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
+
+    // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const currentAnonThreshold = ACTIVE_CONFIG.ANONCOIN_ALERT_THRESHOLD || ANONCOIN_ALERT_THRESHOLD;
+
     if (
-      Number(progress) >= ANONCOIN_ALERT_THRESHOLD &&
+      Number(progress) >= currentAnonThreshold &&
       Number(progress) <= 100 &&
       !sentAddresses.has(tOutput.mint)
     ) {
@@ -1489,9 +1529,14 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
       `
     );
 
-    // Verificar se atingiu o limiar de alerta
+    // 🚨 EMERGENCY STOP CHECK
+    if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
+
+    // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const currentDaosThreshold = ACTIVE_CONFIG.DAOS_FUN_ALERT_THRESHOLD || DAOS_FUN_ALERT_THRESHOLD;
+
     if (
-      Number(progress) >= DAOS_FUN_ALERT_THRESHOLD &&
+      Number(progress) >= currentDaosThreshold &&
       Number(progress) <= 100 &&
       !sentAddresses.has(tOutput.mint)
     ) {

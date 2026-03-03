@@ -20,7 +20,7 @@ const LLM_API_KEY = process.env.NV_LLM_API_KEY || process.env.NVIDIA_API_KEY || 
 
 const llmLimiter = new Bottleneck({
   minTime: 300, // ~3 req/s
-  maxConcurrent: 1,
+  maxConcurrent: 3,
 });
 
 type CachedDecision = { decision: AgentDecision; ts: number };
@@ -103,7 +103,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        timeout: 8000,
+        timeout: 15000,
       }
     );
 

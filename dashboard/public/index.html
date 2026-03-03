@@ -4,80 +4,74 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🤖 Trading Bot Dashboard</title>
+  <title>🤖 PumpFun Trading Bot — Dashboard</title>
+  <meta name="description" content="Real-time control panel for the PumpFun AI Trading Bot on Solana">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
   <div class="container">
+    <!-- ═══ HEADER ═══ -->
     <header>
-      <h1>🤖 Trading Bot Dashboard</h1>
-      <p class="subtitle">Real-Time Monitoring</p>
+      <div class="header-left">
+        <h1>🤖 PumpFun Trading Bot</h1>
+        <p class="subtitle">AI-Powered Solana Memecoin Trader</p>
+      </div>
+      <div class="header-right">
+        <div class="bot-health-badge" id="botHealthBadge">
+          <span class="health-dot" id="healthDot"></span>
+          <span id="botHealthText">Checking...</span>
+        </div>
+        <div class="header-time" id="lastUpdate">--:--:--</div>
+      </div>
     </header>
 
-    <!-- General Statistics -->
+    <!-- ═══ EMERGENCY STOP BANNER (hidden by default) ═══ -->
+    <div class="emergency-banner" id="emergencyBanner" style="display:none">
+      🚨 <strong>EMERGENCY STOP ACTIVE</strong> — All trading is halted.
+      <button class="btn-cancel-stop" id="cancelEmergencyStop">Cancel Emergency Stop</button>
+    </div>
+
+    <!-- ═══ STATS OVERVIEW ═══ -->
     <section class="stats-grid">
-      <div class="stat-card">
+      <div class="stat-card" id="card-invested">
         <div class="stat-icon">💰</div>
         <div class="stat-value" id="totalInvested">-- SOL</div>
         <div class="stat-label">Total Invested</div>
       </div>
-
-      <div class="stat-card">
+      <div class="stat-card" id="card-winrate">
         <div class="stat-icon">📊</div>
         <div class="stat-value" id="winRate">--%</div>
         <div class="stat-label">Win Rate</div>
       </div>
-
-      <div class="stat-card">
+      <div class="stat-card" id="card-wins">
         <div class="stat-icon">✅</div>
         <div class="stat-value" id="wins">--</div>
         <div class="stat-label">Wins</div>
       </div>
-
-      <div class="stat-card">
+      <div class="stat-card" id="card-losses">
         <div class="stat-icon">❌</div>
         <div class="stat-value" id="losses">--</div>
         <div class="stat-label">Losses</div>
       </div>
     </section>
 
-    <!-- AI Agent Status -->
-    <section class="agent-section">
-      <h2>🤖 AI Agent Status</h2>
-      <div class="agent-grid">
-        <div class="agent-card">
-          <div class="agent-label">Status</div>
-          <div class="agent-value" id="agentStatus">Initializing...</div>
-        </div>
-        <div class="agent-card">
-          <div class="agent-label">Mode</div>
-          <div class="agent-value" id="agentMode">SIMULATION</div>
-        </div>
-        <div class="agent-card">
-          <div class="agent-label">Confidence</div>
-          <div class="agent-value" id="agentConfidence">--%</div>
-        </div>
-        <div class="agent-card">
-          <div class="agent-label">Learning</div>
-          <div class="agent-value" id="agentLearning">Disabled</div>
-        </div>
-        <div class="agent-card">
-          <div class="agent-label">LLM Status</div>
-          <div class="agent-value" id="agentRateLimit">--</div>
-        </div>
-      </div>
-    </section>
-    <section class="agent-controls">
-      <h2>⚙️ Agent Controls</h2>
+    <!-- ═══ MAIN CONTROL PANEL ═══ -->
+    <section class="control-panel">
+      <h2>⚙️ Control Center</h2>
+
+      <!-- Row 1: Agent + Mode + Emergency -->
       <div class="controls-grid">
+
+        <!-- Agent ON/OFF -->
         <div class="control-card">
           <div class="control-info">
-            <h3>🤖 Agent Status</h3>
+            <h3>🤖 AI Agent</h3>
             <p>Enable or disable the AI Trading Agent</p>
           </div>
           <label class="premium-toggle status-toggle">
@@ -89,6 +83,7 @@
           </label>
         </div>
 
+        <!-- SIM / LIVE -->
         <div class="control-card">
           <div class="control-info">
             <h3>🔥 Trading Mode</h3>
@@ -102,13 +97,282 @@
             <span class="toggle-label" id="toggleModeLabel">SIMULATION</span>
           </label>
         </div>
+
+        <!-- Auto Buy -->
+        <div class="control-card">
+          <div class="control-info">
+            <h3>🛒 Auto Buy</h3>
+            <p>Automatically execute buy transactions</p>
+          </div>
+          <label class="premium-toggle">
+            <input type="checkbox" id="toggleAutoBuyCheckbox">
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+            <span class="toggle-label" id="toggleAutoBuyLabel">OFF</span>
+          </label>
+        </div>
+
+        <!-- Single Trade -->
+        <div class="control-card">
+          <div class="control-info">
+            <h3>🎯 Single Trade Mode</h3>
+            <p>Only one open position at a time</p>
+          </div>
+          <label class="premium-toggle">
+            <input type="checkbox" id="toggleSingleTradeCheckbox">
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+            <span class="toggle-label" id="toggleSingleTradeLabel">ON</span>
+          </label>
+        </div>
+
+      </div>
+
+      <!-- Row 2: Emergency + CB Reset -->
+      <div class="danger-row">
+        <button class="btn-emergency" id="emergencyStopBtn">
+          🚨 EMERGENCY STOP
+        </button>
+        <button class="btn-cb-reset" id="cbResetBtn">
+          🔄 Reset Circuit Breaker
+        </button>
       </div>
     </section>
 
-    <!-- Learning Boards -->
+    <!-- ═══ TRADING PARAMETERS ═══ -->
+    <section class="params-section">
+      <h2>📐 Trading Parameters</h2>
+      <div class="params-grid">
+
+        <div class="param-card">
+          <label class="param-label">💰 Buy Amount</label>
+          <div class="param-row">
+            <input type="range" id="buyAmountSlider" min="0.001" max="1" step="0.001" value="0.01">
+            <div class="param-value-box">
+              <input type="number" id="buyAmountInput" min="0.001" max="1" step="0.001" value="0.01">
+              <span class="param-unit">SOL</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">🎯 Take Profit</label>
+          <div class="param-row">
+            <input type="range" id="takeProfitSlider" min="10" max="500" step="5" value="100">
+            <div class="param-value-box">
+              <input type="number" id="takeProfitInput" min="10" max="500" step="5" value="100">
+              <span class="param-unit">%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">🛑 Stop Loss</label>
+          <div class="param-row">
+            <input type="range" id="stopLossSlider" min="5" max="80" step="1" value="30">
+            <div class="param-value-box">
+              <input type="number" id="stopLossInput" min="5" max="80" step="1" value="30">
+              <span class="param-unit">%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">🧠 Min AI Confidence</label>
+          <div class="param-row">
+            <input type="range" id="confidenceSlider" min="50" max="99" step="1" value="70">
+            <div class="param-value-box">
+              <input type="number" id="confidenceInput" min="50" max="99" step="1" value="70">
+              <span class="param-unit">%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">⚡ Jito Tip</label>
+          <div class="param-row">
+            <input type="range" id="jitoTipSlider" min="0.0001" max="0.01" step="0.0001" value="0.0001">
+            <div class="param-value-box">
+              <input type="number" id="jitoTipInput" min="0.0001" max="0.01" step="0.0001" value="0.0001">
+              <span class="param-unit">SOL</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">📉 Slippage</label>
+          <div class="param-row">
+            <input type="range" id="slippageSlider" min="30" max="1000" step="10" value="300">
+            <div class="param-value-box">
+              <input type="number" id="slippageInput" min="30" max="1000" step="10" value="300">
+              <span class="param-unit">bps</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">📈 Auto Sell TP</label>
+          <label class="premium-toggle mini-toggle">
+            <input type="checkbox" id="toggleAutoSellTPCheckbox" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">📉 Auto Sell SL</label>
+          <label class="premium-toggle mini-toggle">
+            <input type="checkbox" id="toggleAutoSellSLCheckbox" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+
+        <div class="param-card">
+          <label class="param-label">➗ Partial Sell %</label>
+          <div class="param-row">
+            <input type="range" id="sellPercentSlider" min="10" max="100" step="5" value="100">
+            <div class="param-value-box">
+              <input type="number" id="sellPercentInput" min="10" max="100" step="5" value="100">
+              <span class="param-unit">%</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="params-actions">
+        <button class="btn-save-params" id="saveParamsBtn">💾 Save Parameters</button>
+        <span class="params-saved-msg" id="paramsSavedMsg"></span>
+      </div>
+    </section>
+
+    <!-- ═══ PROTOCOL TOGGLES ═══ -->
+    <section class="protocols-section">
+      <h2>🔌 Active Protocols</h2>
+      <div class="protocol-list">
+        <div class="protocol-item">
+          <div class="protocol-info">
+            <span class="protocol-icon">🟣</span>
+            <div>
+              <div class="protocol-name">PumpFun</div>
+              <div class="protocol-desc">Primary bonding curve platform</div>
+            </div>
+          </div>
+          <label class="mini-toggle">
+            <input type="checkbox" id="proto-PUMPFUN" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+        <div class="protocol-item">
+          <div class="protocol-info">
+            <span class="protocol-icon">🔵</span>
+            <div>
+              <div class="protocol-name">Meteora DBC</div>
+              <div class="protocol-desc">Dynamic bonding curve</div>
+            </div>
+          </div>
+          <label class="mini-toggle">
+            <input type="checkbox" id="proto-METEORA_DBC" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+        <div class="protocol-item">
+          <div class="protocol-info">
+            <span class="protocol-icon">🟠</span>
+            <div>
+              <div class="protocol-name">Bonk.fun</div>
+              <div class="protocol-desc">Bonk ecosystem launches</div>
+            </div>
+          </div>
+          <label class="mini-toggle">
+            <input type="checkbox" id="proto-BONK_FUN" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+        <div class="protocol-item">
+          <div class="protocol-info">
+            <span class="protocol-icon">🟤</span>
+            <div>
+              <div class="protocol-name">Daos.fun</div>
+              <div class="protocol-desc">DAO tokenization platform</div>
+            </div>
+          </div>
+          <label class="mini-toggle">
+            <input type="checkbox" id="proto-DAOS_FUN" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+        <div class="protocol-item">
+          <div class="protocol-info">
+            <span class="protocol-icon">🌙</span>
+            <div>
+              <div class="protocol-name">Moonshot</div>
+              <div class="protocol-desc">Token screener & launcher</div>
+            </div>
+          </div>
+          <label class="mini-toggle">
+            <input type="checkbox" id="proto-MOONSHOT" checked>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ AI AGENT STATUS ═══ -->
+    <section class="agent-section">
+      <h2>🤖 AI Agent Status</h2>
+      <div class="agent-grid">
+        <div class="agent-card">
+          <div class="agent-label">Status</div>
+          <div class="agent-value" id="agentStatus">Initializing...</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">Mode</div>
+          <div class="agent-value" id="agentMode">SIMULATION</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">Confidence Threshold</div>
+          <div class="agent-value" id="agentConfidence">--%</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">Learning</div>
+          <div class="agent-value" id="agentLearning">Disabled</div>
+        </div>
+        <div class="agent-card">
+          <div class="agent-label">LLM Status</div>
+          <div class="agent-value" id="agentRateLimit">--</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ LEARNED RULES (with delete controls) ═══ -->
+    <section class="rules-section">
+      <div class="rules-header">
+        <h2>🧠 Learned Rules</h2>
+        <button class="btn-clear-rules" id="clearAllRulesBtn">🗑 Clear All Rules</button>
+      </div>
+      <div class="rules-list" id="rulesList">
+        <p class="empty">No rules learned yet. The bot will learn from losing trades...</p>
+      </div>
+    </section>
+
+    <!-- ═══ LEARNING BOARDS ═══ -->
     <section class="learning-section">
       <div class="learning-boards">
-        <!-- Simulation Learning Progress -->
         <div class="learning-board">
           <h2>🧪 Simulation Learning</h2>
           <div class="learning-card simulation-card">
@@ -136,7 +400,6 @@
           </div>
         </div>
 
-        <!-- Mainnet Learning Progress -->
         <div class="learning-board">
           <h2>🔥 Mainnet Learning</h2>
           <div class="learning-card mainnet-card">
@@ -166,7 +429,7 @@
       </div>
     </section>
 
-    <!-- Agent Live Logs -->
+    <!-- ═══ AGENT LIVE LOGS ═══ -->
     <section class="agent-logs-section">
       <h2>🖥️ Agent Live Logs</h2>
       <div class="terminal-card">
@@ -182,7 +445,7 @@
       </div>
     </section>
 
-    <!-- Simulation Status -->
+    <!-- ═══ SIMULATION STATUS ═══ -->
     <section class="simulation-section">
       <h2>🧪 Simulation Readiness</h2>
       <div class="simulation-grid">
@@ -214,7 +477,7 @@
       <div class="sim-reasons" id="simReasons"></div>
     </section>
 
-    <!-- Simulation Trades -->
+    <!-- ═══ SIMULATION TRADES ═══ -->
     <section class="sim-trades-section">
       <h2>🧪 Recent Simulation Trades</h2>
       <div class="sim-trades-list" id="simTradesList">
@@ -222,7 +485,7 @@
       </div>
     </section>
 
-    <!-- Circuit Breaker Status -->
+    <!-- ═══ CIRCUIT BREAKER ═══ -->
     <section class="cb-section">
       <h2>🛡️ Circuit Breaker</h2>
       <div class="cb-card" id="cbCard">
@@ -234,7 +497,7 @@
       </div>
     </section>
 
-    <!-- Active Positions -->
+    <!-- ═══ ACTIVE POSITIONS ═══ -->
     <section class="positions-section">
       <h2>📌 Active Positions (<span id="activeCount">0</span>)</h2>
       <div class="positions-list" id="positionsList">
@@ -242,7 +505,7 @@
       </div>
     </section>
 
-    <!-- Trade History with Confidence Scores -->
+    <!-- ═══ TRADE HISTORY ═══ -->
     <section class="trade-history-section">
       <h2>📊 Recent Trades (Last 10)</h2>
       <div class="trade-history-list" id="tradeHistoryList">
@@ -250,16 +513,16 @@
       </div>
     </section>
 
-    <!-- Pattern Recognition -->
+    <!-- ═══ PATTERN RECOGNITION (legacy) ═══ -->
     <section class="patterns-section">
-      <h2>🧠 Learned Trading Patterns</h2>
+      <h2>🔍 Trading Pattern Stats</h2>
       <div class="patterns-grid" id="patternsGrid">
         <p class="loading">No patterns learned yet...</p>
       </div>
     </section>
 
     <footer>
-      <p>Last update: <span id="lastUpdate">--</span></p>
+      <p>Last update: <span id="lastUpdateFooter">--</span></p>
       <p class="auto-refresh">Auto-refresh every 5 seconds</p>
     </footer>
   </div>

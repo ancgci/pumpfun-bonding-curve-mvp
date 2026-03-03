@@ -24,6 +24,9 @@ const AGENT_TRADES_FILE = path.join(__dirname, "../data/agent/trades.json");
 const PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
 const SENT_ADDRESSES_FILE = path.join(__dirname, "../sent_addresses.json");
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
+const TRADING_CONFIG_FILE = path.join(__dirname, "../data/trading-config.json");
+const EMERGENCY_STOP_FILE = path.join(__dirname, "../data/emergency-stop.json");
+const PROTOCOL_CONFIG_FILE = path.join(__dirname, "../data/protocol-config.json");
 
 /**
  * GET /api/stats - Estatísticas gerais
@@ -439,6 +442,288 @@ function loadAgentStatus() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════
+// NEW CONTROL ENDPOINTS
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/trading-config - Ler configurações de trading atuais
+ */
+app.get("/api/trading-config", (req, res) => {
+    try {
+        const defaults = {
+            buyAmountSol: parseFloat(process.env.BUY_AMOUNT_SOL || "0.01"),
+            takeProfitPercent: parseFloat(process.env.TAKE_PROFIT_PERCENT || "100"),
+            stopLossPercent: parseFloat(process.env.STOP_LOSS_PERCENT || "30"),
+            slippageBps: parseInt(process.env.SLIPPAGE_BPS || "300"),
+            agentMinConfidence: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
+            jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
+            autoBuyEnabled: process.env.AUTO_BUY_ENABLED === "true",
+            singleTradeMode: process.env.SINGLE_TRADE_MODE === "true",
+        };
+
+        let saved: any = {};
+        if (fs.existsSync(TRADING_CONFIG_FILE)) {
+            saved = JSON.parse(fs.readFileSync(TRADING_CONFIG_FILE, "utf-8"));
+        }
+        res.json({ ...defaults, ...saved });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/trading-config - Salvar configurações de trading
+ */
+app.post("/api/trading-config", (req, res) => {
+    try {
+        const {
+            buyAmountSol,
+            takeProfitPercent,
+            stopLossPercent,
+            slippageBps,
+            agentMinConfidence,
+            jitoTipAmount,
+            autoBuyEnabled,
+            singleTradeMode,
+            autoSellTakeProfit,
+            autoSellStopLoss,
+            sellPercentOnTp,
+        } = req.body;
+
+        // Validações de segurança
+        if (buyAmountSol !== undefined && (buyAmountSol < 0.001 || buyAmountSol > 10)) {
+            return res.status(400).json({ error: "buyAmountSol must be between 0.001 and 10 SOL" });
+        }
+        if (agentMinConfidence !== undefined && (agentMinConfidence < 50 || agentMinConfidence > 99)) {
+            return res.status(400).json({ error: "agentMinConfidence must be between 50 and 99" });
+        }
+
+        const existing = fs.existsSync(TRADING_CONFIG_FILE)
+            ? JSON.parse(fs.readFileSync(TRADING_CONFIG_FILE, "utf-8"))
+            : {};
+
+        const updated = {
+            ...existing,
+            ...(buyAmountSol !== undefined && { buyAmountSol }),
+            ...(takeProfitPercent !== undefined && { takeProfitPercent }),
+            ...(stopLossPercent !== undefined && { stopLossPercent }),
+            ...(slippageBps !== undefined && { slippageBps }),
+            ...(agentMinConfidence !== undefined && { agentMinConfidence }),
+            ...(jitoTipAmount !== undefined && { jitoTipAmount }),
+            ...(autoBuyEnabled !== undefined && { autoBuyEnabled }),
+            ...(singleTradeMode !== undefined && { singleTradeMode }),
+            ...(autoSellTakeProfit !== undefined && { autoSellTakeProfit }),
+            ...(autoSellStopLoss !== undefined && { autoSellStopLoss }),
+            ...(sellPercentOnTp !== undefined && { sellPercentOnTp }),
+            updatedAt: new Date().toISOString(),
+        };
+
+        // Garantir que o diretório existe
+        const dir = path.dirname(TRADING_CONFIG_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        fs.writeFileSync(TRADING_CONFIG_FILE, JSON.stringify(updated, null, 2));
+        res.json({ success: true, config: updated });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/cb-reset - Resetar Circuit Breaker manualmente
+ */
+app.post("/api/cb-reset", (req, res) => {
+    try {
+        const resetState = {
+            isTripped: false,
+            tripReason: null,
+            dailyLossSol: 0,
+            consecutiveFailures: 0,
+            lastResetTime: Date.now(),
+            manualReset: true,
+            manualResetAt: new Date().toISOString(),
+        };
+        fs.writeFileSync(CB_STATE_FILE, JSON.stringify(resetState, null, 2));
+        res.json({ success: true, message: "Circuit Breaker reset successfully" });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/emergency-stop - Parada de emergência total
+ */
+app.post("/api/emergency-stop", (req, res) => {
+    try {
+        const { active } = req.body;
+        const stopState = {
+            active: active !== false, // default: ativar
+            triggeredAt: new Date().toISOString(),
+            reason: req.body.reason || "Manual emergency stop from dashboard",
+        };
+
+        const dir = path.dirname(EMERGENCY_STOP_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        fs.writeFileSync(EMERGENCY_STOP_FILE, JSON.stringify(stopState, null, 2));
+
+        // Também tripa o circuit breaker
+        if (stopState.active) {
+            const cbState = {
+                isTripped: true,
+                tripReason: "EMERGENCY_STOP: Manual stop via dashboard",
+                dailyLossSol: 0,
+                consecutiveFailures: 0,
+                lastResetTime: Date.now(),
+            };
+            fs.writeFileSync(CB_STATE_FILE, JSON.stringify(cbState, null, 2));
+        }
+
+        res.json({ success: true, emergencyStop: stopState });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/emergency-stop - Status da parada de emergência
+ */
+app.get("/api/emergency-stop", (req, res) => {
+    try {
+        if (!fs.existsSync(EMERGENCY_STOP_FILE)) {
+            return res.json({ active: false });
+        }
+        const data = JSON.parse(fs.readFileSync(EMERGENCY_STOP_FILE, "utf-8"));
+        res.json(data);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/protocol-config - Configuração de protocolos ativos
+ */
+app.get("/api/protocol-config", (req, res) => {
+    try {
+        const defaults = {
+            PUMPFUN: true,
+            METEORA_DBC: process.env.METEORA_DBC_MONITORING_ENABLED !== "false",
+            BONK_FUN: process.env.BONK_FUN_MONITORING_ENABLED !== "false",
+            DAOS_FUN: process.env.DAOS_FUN_MONITORING_ENABLED !== "false",
+            MOONSHOT: process.env.MOONSHOT_MONITORING_ENABLED !== "false",
+        };
+
+        if (fs.existsSync(PROTOCOL_CONFIG_FILE)) {
+            const saved = JSON.parse(fs.readFileSync(PROTOCOL_CONFIG_FILE, "utf-8"));
+            return res.json({ ...defaults, ...saved });
+        }
+        res.json(defaults);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/protocol-config - Atualizar protocolos ativos
+ * MERGE with existing saved state — does NOT overwrite other protocols
+ */
+app.post("/api/protocol-config", (req, res) => {
+    try {
+        const dir = path.dirname(PROTOCOL_CONFIG_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        // Read EXISTING saved state first (so we don't lose other protocol settings)
+        let existing: any = {};
+        if (fs.existsSync(PROTOCOL_CONFIG_FILE)) {
+            try {
+                existing = JSON.parse(fs.readFileSync(PROTOCOL_CONFIG_FILE, "utf-8"));
+            } catch { existing = {}; }
+        }
+
+        const allowed = ["PUMPFUN", "METEORA_DBC", "BONK_FUN", "DAOS_FUN", "MOONSHOT"];
+        // Only update the keys that were explicitly sent in this request
+        const update: any = { ...existing };
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                update[key] = Boolean(req.body[key]);
+            }
+        }
+        update.updatedAt = new Date().toISOString();
+
+        fs.writeFileSync(PROTOCOL_CONFIG_FILE, JSON.stringify(update, null, 2));
+        res.json({ success: true, config: update });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/agent/patterns/:index - Remover regra aprendida específica
+ */
+app.delete("/api/agent/patterns/:index", (req, res) => {
+    try {
+        const idx = parseInt(req.params.index);
+        if (!fs.existsSync(PATTERNS_FILE)) {
+            return res.status(404).json({ error: "Patterns file not found" });
+        }
+        const patterns = JSON.parse(fs.readFileSync(PATTERNS_FILE, "utf-8"));
+        if (idx < 0 || idx >= patterns.length) {
+            return res.status(400).json({ error: "Invalid pattern index" });
+        }
+        const removed = patterns.splice(idx, 1);
+        fs.writeFileSync(PATTERNS_FILE, JSON.stringify(patterns, null, 2));
+        res.json({ success: true, removed: removed[0], remaining: patterns.length });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/agent/patterns - Limpar todas as regras aprendidas
+ */
+app.delete("/api/agent/patterns", (req, res) => {
+    try {
+        fs.writeFileSync(PATTERNS_FILE, JSON.stringify([], null, 2));
+        res.json({ success: true, message: "All learned patterns cleared" });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/bot-health - Status de saúde geral do bot
+ */
+app.get("/api/bot-health", (req, res) => {
+    try {
+        const cbState = loadCBState();
+        const agentStatus = loadAgentStatus();
+        const emergencyStop = fs.existsSync(EMERGENCY_STOP_FILE)
+            ? JSON.parse(fs.readFileSync(EMERGENCY_STOP_FILE, "utf-8"))
+            : { active: false };
+
+        const positions = loadPositions();
+        const activePositions = positions.filter((p: any) => p.isActive);
+
+        res.json({
+            status: (
+                emergencyStop.active ? "EMERGENCY_STOP" :
+                    cbState.isTripped ? "CIRCUIT_BREAKER_TRIPPED" :
+                        agentStatus.rateLimited ? "RATE_LIMITED" :
+                            "OPERATIONAL"
+            ),
+            emergencyStop: emergencyStop.active || false,
+            circuitBreakerTripped: cbState.isTripped || false,
+            rateLimited: agentStatus.rateLimited || false,
+            activePositions: activePositions.length,
+            uptimeSince: process.uptime(),
+            timestamp: new Date().toISOString(),
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
     console.log(`✅ Dashboard server rodando em http://localhost:${PORT}`);
@@ -451,4 +736,9 @@ app.listen(PORT, () => {
     console.log(`   - http://localhost:${PORT}/api/agent/patterns`);
     console.log(`   - http://localhost:${PORT}/api/simulation/status`);
     console.log(`   - http://localhost:${PORT}/api/simulation/trades`);
+    console.log(`   - http://localhost:${PORT}/api/trading-config (GET/POST)`);
+    console.log(`   - http://localhost:${PORT}/api/cb-reset (POST)`);
+    console.log(`   - http://localhost:${PORT}/api/emergency-stop (GET/POST)`);
+    console.log(`   - http://localhost:${PORT}/api/protocol-config (GET/POST)`);
+    console.log(`   - http://localhost:${PORT}/api/bot-health`);
 });

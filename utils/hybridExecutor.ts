@@ -25,6 +25,7 @@ import { analyzeToken } from "./riskEngine";
 import { RISK_CONFIG } from "./riskConfig";
 import { positionManager } from "./positionManager";
 import type { Position } from "./positionManager";
+import { getRuntimeConfig } from "./config";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -58,40 +59,17 @@ logger.info(`SECRET_KEY_JSON present: ${!!process.env.SECRET_KEY_JSON}`);
 logger.info(`PUMPFUN_PROGRAM_ID: ${process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}`);
 logger.info(`RPC configured: ${!!process.env.RPC_URL}`);
 
-const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+// Configurações do ambiente inicial (carregadas dinamicamente agora)
 const PUMPFUN_PROGRAM_ID = new PublicKey(process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
-const BUY_AMOUNT_SOL = parseFloat(process.env.BUY_AMOUNT_SOL || "0.1");
-const TAKE_PROFIT_PERCENT = parseFloat(process.env.TAKE_PROFIT_PERCENT || "20");
-const STOP_LOSS_PERCENT = parseFloat(process.env.STOP_LOSS_PERCENT || "25");
-const DEFAULT_SLIPPAGE_BPS = parseInt(process.env.SLIPPAGE_BPS || "50"); // Fallback se slippage adaptativo falhar
-// Exportar a variável para testes
-export { STOP_LOSS_PERCENT };
-// Para testes, podemos forçar a ativação da compra automática
-// Para testes, podemos forçar a ativação da compra automática
-// Configuração para controle de compra automática
-const AUTO_BUY_ENABLED = process.env.AUTO_BUY_ENABLED === "true";
-logger.info(`AUTO_BUY_ENABLED value: ${AUTO_BUY_ENABLED}`);
-const AUTO_SELL_TAKE_PROFIT = process.env.AUTO_SELL_TAKE_PROFIT !== "false";
-const AUTO_SELL_STOP_LOSS = process.env.AUTO_SELL_STOP_LOSS !== "false";
-const SELL_PERCENT_ON_TP = parseInt(process.env.SELL_PERCENT_ON_TP || "100", 10); // Padrão: 100% (vende tudo)
-
-// Nova configuração para controle de trades simultâneos
-const SINGLE_TRADE_MODE = process.env.SINGLE_TRADE_MODE === "true";
-
-// Nova configuração para filtro de tipo de trade
-const TRADE_TYPE_FILTER = process.env.TRADE_TYPE_FILTER || "BOTH"; // "BUY", "SELL", ou "BOTH"
-
-// OTIMIZAÇÃO: Usar RPC Pool em vez de conexão única
-// Conexão legada (mantida como fallback)
-const legacyConnection = new Connection(RPC_URL, "confirmed");
 
 // Função helper para obter conexão otimizada
 async function getConnection(): Promise<Connection> {
+  const currentConfig = getRuntimeConfig();
   try {
     return await rpcPool.getBestConnection();
   } catch (error: any) {
     logger.warn("⚠️  RPC Pool falhou, usando conexão legada:", error.message);
-    return legacyConnection;
+    return new Connection(currentConfig.RPC_URL, "confirmed");
   }
 }
 
@@ -129,22 +107,22 @@ async function getTokenPrice(tokenMint: string): Promise<PriceInfo | null> {
     const connection = await getConnection();
     const mintPublicKey = new PublicKey(tokenMint);
     const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, keypair!.publicKey);
-    
+
     const accountInfo = await connection.getParsedAccountInfo(userTokenAccount);
     if (!accountInfo.value || !accountInfo.value.data) {
       return null;
     }
-    
+
     const data = accountInfo.value.data as any;
     const tokenAmount = data.parsed?.info?.tokenAmount?.amount;
     if (!tokenAmount || tokenAmount === "0") {
       return null;
     }
-    
+
     const balance = await connection.getBalance(mintPublicKey);
     const solBalance = balance / 1e9;
     const pricePerToken = solBalance / (parseInt(tokenAmount) / 1e9);
-    
+
     return {
       pricePerToken,
       pricePerTokenExceeds: parseInt(tokenAmount)
@@ -164,7 +142,7 @@ function checkTakeProfitStopLoss(
   const profitLossPercent = ((currentPrice - buyPrice) / buyPrice) * 100;
   const shouldTakeProfit = profitLossPercent >= takeProfitPercent;
   const shouldStopLoss = profitLossPercent <= -stopLossPercent;
-  
+
   return { shouldTakeProfit, shouldStopLoss, profitLossPercent };
 }
 // Load wallet
@@ -199,7 +177,8 @@ let activeTrade: boolean = false;
  * @returns true se há um trade ativo, false caso contrário
  */
 export function hasActiveTrade(): boolean {
-  if (!SINGLE_TRADE_MODE) {
+  const currentConfig = getRuntimeConfig();
+  if (!currentConfig.SINGLE_TRADE_MODE) {
     return false; // Se o modo single trade não estiver habilitado, permitir múltiplos trades
   }
 
@@ -214,6 +193,9 @@ export function hasActiveTrade(): boolean {
  * @returns true se o tipo de trade é permitido, false caso contrário
  */
 export function isTradeTypeAllowed(tradeType: string): boolean {
+  const currentConfig = getRuntimeConfig();
+  const TRADE_TYPE_FILTER = currentConfig.TRADE_TYPE_FILTER || "BOTH";
+
   if (TRADE_TYPE_FILTER === "BOTH") {
     return true; // Permitir ambos os tipos
   }
@@ -267,6 +249,8 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
     );
 
     // OTIMIZAÇÃO: Slippage adaptativo baseado na liquidez do token
+    const currentConfig = getRuntimeConfig();
+    const DEFAULT_SLIPPAGE_BPS = currentConfig.SLIPPAGE_BPS || 50;
     const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
     const maxSolCost = Math.floor(amountLamports * (1 + slippageBps / 10000));
 
@@ -357,8 +341,11 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
   logger.info(`📉 Iniciando venda do token ${tokenMint} na PumpFun`);
 
   try {
-    // OT IMIZAÇÃO: Obter conexão do pool de RPCs
+    // OTIMIZAÇÃO: Obter conexão do pool de RPCs
     const connection = await getConnection();
+
+    const currentConfig = getRuntimeConfig();
+    const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
 
     // Calcular quantidade parcial baseado no SELL_PERCENT_ON_TP
     const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
@@ -400,7 +387,7 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
       keypair.publicKey
     );
 
-    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
     const slippageMultiplier = 1 - (slippageBps / 10000);
     const minSolOutput = Math.floor(amount * slippageMultiplier);
 
@@ -491,6 +478,9 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
   logger.info(`🔁 Iniciando venda do token ${tokenMint} via Jupiter`);
 
   try {
+    const currentConfig = getRuntimeConfig();
+    const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
+
     // Calcular quantidade parcial baseado no SELL_PERCENT_ON_TP
     const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
     const amountToSell = Math.floor(amountToken * sellPercentDecimal);
@@ -515,7 +505,7 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
 
     // Obter cotação da Jupiter API (token -> SOL)
     const connection = await getConnection();
-    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
 
     const quote = await withRetry(async () => {
       recordApiCall();
@@ -617,7 +607,24 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
  * @param tradeType Tipo de trade ("BUY" ou "SELL")
  */
 export async function executeHybridTrade(tokenData: TokenData, tradeType: string = "BUY"): Promise<void> {
+  const currentConfig = getRuntimeConfig();
+
+  // 🚨 EMERGENCY STOP CHECK 🚨
+  if ((currentConfig as any).EMERGENCY_STOP_ACTIVE) {
+    logger.warn("🛑 [EXECUTOR] EMERGENCY STOP ATIVO! Bloqueando execução do trade.");
+    return;
+  }
+
   try {
+    logger.info(`🔄 Executando trade híbrido para token ${tokenData.mint} (Tipo: ${tradeType})`);
+
+    // Usar configurações do runtime config
+    const BUY_AMOUNT_SOL = currentConfig.BUY_AMOUNT_SOL;
+    const AUTO_BUY_ENABLED = currentConfig.AUTO_BUY_ENABLED;
+    const SINGLE_TRADE_MODE = currentConfig.SINGLE_TRADE_MODE;
+    const TRADE_TYPE_FILTER = currentConfig.TRADE_TYPE_FILTER;
+    const TAKE_PROFIT_PERCENT = currentConfig.TAKE_PROFIT_PERCENT;
+    const STOP_LOSS_PERCENT = currentConfig.STOP_LOSS_PERCENT;
     logger.info(`🔄 Executando trade híbrido para token ${tokenData.mint} (Tipo: ${tradeType})`);
 
     // Verificar se a compra automática está habilitada
@@ -715,7 +722,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
       const position = positionManager.getPosition(tokenData.mint);
       if (position && position.isActive && position.buyTokenAmount > 0) {
         const priceInfo = await getTokenPrice(tokenData.mint);
-        
+
         if (!priceInfo) {
           logger.debug(`Nao foi possivel obter preco para ${tokenData.mint}, pulando verificacao TP/SL`);
           return;
@@ -723,7 +730,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
 
         const currentPrice = priceInfo.pricePerToken;
         const buyPrice = position.buySolAmount / (position.buyTokenAmount / 1e9);
-        
+
         const { shouldTakeProfit, shouldStopLoss, profitLossPercent } = checkTakeProfitStopLoss(
           currentPrice,
           buyPrice,
@@ -739,7 +746,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
         logger.info(`   Take Profit configurado: ${position.takeProfit}%`);
         logger.info(`   Stop Loss configurado: -${position.stopLoss}%`);
 
-        if (shouldTakeProfit && AUTO_SELL_TAKE_PROFIT) {
+        if (shouldTakeProfit && (currentConfig.AUTO_SELL_TAKE_PROFIT !== false)) {
           logger.info(`📈 TAKE PROFIT ACIONADO para token ${tokenData.mint}`);
           logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
           logger.info(`   Lucro esperado: ${position.takeProfit}%`);
@@ -755,7 +762,7 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
             position.isActive = false;
             logger.info(`✅ Posição fechada via Jupiter: ${signature}`);
           }
-        } else if (shouldStopLoss && AUTO_SELL_STOP_LOSS) {
+        } else if (shouldStopLoss && (currentConfig.AUTO_SELL_STOP_LOSS !== false)) {
           logger.info(`📉 STOP LOSS ACIONADO para token ${tokenData.mint}`);
           logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
           logger.info(`   Prejuízo esperado: -${position.stopLoss}%`);

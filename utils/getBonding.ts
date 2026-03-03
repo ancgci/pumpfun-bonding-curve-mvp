@@ -1,10 +1,17 @@
 import { PublicKey } from "@solana/web3.js";
 import { rpcPool } from "./rpcPool";
 import logger from "./logger";
+import Bottleneck from "bottleneck";
+
+// Rate limiter: max 5 concurrent RPC calls, 200ms between each
+const rpcLimiter = new Bottleneck({
+  maxConcurrent: 5,
+  minTime: 200,
+});
 
 // Cache to avoid flooding the RPC with repeated calls to the same bonding curve
 const bondingCache: Map<string, { balance: number; ts: number }> = new Map();
-const BONDING_CACHE_TTL_MS = 15_000; // 15 seconds
+const BONDING_CACHE_TTL_MS = 30_000; // 30 seconds
 
 export async function getBondingCurveAddress(bondingCurve: string) {
   // Check cache first
@@ -14,20 +21,26 @@ export async function getBondingCurveAddress(bondingCurve: string) {
   }
 
   try {
-    const result = await rpcPool.executeWithFallback(async (connection) => {
-      const address = new PublicKey(bondingCurve);
-      const systemOwner = await connection.getAccountInfo(address);
-      if (systemOwner) {
-        const solBalance = systemOwner.lamports;
-        return Number((solBalance / 1000000000).toFixed(2));
-      }
-      return 0;
-    }, 3);
+    const result = await rpcLimiter.schedule(() =>
+      rpcPool.executeWithFallback(async (connection) => {
+        const address = new PublicKey(bondingCurve);
+        const systemOwner = await connection.getAccountInfo(address);
+        if (systemOwner) {
+          const solBalance = systemOwner.lamports;
+          return Number((solBalance / 1000000000).toFixed(2));
+        }
+        return 0;
+      }, 2) // Only 2 attempts to reduce cascading failures
+    );
 
     bondingCache.set(bondingCurve, { balance: result, ts: Date.now() });
     return result;
   } catch (error: any) {
-    logger.debug(`⚠️ getBondingCurveAddress failed for ${bondingCurve.substring(0, 8)}...: ${error.message}`);
+    // Return stale cache if available (better than 0)
+    if (cached) {
+      return cached.balance;
+    }
+    logger.debug(`⚠️ getBondingCurveAddress failed for ${bondingCurve.substring(0, 8)}...`);
     return 0;
   }
 }
