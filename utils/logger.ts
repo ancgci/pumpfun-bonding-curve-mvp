@@ -47,19 +47,17 @@ const logger = winston.createLogger({
   ]
 });
 
-// Se não estiver em produção, também loga no console
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.timestamp({
-        format: 'YYYY-MM-DD HH:mm:ss'
-      }),
-      winston.format.printf(({ level, message, timestamp }) => {
-        return `${timestamp} ${level}: ${message}`;
-      })
-    )
-  }));
-}
+// Sempre loga no console para que o usuário veja a execução
+logger.add(new winston.transports.Console({
+  format: winston.format.combine(
+    winston.format.colorize(),
+    winston.format.timestamp({
+      format: 'YYYY-MM-DD HH:mm:ss'
+    }),
+    winston.format.printf(({ level, message, timestamp }) => {
+      return `${timestamp} ${level}: ${message}`;
+    })
+  )
+}));
 
 export default logger;

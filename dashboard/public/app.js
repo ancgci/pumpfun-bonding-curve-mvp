@@ -75,6 +75,7 @@ async function fetchPatterns() {
 async function toggleAgent() {
   try {
     await fetch(`${API_BASE}/agent/toggle`, { method: 'POST' });
+    setTimeout(fetchAgentStats, 500);
   } catch (err) {
     console.error('Error toggling agent', err);
   }
@@ -83,6 +84,7 @@ async function toggleAgent() {
 async function toggleMode() {
   try {
     await fetch(`${API_BASE}/agent/mode`, { method: 'POST' });
+    setTimeout(fetchAgentStats, 500);
   } catch (err) {
     console.error('Error toggling mode', err);
   }
@@ -180,6 +182,22 @@ function updateAgentStatus(data) {
     agentConfidence.textContent = `${(data.confidence || 0).toFixed(1)}%`;
     agentLearning.textContent = data.learningEnabled ? '✅ Enabled' : '❌ Disabled';
 
+    // Update Form Controls (Premium Toggles)
+    const toggleAgentCheckbox = document.getElementById('toggleAgentCheckbox');
+    const toggleAgentLabel = document.getElementById('toggleAgentLabel');
+    if (toggleAgentCheckbox) {
+      toggleAgentCheckbox.checked = data.enabled;
+      toggleAgentLabel.textContent = data.enabled ? 'ON' : 'OFF';
+    }
+
+    const toggleModeCheckbox = document.getElementById('toggleModeCheckbox');
+    const toggleModeLabel = document.getElementById('toggleModeLabel');
+    if (toggleModeCheckbox) {
+      const isLive = data.mode === 'LIVE';
+      toggleModeCheckbox.checked = isLive;
+      toggleModeLabel.textContent = isLive ? 'LIVE' : 'SIMULATION';
+    }
+
     const rateLimitBadge = document.getElementById('agentRateLimit');
     if (data.rateLimited) {
       rateLimitBadge.textContent = 'LLM RATE LIMITED';
@@ -189,24 +207,48 @@ function updateAgentStatus(data) {
       rateLimitBadge.classList.remove('rate-limited');
     }
 
-    // Update Learning Progress
-    const progressPercent = document.getElementById('progressPercent');
-    const progressFill = document.getElementById('progressFill');
-    const tradesAnalyzed = document.getElementById('tradesAnalyzed');
-    const winRateImprovement = document.getElementById('winRateImprovement');
-    const nextOptimization = document.getElementById('nextOptimization');
+    // Update Simulation Learning Progress
+    if (data.simulation) {
+      const simProgressPercent = document.getElementById('simProgressPercent');
+      const simProgressFill = document.getElementById('simProgressFill');
+      const simTradesAnalyzed = document.getElementById('simTradesAnalyzed');
+      const simWinRateImprovement = document.getElementById('simWinRateImprovement');
+      const simNextOptimization = document.getElementById('simNextOptimization');
 
-    const progress = (data.tradesAnalyzed / (data.tradesRequired || 50)) * 100;
-    progressPercent.textContent = `${Math.min(progress, 100).toFixed(0)}%`;
-    progressFill.style.width = `${Math.min(progress, 100)}%`;
-    progressFill.textContent = `${Math.min(progress, 100).toFixed(0)}%`;
-    tradesAnalyzed.textContent = `${data.tradesAnalyzed}/${data.tradesRequired || 50}`;
-    winRateImprovement.textContent = `+${(data.winRateImprovement || 0).toFixed(1)}%`;
-    
-    if (data.nextOptimization) {
-      nextOptimization.textContent = data.nextOptimization;
-    } else {
-      nextOptimization.textContent = 'Ready';
+      const simProgress = (data.simulation.tradesAnalyzed / (data.simulation.tradesRequired || 50)) * 100;
+      simProgressPercent.textContent = `${Math.min(simProgress, 100).toFixed(0)}%`;
+      simProgressFill.style.width = `${Math.min(simProgress, 100)}%`;
+      simProgressFill.textContent = `${Math.min(simProgress, 100).toFixed(0)}%`;
+      simTradesAnalyzed.textContent = `${data.simulation.tradesAnalyzed}/${data.simulation.tradesRequired || 50}`;
+      simWinRateImprovement.textContent = `+${(data.simulation.winRateImprovement || 0).toFixed(1)}%`;
+
+      if (data.simulation.nextOptimization) {
+        simNextOptimization.textContent = data.simulation.nextOptimization;
+      } else {
+        simNextOptimization.textContent = 'Ready';
+      }
+    }
+
+    // Update Mainnet Learning Progress
+    if (data.mainnet) {
+      const mainnetProgressPercent = document.getElementById('mainnetProgressPercent');
+      const mainnetProgressFill = document.getElementById('mainnetProgressFill');
+      const mainnetTradesAnalyzed = document.getElementById('mainnetTradesAnalyzed');
+      const mainnetWinRateImprovement = document.getElementById('mainnetWinRateImprovement');
+      const mainnetNextOptimization = document.getElementById('mainnetNextOptimization');
+
+      const mainnetProgress = (data.mainnet.tradesAnalyzed / (data.mainnet.tradesRequired || 50)) * 100;
+      mainnetProgressPercent.textContent = `${Math.min(mainnetProgress, 100).toFixed(0)}%`;
+      mainnetProgressFill.style.width = `${Math.min(mainnetProgress, 100)}%`;
+      mainnetProgressFill.textContent = `${Math.min(mainnetProgress, 100).toFixed(0)}%`;
+      mainnetTradesAnalyzed.textContent = `${data.mainnet.tradesAnalyzed}/${data.mainnet.tradesRequired || 50}`;
+      mainnetWinRateImprovement.textContent = `+${(data.mainnet.winRateImprovement || 0).toFixed(1)}%`;
+
+      if (data.mainnet.nextOptimization) {
+        mainnetNextOptimization.textContent = data.mainnet.nextOptimization;
+      } else {
+        mainnetNextOptimization.textContent = 'Ready';
+      }
     }
   }
 }
@@ -222,7 +264,7 @@ function updateTradeHistory(trades) {
   tradeHistoryList.innerHTML = trades.slice(0, 10).map(trade => {
     const isProfitable = trade.pnl >= 0;
     const confidenceLevel = trade.confidence >= 75 ? 'high' : trade.confidence >= 50 ? 'medium' : 'low';
-    
+
     return `
       <div class="trade-card ${isProfitable ? 'profit' : 'loss'}">
         <div class="trade-info">
@@ -333,6 +375,45 @@ function updateTimestamp() {
   document.getElementById('lastUpdate').textContent = now.toLocaleTimeString('en-US');
 }
 
+let lastLogCount = 0;
+async function fetchAgentLogs() {
+  try {
+    const response = await fetch(`${API_BASE}/agent/logs`);
+    const logs = await response.json();
+
+    if (!Array.isArray(logs)) return;
+
+    const container = document.getElementById('agentLogsContainer');
+
+    // Only update if the number of logs changed or if it's the first load
+    if (logs.length !== lastLogCount && container) {
+      if (logs.length === 0) {
+        container.innerHTML = '<div class="loading">No agent activity logged yet...</div>';
+      } else {
+        container.innerHTML = logs.map(log => {
+          let msgClass = 'log-msg';
+          if (log.message && (log.message.includes('SKIP') || log.message.includes('ALLOW'))) {
+            msgClass += ' highlight';
+          }
+          const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+          return `
+            <div class="log-line">
+              <span class="log-time">[${timeStr}]</span>
+              <span class="log-level ${log.level}">${log.level}</span>
+              <span class="${msgClass}">${log.message}</span>
+            </div>
+          `;
+        }).join('');
+        // scroll to bottom
+        container.scrollTop = container.scrollHeight;
+      }
+      lastLogCount = logs.length;
+    }
+  } catch (error) {
+    console.error('Error fetching agent logs:', error);
+  }
+}
+
 // Auto refresh
 function refreshAll() {
   fetchStats();
@@ -347,10 +428,14 @@ function refreshAll() {
 
 // Initial load
 refreshAll();
+fetchAgentLogs();
 
-// Auto-refresh every 5 seconds
+// Auto-refresh stats every 5 seconds
 setInterval(refreshAll, 5000);
 
+// Auto-refresh agent logs every 2 seconds for a "live terminal" feel
+setInterval(fetchAgentLogs, 2000);
+
 // wire buttons
-document.getElementById('btnToggleAgent')?.addEventListener('click', toggleAgent);
-document.getElementById('btnToggleMode')?.addEventListener('click', toggleMode);
+document.getElementById('toggleAgentCheckbox')?.addEventListener('change', toggleAgent);
+document.getElementById('toggleModeCheckbox')?.addEventListener('change', toggleMode);

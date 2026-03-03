@@ -22,6 +22,7 @@ import { calculateCurveProgress } from "./utils/curveConstants";
 import { alertQueue } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade } from "./utils/agentOrchestrator";
 import { recordPriceSample } from "./utils/volatilityMonitor";
+import { runLearningCycle } from "./utils/learnerAgent";
 import { CONFIG, validateConfig } from "./utils/config";
 import logger from "./utils/logger";
 
@@ -47,12 +48,12 @@ if (validation.warnings && validation.warnings.length > 0) {
   validation.warnings.forEach(warn => logger.warn(`  - ${warn}`));
 }
 
-const { 
+const {
   SHYFT_GRPC,
   GRPC_URL,
   GRPC_TOKEN,
-  TELEGRAM_BOT_TOKEN: token, 
-  TELEGRAM_CHAT_ID: chatId, 
+  TELEGRAM_BOT_TOKEN: token,
+  TELEGRAM_CHAT_ID: chatId,
   ALERT_THRESHOLD,
   MONITORING_PROTOCOL,
   METEORA_DBC_MONITORING_ENABLED,
@@ -175,7 +176,7 @@ const limiter = new Bottleneck({
 // Send message via alert queue (async, non-blocking)
 function sendMessage(message: string) {
   const useQueue = process.env.ALERT_QUEUE_ENABLED !== "false";
-  
+
   if (useQueue) {
     alertQueue.enqueue(message, 'normal');
     logger.debug("Message added to alert queue");
@@ -595,18 +596,18 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     // ── AI Agent orchestration (SIM/LIVE) ──
     const agentEnabled = process.env.AGENT_ENABLED === "true";
     if (agentEnabled) {
-    const tokenAnalysis: any = {
-      mint: tOutput.mint,
-      symbol: tokenMetadata?.symbol || "UNK",
-      price: Number(currentPrice) || 0,
-      bondingCurvePercent: Number(progress),
-      holders: riskAnalysis?.metrics?.totalHolders ?? 0,
-      volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
-      liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
-      riskScore: riskAnalysis?.score ?? 0,
-      honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
-      volWindows: undefined, // preenchido no orchestrator
-    };
+      const tokenAnalysis: any = {
+        mint: tOutput.mint,
+        symbol: tokenMetadata?.symbol || "UNK",
+        price: Number(currentPrice) || 0,
+        bondingCurvePercent: Number(progress),
+        holders: riskAnalysis?.metrics?.totalHolders ?? 0,
+        volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
+        liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+        riskScore: riskAnalysis?.score ?? 0,
+        honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
+        volWindows: undefined, // preenchido no orchestrator
+      };
 
       try {
         const decision = await getAgentDecision(tokenAnalysis);
@@ -1590,7 +1591,7 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 10;
   const baseDelay = 1000;
-  
+
   while (true) {
     try {
       reconnectAttempts = 0;
@@ -1598,9 +1599,9 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
     } catch (error: any) {
       reconnectAttempts++;
       const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts), 30000);
-      
+
       logger.error(`⚠️ Stream error (tentativa ${reconnectAttempts}/${maxReconnectAttempts}), reconnecting em ${delay}ms...`, error.message || error);
-      
+
       if (reconnectAttempts >= maxReconnectAttempts) {
         logger.error("❌ Max reconnect attempts reached, waiting 60s before restart...");
         await new Promise((resolve) => setTimeout(resolve, 60000));
@@ -1794,6 +1795,24 @@ setInterval(async () => {
     logger.error("❌ Erro ao enviar relatório de status:", error.message);
   }
 }, 3600000); // 1 hora
+
+// Learner Agent: run self-reflection cycle every hour
+setInterval(async () => {
+  try {
+    await runLearningCycle();
+  } catch (error: any) {
+    logger.error(`❌ [LearnerAgent] Cycle error: ${error.message}`);
+  }
+}, 3600000); // 1 hora
+
+// Run first learning cycle 30 seconds after boot
+setTimeout(async () => {
+  try {
+    await runLearningCycle();
+  } catch (error: any) {
+    logger.error(`❌ [LearnerAgent] Initial cycle error: ${error.message}`);
+  }
+}, 30000);
 
 // Testar o envio imediatamente ao iniciar
 setTimeout(async () => {

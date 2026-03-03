@@ -104,6 +104,100 @@ Status detalhado do Circuit Breaker.
 
 ---
 
+### GET `/api/agent/stats`
+
+Retorna status e métricas do agente de IA.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "mode": "SIMULATION",
+  "confidence": 82.5,
+  "learningEnabled": true,
+  "simulation": {
+    "tradesAnalyzed": 34,
+    "tradesRequired": 50,
+    "winRateImprovement": 12.5,
+    "nextOptimization": "16 trades remaining"
+  },
+  "mainnet": {
+    "tradesAnalyzed": 0,
+    "tradesRequired": 50,
+    "winRateImprovement": 0,
+    "nextOptimization": null
+  },
+  "rateLimited": false
+}
+```
+
+---
+
+### GET `/api/agent/trades`
+
+Historical de trades do agente (ultimos 20).
+
+**Response:**
+```json
+[
+  {
+    "token": "CATDOG",
+    "timestamp": "14:28:15",
+    "entryPrice": 0.00000123,
+    "exitPrice": 0.00000185,
+    "pnl": 0.0234,
+    "confidence": 85,
+    "status": "CLOSED_TP"
+  }
+]
+```
+
+---
+
+### GET `/api/agent/patterns`
+
+Padrões aprendidos pelo agente (regras de ouro).
+
+**Response:**
+```json
+[
+  {
+    "name": "Skip tokens with liquidity below 3 SOL",
+    "accuracy": 0,
+    "count": 0,
+    "avgProfit": 0
+  }
+]
+```
+
+---
+
+### GET `/api/agent/logs`
+
+Logs em tempo real do agente (filtrados do Winston).
+
+**Response:**
+```json
+[
+  {
+    "timestamp": "2026-03-02 14:28:04",
+    "level": "info",
+    "message": "🔍 [RiskEngine] Analisando token 4uozP91B..."
+  },
+  {
+    "timestamp": "2026-03-02 14:28:15",
+    "level": "info",
+    "message": "✅ [RiskEngine] Token 4uozP91B... → Score: 25/100 (ALLOW_TRADE)"
+  }
+]
+```
+
+**Notas:**
+- Retorna as últimas 60 linhas filtradas por `[Agent]` ou `[RiskEngine]`
+- Polling recomendado: a cada 2 segundos
+
+---
+
 ## Erros
 
 Todos os endpoints retornam erro 500 em caso de falha:

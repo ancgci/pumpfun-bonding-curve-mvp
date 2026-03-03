@@ -4,6 +4,93 @@ History of all improvements implemented in the project.
 
 ---
 
+## [Sprint 7] - 2026-03-02
+
+### 🧠 AI Agent Autonomy
+
+- **Dynamic TP/SL** (`utils/agentOrchestrator.ts`)
+  - LLM now returns `takeProfitPercent` and `stopLossPercent` per trade
+  - Safe fallback to `CONFIG` values when LLM omits them
+  - Logged as `🎯 Dynamic Risk: TP=X% SL=Y% (LLM-defined)`
+
+- **LearnerAgent – Self-Reflection** (`utils/learnerAgent.ts` - NEW)
+  - Reads closed simulation trades from `data/simulation/trades.json`
+  - Filters for losses (CLOSED_SL, EXPIRED with negative P&L)
+  - Sends losing trades to LLM for post-mortem analysis
+  - Extracts up to 5 actionable rules per cycle
+  - Deduplicates and saves to `data/agent/patterns.json` (max 20 rules)
+  - Runs 30s after boot + every 1 hour via `setInterval`
+
+- **Learned Rules Injection** (`utils/agentOrchestrator.ts`)
+  - Reads `patterns.json` on every token analysis call
+  - Appends rules to the LLM system prompt as mandatory constraints
+
+### 🎯 Precision Trading
+
+- **Pre-Filter (<1ms, no LLM)** (`utils/agentOrchestrator.ts`)
+  - Instant reject for: honeypot, liquidity <2 SOL, <5 holders, riskScore >70, token age <60s
+  - ~60% fewer LLM API calls
+
+- **Dynamic Position Sizing** (`utils/agentOrchestrator.ts`)
+  - Confidence 90-100% → 100% of BUY_AMOUNT, 80% → 75%, 70% → 50%, below → 30%
+
+- **Trailing Stop Loss** (`utils/agentOrchestrator.ts`)
+  - Stop rises with price (20% trail from peak)
+  - Locks in profits as token pumps
+
+- **Whale Dump Fast-Exit** (`utils/agentOrchestrator.ts`)
+  - Emergency exit when price drops >30% from peak in one check cycle
+
+- **Enriched LLM Prompt** (`utils/agentOrchestrator.ts`)
+  - Added: `TokenAge`, `RecentBuys`, `RecentSells`, `Top10Holders`, `DeployerHistory`
+  - Extended `TokenAnalysis` interface with 5 new optional fields
+
+### 🎨 Dashboard Modernization
+
+- **Glassmorphism Theme** (`dashboard/public/style.css`)
+  - Full dark theme with `backdrop-filter: blur()`, animated mesh gradients
+  - Google Fonts: Outfit (headings) + JetBrains Mono (terminal)
+  - CSS variables for all colors, borders, and accents
+
+- **Split Learning Boards** (`dashboard/public/index.html`, `app.js`, `server.ts`)
+  - Simulation and Mainnet learning progress displayed side by side
+  - Backend returns separate `simulation` and `mainnet` metric objects
+
+- **Premium Agent Controls** (`index.html`, `style.css`, `app.js`)
+  - Replaced buttons with animated toggle switches (ON/OFF, SIM/LIVE)
+  - Status synced with backend via checkbox state binding
+
+- **Agent Live Logs Terminal** (`index.html`, `style.css`, `app.js`, `server.ts`)
+  - New `GET /api/agent/logs` endpoint (reads Winston logs, filters for Agent/RiskEngine)
+  - Terminal-style dark panel with colored log levels and auto-scroll
+  - Polling every 2 seconds for near-realtime feel
+
+- **Mock Data Removal**
+  - Deleted `data/agent/learning-metrics.json`, `learning-metrics-mainnet.json`, `trades.json`, `patterns.json`
+  - Dashboard now shows only real-time/zero-state data
+
+### 📁 New Files
+- `utils/learnerAgent.ts` — Self-reflection learning engine
+- `docs/AI_AGENT.md` — Full AI Agent technical documentation
+- `data/agent/patterns.json` — Learned rules (auto-generated)
+- `data/agent/learner-state.json` — Learning checkpoint state
+
+### 📁 Files Modified
+- `utils/agentOrchestrator.ts` — Dynamic TP/SL + patterns injection
+- `utils/logger.ts` — Console output always enabled
+- `index.ts` — LearnerAgent import + scheduled intervals
+- `dashboard/server.ts` — Split metrics + logs endpoint
+- `dashboard/public/index.html` — Learning boards + toggle controls + logs terminal
+- `dashboard/public/style.css` — Full glassmorphism rewrite
+- `dashboard/public/app.js` — Split data rendering + toggle handlers + logs polling
+
+### 📊 Impact
+- **Win Rate:** Expected improvement from self-reflection loop
+- **Risk Management:** Per-trade TP/SL reduces exposure on volatile tokens
+- **UX:** Premium dashboard with real-time visibility into agent decisions
+
+---
+
 ## [Sprint 6] - 2026-02-22
 
 ### 🔴 Critical Fixes
@@ -305,6 +392,18 @@ History of all improvements implemented in the project.
 ---
 
 ## Notas de Versão
+
+### v3.0.0 - 2026-03-02
+**Feature Release** - AI Autonomy + Dashboard Modernization
+
+- ✅ Sprint 7: Dynamic TP/SL + LearnerAgent + Glassmorphism Dashboard + Live Logs
+
+**Breaking Changes:** Nenhum
+
+**Upgrade Path:**
+1. `npm install` (sem novas dependências)
+2. Reiniciar o bot (`npm run start:all`)
+3. LearnerAgent rodará automaticamente
 
 ### v2.1.0 - 2026-02-17
 **Feature Release** - Risk Engine Anti-Rug

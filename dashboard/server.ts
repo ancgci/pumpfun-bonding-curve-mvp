@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import { exec } from "child_process";
 import { getSimulationMetrics, getRecentTrades, isSimulationReadyForLive } from "../utils/simulationEngine";
 import { CONFIG } from "../utils/config";
 
@@ -18,6 +19,7 @@ const POSITIONS_FILE = path.join(__dirname, "../data/positions.json");
 const CB_STATE_FILE = path.join(__dirname, "../circuit_breaker_state.json");
 const AGENT_CONFIG_FILE = path.join(__dirname, "../data/agent/config.json");
 const LEARNING_METRICS_FILE = path.join(__dirname, "../data/agent/learning-metrics.json");
+const MAINNET_METRICS_FILE = path.join(__dirname, "../data/agent/learning-metrics-mainnet.json");
 const AGENT_TRADES_FILE = path.join(__dirname, "../data/agent/trades.json");
 const PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
 const SENT_ADDRESSES_FILE = path.join(__dirname, "../sent_addresses.json");
@@ -100,17 +102,26 @@ app.get("/api/agent/stats", (req, res) => {
     try {
         const agentConfig = loadAgentConfig();
         const learningMetrics = loadLearningMetrics();
+        const mainnetMetrics = loadMainnetLearningMetrics();
         const agentStatus = loadAgentStatus();
-        
+
         res.json({
             enabled: agentConfig.enabled || false,
             mode: agentConfig.mode || "SIMULATION",
             confidence: agentConfig.confidence || 0,
             learningEnabled: agentConfig.learningEnabled || false,
-            tradesAnalyzed: learningMetrics.tradesAnalyzed || 0,
-            tradesRequired: learningMetrics.tradesRequired || 50,
-            winRateImprovement: learningMetrics.winRateImprovement || 0,
-            nextOptimization: learningMetrics.nextOptimization || null,
+            simulation: {
+                tradesAnalyzed: learningMetrics.tradesAnalyzed || 0,
+                tradesRequired: learningMetrics.tradesRequired || 50,
+                winRateImprovement: learningMetrics.winRateImprovement || 0,
+                nextOptimization: learningMetrics.nextOptimization || null,
+            },
+            mainnet: {
+                tradesAnalyzed: mainnetMetrics.tradesAnalyzed || 0,
+                tradesRequired: mainnetMetrics.tradesRequired || 50,
+                winRateImprovement: mainnetMetrics.winRateImprovement || 0,
+                nextOptimization: mainnetMetrics.nextOptimization || null,
+            },
             rateLimited: agentStatus.rateLimited || false,
             rateLimitAt: agentStatus.at || null,
             rateLimitReason: agentStatus.reason || null,
@@ -126,7 +137,7 @@ app.get("/api/agent/stats", (req, res) => {
 app.get("/api/agent/trades", (req, res) => {
     try {
         const trades = loadAgentTrades();
-        
+
         res.json(trades.slice(0, 20).map(trade => ({
             token: trade.token || "Unknown",
             timestamp: formatTimestamp(trade.timestamp),
@@ -142,12 +153,46 @@ app.get("/api/agent/trades", (req, res) => {
 });
 
 /**
+ * GET /api/agent/logs - Live agent console logs  
+ */
+app.get("/api/agent/logs", (req, res) => {
+    try {
+        const logsDir = path.join(__dirname, "../logs");
+        // Escapa e executa grep seguro; não falha por pipe com maxBuffer alto.
+        const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]" $(ls -tr ${logsDir}/combined*.log 2>/dev/null) | tail -n 60`;
+        exec(cmd, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+            if (error) {
+                // error code 1 in grep means no lines matched, which is fine = empty.
+                if (error.code === 1) return res.json([]);
+                return res.status(500).json({ error: "Failed to read logs: " + error.message });
+            }
+            const rawLines = stdout.trim().split('\n').filter(Boolean);
+            const parsedLogs = rawLines.map(line => {
+                try {
+                    const parsed = JSON.parse(line);
+                    return {
+                        timestamp: parsed.timestamp || new Date().toISOString(),
+                        level: parsed.level || 'info',
+                        message: parsed.message || line
+                    };
+                } catch {
+                    return { timestamp: new Date().toISOString(), level: 'info', message: line };
+                }
+            });
+            res.json(parsedLogs);
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
  * GET /api/agent/patterns - Padrões aprendidos pelo agente
  */
 app.get("/api/agent/patterns", (req, res) => {
     try {
         const patterns = loadLearnedPatterns();
-        
+
         res.json(patterns.map(pattern => ({
             name: pattern.name || "Pattern",
             accuracy: pattern.accuracy || 0,
@@ -274,7 +319,7 @@ function formatTimestamp(timestamp: number | string): string {
         const now = new Date();
         const diffMs = now.getTime() - date.getTime();
         const diffMins = Math.floor(diffMs / 60000);
-        
+
         if (diffMins < 1) return 'Just now';
         if (diffMins < 60) return `${diffMins}m ago`;
         const diffHours = Math.floor(diffMins / 60);
@@ -323,6 +368,29 @@ function loadLearningMetrics() {
         return JSON.parse(data);
     } catch (error) {
         console.error("Erro ao carregar métricas de learning:", error);
+        return {
+            tradesAnalyzed: 0,
+            tradesRequired: 50,
+            winRateImprovement: 0,
+            nextOptimization: null,
+        };
+    }
+}
+
+function loadMainnetLearningMetrics() {
+    try {
+        if (!fs.existsSync(MAINNET_METRICS_FILE)) {
+            return {
+                tradesAnalyzed: 0,
+                tradesRequired: 50,
+                winRateImprovement: 0,
+                nextOptimization: null,
+            };
+        }
+        const data = fs.readFileSync(MAINNET_METRICS_FILE, "utf-8");
+        return JSON.parse(data);
+    } catch (error) {
+        console.error("Erro ao carregar métricas de learning mainnet:", error);
         return {
             tradesAnalyzed: 0,
             tradesRequired: 50,

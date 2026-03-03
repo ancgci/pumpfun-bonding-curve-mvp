@@ -12,6 +12,7 @@ import {
 import { recordPriceSample, getVolatility } from "./volatilityMonitor";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
+const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
 const DECISION_CACHE_TTL_MS = 60_000;
 const LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const LLM_MODEL = process.env.LLM_MODEL || "moonshotai/kimi-k2.5";
@@ -34,12 +35,33 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     .map(v => `${v.windowSec}s:${v.pctChange !== null ? v.pctChange.toFixed(2) + "%" : "n/a"}`)
     .join(", ");
 
+  // Load learned patterns from past trade analysis
+  let learnedRules = "";
+  try {
+    if (fs.existsSync(LEARNED_PATTERNS_FILE)) {
+      const patterns = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, "utf-8"));
+      if (Array.isArray(patterns) && patterns.length > 0) {
+        const rulesList = patterns
+          .filter((p: any) => p.rule)
+          .map((p: any, i: number) => `${i + 1}. ${p.rule}`)
+          .join("\n");
+        if (rulesList) {
+          learnedRules = `\n\nIMPORTANT – These are rules you learned from past mistakes. ALWAYS obey them:\n${rulesList}`;
+        }
+      }
+    }
+  } catch (err) {
+    logger.debug(`⚠️  Could not load learned patterns: ${(err as any).message}`);
+  }
+
   const sysPrompt = [
     "You are a high-frequency Solana memecoin trading agent.",
-    "Return JSON ONLY. No conversational text. No markdown. Output ONLY valid JSON in this exact format: {\"action\":\"BUY\"|\"SKIP\",\"confidence\":0-100,\"reason\":\"short string\"}.",
+    `Return JSON ONLY. No conversational text. No markdown. Output ONLY valid JSON in this exact format: {"action":"BUY"|"SKIP","confidence":0-100,"reason":"short string","takeProfitPercent":number,"stopLossPercent":number}.`,
+    "takeProfitPercent = how much % gain you recommend before selling (e.g. 150 for high-volatility, 30 for safer plays).",
+    "stopLossPercent = how much % loss before cutting the position (e.g. 15 for risky, 5 for safe).",
     "Prioritize risk controls: block if honeypotRisk true, low liquidity (<2 SOL), very young tokens, extreme drawdown.",
-    "Use confidence as probability of profitable scalp in next 1-3 minutes."
-  ].join(" ");
+    "Use confidence as probability of profitable scalp in next 1-3 minutes.",
+  ].join(" ") + learnedRules;
 
   const userPrompt = [
     `Token ${tokenAnalysis.symbol} (${tokenAnalysis.mint})`,
@@ -50,8 +72,14 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `Honeypot: ${tokenAnalysis.honeypotRisk}`,
-    `Volatility: ${volSummary || "n/a"}`
-  ].join("\n");
+    `Volatility: ${volSummary || "n/a"}`,
+    // Enriched data for better decisions
+    tokenAnalysis.tokenAgeSec !== undefined ? `TokenAge: ${tokenAnalysis.tokenAgeSec}s` : null,
+    tokenAnalysis.buyCount !== undefined ? `RecentBuys: ${tokenAnalysis.buyCount}` : null,
+    tokenAnalysis.sellCount !== undefined ? `RecentSells: ${tokenAnalysis.sellCount}` : null,
+    tokenAnalysis.top10HolderPct !== undefined ? `Top10Holders: ${tokenAnalysis.top10HolderPct}%` : null,
+    tokenAnalysis.deployerPrevTokens !== undefined ? `DeployerHistory: ${tokenAnalysis.deployerPrevTokens} previous tokens` : null,
+  ].filter(Boolean).join("\n");
 
   const payload = {
     model: LLM_MODEL,
@@ -94,14 +122,27 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       throw new Error(`LLM returned unparseable content: ${content.slice(0, 200)}`);
     }
 
+    // Parse dynamic TP/SL from LLM (fallback to CONFIG values)
+    const tpPercent = (typeof parsed.takeProfitPercent === "number" && parsed.takeProfitPercent > 0)
+      ? parsed.takeProfitPercent
+      : CONFIG.TAKE_PROFIT_PERCENT;
+    const slPercent = (typeof parsed.stopLossPercent === "number" && parsed.stopLossPercent > 0)
+      ? parsed.stopLossPercent
+      : CONFIG.STOP_LOSS_PERCENT;
+
     const decision: AgentDecision = {
       action: parsed.action === "BUY" ? "BUY" : "SKIP",
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
       reasoning: parsed.reason || content.slice(0, 200),
       entryPrice: tokenAnalysis.price,
-      takeProfit: tokenAnalysis.price * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100),
-      stopLoss: tokenAnalysis.price * (1 - CONFIG.STOP_LOSS_PERCENT / 100),
+      takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),
+      stopLoss: tokenAnalysis.price * (1 - slPercent / 100),
     };
+
+    if (decision.action === "BUY") {
+      logger.info(`[Agent] 🎯 Dynamic Risk: TP=${tpPercent}% SL=${slPercent}% (LLM-defined)`);
+    }
+
     return decision;
   } catch (err: any) {
     const status = err.response?.status;
@@ -151,6 +192,12 @@ interface TokenAnalysis {
   riskScore: number;
   honeypotRisk: boolean;
   volWindows?: { windowSec: number; pctChange: number | null; stdDev: number | null }[];
+  // Enriched fields (optional, populated when available)
+  tokenAgeSec?: number;        // seconds since token creation
+  buyCount?: number;           // recent buy transactions count
+  sellCount?: number;          // recent sell transactions count
+  top10HolderPct?: number;     // % of supply held by top 10 wallets
+  deployerPrevTokens?: number; // how many tokens deployer created before
 }
 
 /**
@@ -174,6 +221,36 @@ export async function getAgentDecision(
       confidence: 0,
       reasoning: "Agent disabled",
     };
+  }
+
+  // ══════════════════════════════════════════════════
+  // PRE-FILTER: Instant reject without LLM (< 1ms)
+  // Saves API calls and latency on obvious rejects
+  // Only rejects when RiskEngine data is ACTUALLY available
+  // ══════════════════════════════════════════════════
+  const hasRiskData = tokenAnalysis.liquiditySol > 0 || tokenAnalysis.holders > 0 || tokenAnalysis.riskScore > 0;
+
+  if (tokenAnalysis.honeypotRisk) {
+    logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: honeypot risk`);
+    return { action: "SKIP", confidence: 0, reasoning: "PreFilter: honeypot risk" };
+  }
+
+  if (hasRiskData) {
+    // Only apply data-dependent filters when we actually have data
+    if (tokenAnalysis.liquiditySol > 0 && tokenAnalysis.liquiditySol < 2) {
+      logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: liquidity ${tokenAnalysis.liquiditySol.toFixed(2)} SOL < 2 SOL`);
+      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: low liquidity" };
+    }
+    if (tokenAnalysis.holders > 0 && tokenAnalysis.holders < 5) {
+      logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: only ${tokenAnalysis.holders} holders`);
+      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: too few holders" };
+    }
+    if (tokenAnalysis.riskScore > 70) {
+      logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: riskScore ${tokenAnalysis.riskScore} > 70`);
+      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: high risk score" };
+    }
+  } else {
+    logger.info(`⚠️ [PreFilter] ${tokenAnalysis.symbol}: RiskEngine data unavailable, deferring to LLM`);
   }
 
   try {
@@ -238,6 +315,24 @@ export async function executeAgentTrade(
   );
   logger.info(`   Reasoning: ${decision.reasoning}`);
 
+  // ══════════════════════════════════════════════════
+  // DYNAMIC POSITION SIZING based on confidence
+  // Higher confidence = larger position, lower = smaller
+  // ══════════════════════════════════════════════════
+  const baseBuyAmount = CONFIG.BUY_AMOUNT_SOL || 0.05;
+  let positionMultiplier = 1.0;
+  if (decision.confidence >= 90) {
+    positionMultiplier = 1.0;   // 100% of BUY_AMOUNT
+  } else if (decision.confidence >= 80) {
+    positionMultiplier = 0.75;  // 75%
+  } else if (decision.confidence >= 70) {
+    positionMultiplier = 0.5;   // 50%
+  } else {
+    positionMultiplier = 0.3;   // 30% (safety net)
+  }
+  const adjustedBuyAmount = baseBuyAmount * positionMultiplier;
+  logger.info(`   💰 Position Size: ${adjustedBuyAmount.toFixed(4)} SOL (${(positionMultiplier * 100).toFixed(0)}% of ${baseBuyAmount} SOL)`);
+
   // record live price sample for volatility windows
   recordPriceSample(tokenAnalysis.mint, tokenAnalysis.price);
   tokenAnalysis.volWindows = getVolatility(tokenAnalysis.mint, [5, 15, 30, 60]);
@@ -291,21 +386,24 @@ function scheduleSimulationExit(
   const symbol = tokenAnalysis.symbol;
   const entryPrice = decision.entryPrice || tokenAnalysis.price;
   const tp = decision.takeProfit || entryPrice * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100);
-  const sl = decision.stopLoss || entryPrice * (1 - CONFIG.STOP_LOSS_PERCENT / 100);
+  let sl = decision.stopLoss || entryPrice * (1 - CONFIG.STOP_LOSS_PERCENT / 100);
+
+  // Trailing stop state
+  let highWaterMark = entryPrice;
+  const trailingPct = 0.20; // 20% trailing from peak
 
   logger.info(
-    `📈 [SIMULATION] Monitoring ${symbol} exit conditions: TP=${tp.toFixed(8)} SL=${sl.toFixed(8)}`
+    `📈 [SIMULATION] Monitoring ${symbol}: TP=${tp.toFixed(8)} SL=${sl.toFixed(8)} (trailing 20%)`
   );
 
   // Check every 10 seconds
   let checkCount = 0;
-  const maxChecks = 360; // 1 hour = 60 min * 60 sec / 10 sec
+  const maxChecks = 360; // 1 hour
 
   const exitCheckInterval = setInterval(async () => {
     checkCount++;
 
     try {
-      // Get current token price from DexScreener
       const currentPrice = await getCurrentTokenPrice(mint);
 
       if (!currentPrice) {
@@ -313,7 +411,36 @@ function scheduleSimulationExit(
         return;
       }
 
-      // Check exit conditions
+      // ══════════════════════════════════════════════════
+      // TRAILING STOP: Update stop loss as price rises
+      // ══════════════════════════════════════════════════
+      if (currentPrice > highWaterMark) {
+        highWaterMark = currentPrice;
+        const newTrailingSl = highWaterMark * (1 - trailingPct);
+        if (newTrailingSl > sl) {
+          const oldSl = sl;
+          sl = newTrailingSl;
+          logger.info(
+            `📈 [SIMULATION] ${symbol} Trailing SL raised: ${oldSl.toFixed(8)} → ${sl.toFixed(8)} (peak: ${highWaterMark.toFixed(8)})`
+          );
+        }
+      }
+
+      // ══════════════════════════════════════════════════
+      // WHALE DUMP DETECTION: Fast exit on sudden crash
+      // If price drops > 30% from high water mark in one check, exit immediately
+      // ══════════════════════════════════════════════════
+      const dropFromPeak = (highWaterMark - currentPrice) / highWaterMark;
+      if (dropFromPeak > 0.30) {
+        clearInterval(exitCheckInterval);
+        logger.info(
+          `🚨 [SIMULATION] ${symbol} WHALE DUMP DETECTED: -${(dropFromPeak * 100).toFixed(1)}% from peak! Emergency exit at ${currentPrice.toFixed(8)}`
+        );
+        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", "Whale dump emergency exit");
+        return;
+      }
+
+      // Check TP
       if (currentPrice >= tp) {
         clearInterval(exitCheckInterval);
         logger.info(
@@ -323,16 +450,18 @@ function scheduleSimulationExit(
         return;
       }
 
+      // Check SL (now uses trailing stop)
       if (currentPrice <= sl) {
         clearInterval(exitCheckInterval);
+        const reason = sl > (decision.stopLoss || 0) ? "Trailing Stop hit" : "Stop Loss hit";
         logger.info(
-          `📉 [SIMULATION] ${symbol} HIT STOP LOSS: ${currentPrice.toFixed(8)}`
+          `📉 [SIMULATION] ${symbol} HIT ${reason.toUpperCase()}: ${currentPrice.toFixed(8)}`
         );
-        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", "Stop Loss hit");
+        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", reason);
         return;
       }
 
-      // Timeout after 1 hour
+      // Timeout
       if (checkCount >= maxChecks) {
         clearInterval(exitCheckInterval);
         logger.info(`⏱️  [SIMULATION] ${symbol} EXPIRED (1 hour): exit at ${currentPrice.toFixed(8)}`);
@@ -342,7 +471,7 @@ function scheduleSimulationExit(
     } catch (error: any) {
       logger.debug(`Error checking exit for ${symbol}: ${error.message}`);
     }
-  }, 10000); // Check every 10 seconds
+  }, 10000);
 }
 
 /**

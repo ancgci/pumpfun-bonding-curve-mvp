@@ -11,7 +11,9 @@ All project documentation is in the `/docs` folder:
 - **[USAGE](docs/USAGE.md)** - Complete usage guide
 - **[CONFIGURATION](docs/CONFIGURATION.md)** - Environment variables reference
 - **[RISK_ENGINE](docs/RISK_ENGINE.md)** - Anti-rug filters, risk score and tuning
+- **[AI_AGENT](docs/AI_AGENT.md)** - AI Agent architecture, learning loop, and precision trading
 - **[API](docs/API.md)** - Dashboard API documentation
+- **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard UI guide
 - **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
 
 ## 🚀 Quick Start
@@ -46,7 +48,62 @@ npm start
 npm run start:dashboard
 ```
 
-## 🆕 Recent Changes (Feb 26, 2026)
+## 🆕 Latest Changes (Mar 2, 2026)
+
+### 🧠 AI Agent Autonomy Upgrades
+
+| Feature | Description |
+|---------|-------------|
+| **Dynamic TP/SL** | LLM now defines Take Profit and Stop Loss per trade based on volatility analysis |
+| **LearnerAgent (Self-Reflection)** | New module that analyzes losing trades and extracts "golden rules" via LLM |
+| **Learned Rules Injection** | Rules from past mistakes are automatically injected into the agent's system prompt |
+| **Hourly Learning Cycle** | LearnerAgent runs every hour + 30s after boot |
+
+**How Self-Reflection Works:**
+```
+1. Bot closes trades (TP, SL, or timeout)
+2. LearnerAgent reads all losing trades
+3. Sends losses to LLM: "Why did these fail?"
+4. LLM returns rules: ["Skip tokens with <2 SOL liquidity", ...]
+5. Rules saved to data/agent/patterns.json
+6. Next trade: rules injected into system prompt
+7. Agent avoids same mistakes → Higher win rate
+```
+
+**New Files:**
+- `utils/learnerAgent.ts` — Self-reflection engine
+- `data/agent/patterns.json` — Learned rules (auto-generated)
+- `data/agent/learner-state.json` — Learning checkpoint
+
+### 🎨 Dashboard Modernization
+
+| Feature | Description |
+|---------|-------------|
+| **Glassmorphism Theme** | Premium dark UI with `backdrop-filter: blur()`, animated gradients |
+| **Google Fonts** | Outfit (UI) + JetBrains Mono (code/logs) |
+| **Split Learning Boards** | Separate Simulation and Mainnet learning progress panels |
+| **Premium Toggle Controls** | Animated toggle switches for Agent ON/OFF and SIM/LIVE mode |
+| **Agent Live Logs Terminal** | Real-time scrolling terminal showing RiskEngine and Agent activity |
+| **Micro-animations** | Hover effects, smooth transitions, card glow on interaction |
+
+**New Dashboard Endpoints:**
+- `GET /api/agent/logs` — Live agent logs (filtered from Winston)
+
+### 🎯 Precision Trading Upgrades
+
+| Feature | Description |
+|---------|-------------|
+| **Pre-Filter (<1ms)** | Instant reject without LLM: honeypot, low liquidity, few holders, high risk, young tokens |
+| **Dynamic Position Sizing** | Trade size scales with confidence: 90%+ → 100%, 80% → 75%, 70% → 50% |
+| **Trailing Stop Loss** | Stop rises with price (20% trailing from peak), locking in profits automatically |
+| **Whale Dump Fast-Exit** | Emergency exit when price crashes >30% from peak in one check |
+| **Enriched LLM Prompt** | Token age, buy/sell ratio, top 10 holder concentration, deployer history |
+
+**See:** [AI_AGENT.md](docs/AI_AGENT.md) for full technical documentation.
+
+---
+
+## 🔵 Previous Changes (Feb 26, 2026)
 
 ### 🔵 Jito Endpoint Auto-Selection
 
@@ -175,7 +232,10 @@ RPC_URL_FALLBACK_4=https://public.api.rpc.solana
 
 ## ✨ Features
 
-- ✅ **AI Agent** - Intelligent trading with Gemini/OpenAI/Anthropic
+- ✅ **AI Agent** - Intelligent trading with Qwen3/Gemini/OpenAI/Anthropic
+- ✅ **Dynamic TP/SL** - LLM decides Take Profit and Stop Loss per trade
+- ✅ **LearnerAgent** - Self-reflection loop: learns from losses, generates rules
+- ✅ **Learned Rules Injection** - Past mistakes feed into future decisions
 - ✅ **Learning System** - Self-optimizing strategy after 50 trades
 - ✅ **Jito Auto-Selection** - Lowest latency endpoint automatically
 - ✅ **Precise Multi-Dex Parser** - Accurate IDL mapping for Jupiter, Raydium, Meteora
@@ -184,7 +244,10 @@ RPC_URL_FALLBACK_4=https://public.api.rpc.solana
 - ✅ **RPC Pool with Failover** - 99.9% uptime with 5 endpoints
 - ✅ **Dynamic Gas Pricing** - 50-70% savings
 - ✅ **Adaptive Slippage** - +25% success rate
-- ✅ **Web Dashboard** - Visual monitoring with AI agent stats
+- ✅ **Glassmorphism Dashboard** - Premium dark UI with animations and live logs
+- ✅ **Split Learning Boards** - Simulation vs Mainnet metrics side by side
+- ✅ **Premium Agent Controls** - Toggle switches for Agent and Trading Mode
+- ✅ **Agent Live Logs** - Real-time terminal in the dashboard
 - ✅ **Backtester CLI** - Safe optimization
 - ✅ **Risk Engine** - Anti-rug score 0–100 with 5 filters + post-curve monitor
 - ✅ **Alert Queue** - Async, prioritized, with retry
