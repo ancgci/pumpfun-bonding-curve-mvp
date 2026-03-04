@@ -538,7 +538,11 @@ function updateTradeHistory(trades) {
     return `
       <div class="trade-card ${isProfitable ? 'profit' : 'loss'}">
         <div class="trade-info">
-          <div class="trade-token">${trade.token}</div>
+          <div class="trade-token">
+            <a href="https://pump.fun/${trade.mint || trade.token}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
+              ${trade.token}
+            </a>
+          </div>
           <div class="trade-meta">${trade.timestamp} · Entry: ${trade.entryPrice.toFixed(8)}</div>
         </div>
         <div class="trade-metrics">
@@ -615,7 +619,11 @@ function updateSimulationTrades(trades) {
     return `
       <div class="sim-trade-card ${isWin ? 'profit' : 'loss'}">
         <div class="sim-trade-header">
-          <div class="sim-trade-token">${t.tokenSymbol} · ${t.tokenMint.substring(0, 6)}...</div>
+          <div class="sim-trade-token">
+            <a href="https://pump.fun/${t.tokenMint}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
+              ${t.tokenSymbol} · ${t.tokenMint.substring(0, 6)}...
+            </a>
+          </div>
           <div class="sim-trade-status">${t.status}</div>
         </div>
         <div class="sim-trade-body">

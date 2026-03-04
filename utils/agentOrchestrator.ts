@@ -27,6 +27,35 @@ const llmLimiter = new Bottleneck({
 type CachedDecision = { decision: AgentDecision; ts: number };
 const decisionCache: Map<string, CachedDecision> = new Map();
 
+/**
+ * Extract the first valid JSON object from a string that may contain
+ * conversational text mixed with JSON. Handles nested braces correctly.
+ */
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
 async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
   if (!LLM_API_KEY) {
     throw new Error("NV_LLM_API_KEY not set");
@@ -58,10 +87,12 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
   // ── Base system prompt (strategy details come from Skills) ──
   const basePrompt = [
     "You are an AI trading agent for Solana tokens. Follow the skill instructions provided below.",
-    `Return JSON ONLY. No conversational text. No markdown. Output ONLY valid JSON in this exact format: {"action":"BUY"|"SKIP","confidence":0-100,"reason":"short string","takeProfitPercent":number,"stopLossPercent":number}.`,
-    "takeProfitPercent = how much % gain you recommend before selling.",
-    "stopLossPercent = how much % loss before cutting the position.",
+    `CRITICAL: Your response must be RAW JSON ONLY. Do NOT explain your reasoning. Do NOT write any text before or after the JSON. Do NOT use markdown code blocks. Output EXACTLY one JSON object in this format: {"action":"BUY","confidence":85,"reason":"strong momentum","takeProfitPercent":100,"stopLossPercent":15}`,
+    "The only valid values for action are \"BUY\" or \"SKIP\".",
+    "confidence must be 0-100. reason must be a short string.",
+    "takeProfitPercent = % gain before selling. stopLossPercent = % loss before cutting.",
     "Use confidence as probability of a profitable trade.",
+    "RESPOND WITH ONLY THE JSON OBJECT. NOTHING ELSE.",
   ].join(" ");
 
   // ── Inject active skills into system prompt ──
@@ -109,23 +140,37 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        timeout: 15000,
+        timeout: 20000,
       }
     );
 
     const data: any = resp.data;
     // Kimi K2.5 returns content=null with JSON inside reasoning_content
     const message = data?.choices?.[0]?.message;
-    const content = (message?.content || message?.reasoning_content || message?.reasoning || "").trim();
-    let parsed: any;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      const match = content.match(/\{[^}]+\}/);
-      parsed = match ? JSON.parse(match[0]) : null;
+    const rawContent = (message?.content || "").trim();
+    const rawReasoning = (message?.reasoning_content || message?.reasoning || "").trim();
+
+    // Try to extract JSON from content first, then reasoning_content
+    let parsed: any = null;
+    for (const text of [rawContent, rawReasoning]) {
+      if (!text) continue;
+      // Direct parse
+      try {
+        parsed = JSON.parse(text);
+        if (parsed?.action) break;
+      } catch { }
+      // Extract JSON object with balanced braces
+      const jsonStr = extractJsonObject(text);
+      if (jsonStr) {
+        try {
+          parsed = JSON.parse(jsonStr);
+          if (parsed?.action) break;
+        } catch { }
+      }
     }
+
     if (!parsed || !parsed.action) {
-      throw new Error(`LLM returned unparseable content: ${content.slice(0, 200)}`);
+      throw new Error(`LLM returned unparseable content: ${(rawContent || rawReasoning).slice(0, 200)}`);
     }
 
     // Parse dynamic TP/SL from LLM (fallback to CONFIG values)
@@ -139,7 +184,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     const decision: AgentDecision = {
       action: parsed.action === "BUY" ? "BUY" : "SKIP",
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
-      reasoning: parsed.reason || content.slice(0, 200),
+      reasoning: parsed.reason || (rawContent || rawReasoning).slice(0, 200),
       entryPrice: tokenAnalysis.price,
       takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),
       stopLoss: tokenAnalysis.price * (1 - slPercent / 100),
