@@ -1,4 +1,6 @@
 const API_BASE = 'http://localhost:3001/api';
+let plChart;
+let socket;
 
 // ════════════════════════════════════════════════════════
 // API HELPERS
@@ -28,10 +30,17 @@ function showToast(msg, type = 'success') {
 // FETCH FUNCTIONS
 // ════════════════════════════════════════════════════════
 async function fetchStats() {
+  // If socket is connected, we don't need regular polling for stats
+  if (socket && socket.connected) return;
+
   try {
     const data = await apiFetch(`${API_BASE}/stats`);
     updateStats(data);
-  } catch (e) { console.error('Error fetching stats:', e); }
+
+    // Fetch real P&L history
+    const history = await apiFetch(`${API_BASE}/pl-history`);
+    updatePLChart(history);
+  } catch (e) { console.error('Error fetching stats/history:', e); }
 }
 
 async function fetchPositions() {
@@ -389,10 +398,10 @@ function updateLearnedRules(patterns) {
 }
 
 function updateStats(data) {
-  document.getElementById('totalInvested').textContent = `${data.totalInvested} SOL`;
-  document.getElementById('winRate').textContent = `${data.winRate}%`;
-  document.getElementById('wins').textContent = data.wins;
-  document.getElementById('losses').textContent = data.losses;
+  animateValue('totalInvested', data.totalInvested, ' SOL');
+  animateValue('winRate', data.winRate, '%');
+  animateValue('wins', data.wins);
+  animateValue('losses', data.losses);
 
   // Circuit Breaker
   const cbCard = document.getElementById('cbCard');
@@ -611,27 +620,46 @@ function updateSimulationStatus(data) {
 function updateSimulationTrades(trades) {
   const list = document.getElementById('simTradesList');
   if (!trades || trades.length === 0) {
-    list.innerHTML = '<p class="empty">No simulation trades yet</p>';
+    list.innerHTML = '<p class="empty">No simulation trades yet. Start the bot to see simulation trades here.</p>';
     return;
   }
   list.innerHTML = trades.map(t => {
     const isWin = t.pnl > 0;
+    const timeStr = t.entryTime ? new Date(t.entryTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '---';
+    const statusClass = t.status === 'OPEN' ? 'status-open' : (isWin ? 'status-win' : 'status-loss');
+
     return `
-      <div class="sim-trade-card ${isWin ? 'profit' : 'loss'}">
+      <div class="sim-trade-card ${isWin ? 'profit' : 'loss'} ${t.status === 'OPEN' ? 'open' : ''}">
         <div class="sim-trade-header">
           <div class="sim-trade-token">
-            <a href="https://pump.fun/${t.tokenMint}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
-              ${t.tokenSymbol} · ${t.tokenMint.substring(0, 6)}...
+            <a href="https://solscan.io/token/${t.tokenMint}" target="_blank" rel="noopener noreferrer" class="mint-link">
+              ${t.tokenSymbol || 'Unknown'} <span class="mint-mini">${t.tokenMint.substring(0, 4)}...</span>
             </a>
           </div>
-          <div class="sim-trade-status">${t.status}</div>
+          <div class="sim-status-badge ${statusClass}">${t.status}</div>
         </div>
-        <div class="sim-trade-body">
-          <div>Entry: ${t.entryPrice?.toFixed ? t.entryPrice.toFixed(8) : t.entryPrice}</div>
-          <div>Exit: ${t.exitPrice?.toFixed ? t.exitPrice.toFixed(8) : t.exitPrice}</div>
-          <div>Confidence: ${t.confidence}%</div>
+        <div class="sim-trade-info-grid">
+          <div class="info-item">
+            <span class="info-label">Entry</span>
+            <span class="info-value">${t.entryPrice?.toFixed ? t.entryPrice.toFixed(8) : t.entryPrice}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Exit/Current</span>
+            <span class="info-value">${t.exitPrice?.toFixed ? t.exitPrice.toFixed(8) : (t.exitPrice || '---')}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Confidence</span>
+            <span class="info-value">${t.confidence}%</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Time</span>
+            <span class="info-value">${timeStr}</span>
+          </div>
         </div>
-        <div class="sim-trade-pnl">${isWin ? '+' : ''}${t.pnl?.toFixed ? t.pnl.toFixed(4) : t.pnl} SOL (${t.pnlPercent?.toFixed ? t.pnlPercent.toFixed(2) : t.pnlPercent}%)</div>
+        <div class="sim-trade-footer">
+           <div class="sim-pnl ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${t.pnl?.toFixed ? t.pnl.toFixed(4) : (t.pnl || 0)} SOL (${t.pnlPercent?.toFixed ? t.pnlPercent.toFixed(2) : (t.pnlPercent || 0)}%)</div>
+           <div class="sim-reason">${t.reason || ''}</div>
+        </div>
       </div>
     `;
   }).join('');
@@ -771,11 +799,159 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchLearnedRules();
 
   // Initial refresh
+  initPLChart();
+  initWebSocket();
   refreshAll();
   fetchAgentLogs();
 
-  // Auto-refresh
-  setInterval(refreshAll, 5000);
+  // Auto-refresh (Fallback)
+  setInterval(() => {
+    if (!socket || !socket.connected) {
+      refreshAll();
+    }
+  }, 5000);
   setInterval(fetchAgentLogs, 2000);
   setInterval(fetchLearnedRules, 15000);
 });
+
+// ════════════════════════════════════════════════════════
+// WEBSOCKET LOGIC
+// ════════════════════════════════════════════════════════
+function initWebSocket() {
+  // Note: In local dev with proxy, we might need absolute URL or relative
+  // /socket.io/ is usually served by the same server
+  socket = io();
+
+  socket.on('connect', () => {
+    console.log('🔌 Connected to WebSocket');
+    document.body.classList.add('ws-connected');
+  });
+
+  socket.on('disconnect', () => {
+    console.log('❌ Disconnected from WebSocket');
+    document.body.classList.remove('ws-connected');
+  });
+
+  socket.on('pnl-update', (data) => {
+    console.log('📉 Received P&L Update:', data);
+    if (data.stats) updateStats(data.stats);
+    if (data.plHistory) updatePLChart(data.plHistory);
+  });
+}
+
+// ════════════════════════════════════════════════════════
+// PROFESSIONAL CHART LOGIC
+// ════════════════════════════════════════════════════════
+function initPLChart() {
+  const ctx = document.getElementById('plChart').getContext('2d');
+
+  // Create gradient
+  const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+  gradient.addColorStop(0, 'rgba(0, 255, 150, 0.2)');
+  gradient.addColorStop(1, 'rgba(0, 255, 150, 0)');
+
+  plChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Cumulative P&L (SOL)',
+        data: [],
+        borderColor: '#00ff96',
+        borderWidth: 3,
+        backgroundColor: gradient,
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0,
+        pointHoverRadius: 6,
+        pointHoverBackgroundColor: '#00ff96',
+        pointHoverBorderColor: '#fff',
+        pointHoverBorderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: 'rgba(10, 11, 16, 0.9)',
+          titleColor: '#94a3b8',
+          bodyColor: '#fff',
+          borderColor: 'rgba(255, 255, 255, 0.1)',
+          borderWidth: 1,
+          padding: 12,
+          displayColors: false,
+          callbacks: {
+            label: function (context) {
+              return `P&L: ${context.parsed.y.toFixed(4)} SOL`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          display: false
+        },
+        y: {
+          grid: {
+            color: 'rgba(255, 255, 255, 0.05)',
+            drawBorder: false
+          },
+          ticks: {
+            color: '#94a3b8',
+            font: { size: 10 },
+            callback: (val) => val.toFixed(3)
+          }
+        }
+      }
+    }
+  });
+}
+
+function updatePLChart(data) {
+  if (!plChart || !data) return;
+  plChart.data.labels = data.timestamps;
+  plChart.data.datasets[0].data = data.plValues;
+
+  // Update color based on trend
+  const latest = data.plValues[data.plValues.length - 1] || 0;
+  const isProfit = latest >= 0;
+  const color = isProfit ? '#10b981' : '#ef4444';
+
+  plChart.data.datasets[0].borderColor = color;
+
+  // Update gradient based on profit/loss
+  const ctx = document.getElementById('plChart').getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+  gradient.addColorStop(0, isProfit ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)');
+  gradient.addColorStop(1, 'transparent');
+  plChart.data.datasets[0].backgroundColor = gradient;
+
+  plChart.update();
+}
+
+// Micro-animation helper
+function animateValue(id, end, suffix = '') {
+  const obj = document.getElementById(id);
+  if (!obj) return;
+  const start = parseFloat(obj.textContent.replace(/[^\d.-]/g, '')) || 0;
+  if (start === end) return;
+
+  const duration = 800;
+  let startTimestamp = null;
+  const step = (timestamp) => {
+    if (!startTimestamp) startTimestamp = timestamp;
+    const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+    const val = progress * (end - start) + start;
+    obj.textContent = (suffix.includes('SOL') ? val.toFixed(4) : val.toFixed(1)) + suffix;
+    if (progress < 1) {
+      window.requestAnimationFrame(step);
+    } else {
+      obj.textContent = end + suffix;
+    }
+  };
+  window.requestAnimationFrame(step);
+}

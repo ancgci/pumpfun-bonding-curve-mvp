@@ -2,6 +2,7 @@ import logger from "./logger";
 import { CONFIG } from "./config";
 import * as fs from "fs";
 import * as path from "path";
+import db from "./db";
 
 /**
  * SIMULATION ENGINE
@@ -82,7 +83,7 @@ export async function recordSimulatedTrade(
     reason: `AI Agent confidence: ${confidence}%`,
   };
 
-  // Load existing trades
+  // 1. JSON Persistence (Backup)
   let trades: SimulatedTrade[] = [];
   try {
     if (fs.existsSync(SIMULATION_TRADES_FILE)) {
@@ -94,13 +95,28 @@ export async function recordSimulatedTrade(
   }
 
   trades.push(trade);
+  if (trades.length > 1000) trades = trades.slice(-1000);
+  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
 
-  // Keep only last 1000 trades
-  if (trades.length > 1000) {
-    trades = trades.slice(-1000);
+  // 2. SQLite Persistence (Primary for Dashboard)
+  try {
+    db.prepare(`
+      INSERT INTO simulated_trades (
+        token_mint, token_symbol, entry_time, entry_price, confidence, status, reason
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      trade.tokenMint,
+      trade.tokenSymbol,
+      trade.entryTime,
+      trade.entryPrice,
+      trade.confidence,
+      trade.status,
+      trade.reason
+    );
+  } catch (error) {
+    logger.error(`Error persisting simulation trade to DB:`, error);
   }
 
-  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
   logger.info(
     `📊 [SIMULATION] Recorded trade entry: ${tokenSymbol} at ${entryPrice.toFixed(8)} (confidence: ${confidence}%)`
   );
@@ -118,6 +134,7 @@ export async function updateSimulatedTradeExit(
 ): Promise<SimulatedTrade | null> {
   ensureSimulationDir();
 
+  // 1. JSON Persistence (Backup)
   let trades: SimulatedTrade[] = [];
   try {
     if (fs.existsSync(SIMULATION_TRADES_FILE)) {
@@ -129,14 +146,13 @@ export async function updateSimulatedTradeExit(
     return null;
   }
 
-  // Find the trade
-  const trade = trades.find((t) => t.tokenMint === tokenMint && t.status === "OPEN");
-  if (!trade) {
+  const tradeIndex = trades.findIndex((t) => t.tokenMint === tokenMint && t.status === "OPEN");
+  if (tradeIndex === -1) {
     logger.warn(`⚠️  No open simulation trade found for ${tokenMint}`);
     return null;
   }
 
-  // Calculate P&L
+  const trade = trades[tradeIndex];
   trade.exitTime = Date.now();
   trade.exitPrice = exitPrice;
   trade.status = status;
@@ -144,8 +160,26 @@ export async function updateSimulatedTradeExit(
   trade.pnl = CONFIG.BUY_AMOUNT_SOL * (trade.pnlPercent / 100);
   trade.reason = reason || `Exited with status: ${status}`;
 
-  // Save updated trades
   fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
+
+  // 2. SQLite Persistence (Primary for Dashboard)
+  try {
+    db.prepare(`
+      UPDATE simulated_trades 
+      SET exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?
+      WHERE token_mint = ? AND status = 'OPEN'
+    `).run(
+      trade.exitTime,
+      trade.exitPrice,
+      trade.status,
+      trade.pnl,
+      trade.pnlPercent,
+      trade.reason,
+      tokenMint
+    );
+  } catch (error) {
+    logger.error(`Error updating simulation trade in DB:`, error);
+  }
 
   // Update metrics
   await recalculateSimulationMetrics(trades);

@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import logger from "./logger";
+import { notifyDashboardUpdate } from "./broadcastOptimizer";
 
 // Interface para posições persistidas
 export interface Position {
@@ -13,6 +14,7 @@ export interface Position {
     takeProfit: number;
     stopLoss: number;
     isActive: boolean;
+    lastHighPrice?: number;
     lastCheckedAt?: number;
 }
 
@@ -118,6 +120,8 @@ class PositionManager {
         try {
             const data = JSON.stringify(Array.from(this.positions.values()), null, 2);
             await fs.writeFile(POSITIONS_FILE, data, "utf-8");
+            // Notificar dashboard via WebSocket
+            notifyDashboardUpdate();
         } catch (error: any) {
             logger.error(`❌ Erro ao persistir posições no disco:`, error.message);
             throw error;

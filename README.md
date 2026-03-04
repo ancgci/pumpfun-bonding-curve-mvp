@@ -37,6 +37,40 @@ npm run start:all
 
 ---
 
+## 🛡️ QA & Quality Control
+
+This project enforces high quality standards through automated testing.
+
+### Mandatory Pre-commit Hook
+We use **Husky** and **lint-staged** to ensure that all core tests pass before any code is committed. 
+
+When you run `git commit`, the following suite is automatically executed:
+```bash
+npm run test:qa
+```
+This script runs:
+1. **Core Unit Tests**: Logic validation for trading, risk, and P&L.
+2. **Integration Tests**: Dashboard API validation.
+3. **Frontend E2E Tests**: UI/UX verification via Playwright.
+
+**If any test fails, the commit will be blocked.** You must fix all issues before the commit is accepted.
+
+### Manual QA Commands
+You can run the tests manually at any time:
+```bash
+# Run all QA tests
+npm run test:qa
+
+# Run only core logic tests
+npm run test:core
+
+# Run smoke tests (connectivity & circuit breaker)
+npm run test:smoke
+
+# Run Advanced AI Agent learning cycle simulation
+npm run test:ai-agent:full
+```
+
 ### Option 2: Separately
 
 **Bot:**

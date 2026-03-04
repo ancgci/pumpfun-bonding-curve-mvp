@@ -12,6 +12,8 @@
     href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
@@ -39,6 +41,17 @@
 
     <!-- ═══ STATS OVERVIEW ═══ -->
     <section class="stats-grid">
+      <!-- NEW: P&L Real-time Chart -->
+      <div class="stat-card glass-chart-card" style="grid-column: span 2; height: 300px;">
+        <div class="chart-header">
+          <h3>📈 P&L History <span class="live-badge"><span class="dot"></span> LIVE</span></h3>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="dot profit"></span> SOL</span>
+          </div>
+        </div>
+        <canvas id="plChart"></canvas>
+      </div>
+
       <div class="stat-card" id="card-invested">
         <div class="stat-icon">💰</div>
         <div class="stat-value" id="totalInvested">-- SOL</div>

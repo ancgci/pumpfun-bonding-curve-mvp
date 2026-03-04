@@ -151,6 +151,7 @@ enableSkill("WalletTracker");
 | **RiskAnalyzer** | risk, security, core | 5 | Detecção de honeypots e rug pulls |
 | **VolumeAnalysis** | analysis, volume, core | 10 | Identificação de wash trading |
 | **WalletTracker** | analysis, wallets, core | 10 | Análise de whales e concentração |
+| **AIAgentLearning** | ai-agent, learning, advanced | 1 | Teste avançado de ciclo de aprendizado |
 
 > [!IMPORTANT]
 > A tag `core` garante que essas habilidades fundamentais sempre sejam enviadas ao LLM, independente das tags dinâmicas adicionais.

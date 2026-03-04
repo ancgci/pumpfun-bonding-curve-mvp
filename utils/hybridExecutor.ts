@@ -26,6 +26,7 @@ import { RISK_CONFIG } from "./riskConfig";
 import { positionManager } from "./positionManager";
 import type { Position } from "./positionManager";
 import { getRuntimeConfig } from "./config";
+import { notifyDashboardUpdate } from "./broadcastOptimizer";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -133,17 +134,75 @@ async function getTokenPrice(tokenMint: string): Promise<PriceInfo | null> {
   }
 }
 
-function checkTakeProfitStopLoss(
+/**
+ * Verifica condições de saída (TP, SL, Trailing Stop, Whale Dump)
+ */
+export function checkExitConditions(
+  currentPrice: number,
+  highWaterMark: number,
+  entryPrice: number,
+  takeProfitPercent: number,
+  stopLossPercent: number,
+  trailingStopPercent: number = 0,
+  whaleDumpPercent: number = 0
+): {
+  shouldExit: boolean;
+  reason: string;
+  profitLossPercent: number;
+  newHighWaterMark: number;
+  newStopLossPrice: number;
+} {
+  const profitLossPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+  let status = {
+    shouldExit: false,
+    reason: "",
+    profitLossPercent,
+    newHighWaterMark: Math.max(highWaterMark, currentPrice),
+    newStopLossPrice: entryPrice * (1 - stopLossPercent / 100)
+  };
+
+  // 1. Whale Dump Check (sudden drop from peak)
+  if (whaleDumpPercent > 0 && highWaterMark > 0) {
+    const dropFromPeak = ((highWaterMark - currentPrice) / highWaterMark) * 100;
+    if (dropFromPeak >= whaleDumpPercent) {
+      return { ...status, shouldExit: true, reason: `Whale Dump Detected (-${dropFromPeak.toFixed(1)}% from peak)` };
+    }
+  }
+
+  // 2. Trailing Stop Update
+  if (trailingStopPercent > 0 && status.newHighWaterMark > 0) {
+    const trailingSl = status.newHighWaterMark * (1 - trailingStopPercent / 100);
+    status.newStopLossPrice = Math.max(status.newStopLossPrice, trailingSl);
+  }
+
+  // 3. Take Profit
+  if (profitLossPercent >= takeProfitPercent) {
+    return { ...status, shouldExit: true, reason: "Take Profit Hit" };
+  }
+
+  // 4. Stop Loss (Traditional or Trailing)
+  if (currentPrice <= status.newStopLossPrice) {
+    return { ...status, shouldExit: true, reason: status.newStopLossPrice > (entryPrice * (1 - stopLossPercent / 100)) ? "Trailing Stop Hit" : "Stop Loss Hit" };
+  }
+
+  return status;
+}
+
+/**
+ * Legado para compatibilidade, sugere-se usar checkExitConditions
+ */
+export function checkTakeProfitStopLoss(
   currentPrice: number,
   buyPrice: number,
   takeProfitPercent: number,
   stopLossPercent: number
 ): { shouldTakeProfit: boolean; shouldStopLoss: boolean; profitLossPercent: number } {
-  const profitLossPercent = ((currentPrice - buyPrice) / buyPrice) * 100;
-  const shouldTakeProfit = profitLossPercent >= takeProfitPercent;
-  const shouldStopLoss = profitLossPercent <= -stopLossPercent;
-
-  return { shouldTakeProfit, shouldStopLoss, profitLossPercent };
+  const { shouldExit, reason, profitLossPercent: pl } = checkExitConditions(currentPrice, buyPrice, buyPrice, takeProfitPercent, stopLossPercent);
+  return {
+    shouldTakeProfit: shouldExit && reason === "Take Profit Hit",
+    shouldStopLoss: shouldExit && reason !== "Take Profit Hit",
+    profitLossPercent: pl
+  };
 }
 // Load wallet
 let keypair: Keypair | null = null;
@@ -715,6 +774,9 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
       logger.info(`   Timestamp da compra: ${new Date(position.buyTimestamp).toISOString()}`);
 
       logger.info(`📌 Posição registrada para token ${tokenData.mint}`);
+
+      // Gatilho opcional direto no executor para redundância
+      notifyDashboardUpdate();
     }
 
     // Verificar posições abertas para venda (apenas se for trade de venda)
@@ -731,52 +793,44 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
         const currentPrice = priceInfo.pricePerToken;
         const buyPrice = position.buySolAmount / (position.buyTokenAmount / 1e9);
 
-        const { shouldTakeProfit, shouldStopLoss, profitLossPercent } = checkTakeProfitStopLoss(
+        // OTIMIZAÇÃO: Usar lógica de Trailing Stop e Whale Dump
+        const TRAILING_STOP_PCT = (currentConfig as any).TRAILING_STOP_PERCENT || 0;
+        const WHALE_DUMP_PCT = (currentConfig as any).WHALE_DUMP_PERCENT || 30;
+
+        const exitResult = checkExitConditions(
           currentPrice,
+          position.lastHighPrice || buyPrice,
           buyPrice,
           position.takeProfit,
-          position.stopLoss
+          position.stopLoss,
+          TRAILING_STOP_PCT,
+          WHALE_DUMP_PCT
         );
 
-        logger.info(`📊 MONITORAMENTO DE POSICAO PARA TOKEN ${tokenData.mint}`);
-        logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
-        logger.info(`   Preco atual: ${currentPrice.toFixed(9)} SOL`);
-        logger.info(`   Preco de compra: ${buyPrice.toFixed(9)} SOL`);
-        logger.info(`   Lucro/Prejuizo atual: ${profitLossPercent.toFixed(2)}%`);
-        logger.info(`   Take Profit configurado: ${position.takeProfit}%`);
-        logger.info(`   Stop Loss configurado: -${position.stopLoss}%`);
+        const { shouldExit, reason, profitLossPercent } = exitResult;
 
-        if (shouldTakeProfit && (currentConfig.AUTO_SELL_TAKE_PROFIT !== false)) {
-          logger.info(`📈 TAKE PROFIT ACIONADO para token ${tokenData.mint}`);
-          logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
-          logger.info(`   Lucro esperado: ${position.takeProfit}%`);
+        logger.info(`📊 MONITORAMENTO DE POSIÇÃO PARA TOKEN ${tokenData.mint}`);
+        logger.info(`   Preço atual: ${currentPrice.toFixed(9)} SOL | ROI: ${profitLossPercent.toFixed(2)}%`);
+        if (TRAILING_STOP_PCT > 0) logger.info(`   Trailing Stop Ativo: ${TRAILING_STOP_PCT}% (SL atual: ${exitResult.newStopLossPrice.toFixed(9)})`);
+
+        if (shouldExit) {
+          logger.info(`🚨 CONDIÇÃO DE SAÍDA: ${reason.toUpperCase()} para token ${tokenData.mint}`);
 
           if (tokenData.mode === "CURVE") {
-            logger.info(`💰 Take Profit atingido para token ${tokenData.mint} (CURVE)`);
             const signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
             position.isActive = false;
             logger.info(`✅ Posição fechada via PumpFun: ${signature}`);
           } else if (tokenData.mode === "DEX") {
-            logger.info(`💰 Take Profit atingido para token ${tokenData.mint} (DEX)`);
             const signature = await sellViaJupiter(tokenData.mint, position.buyTokenAmount);
             position.isActive = false;
             logger.info(`✅ Posição fechada via Jupiter: ${signature}`);
           }
-        } else if (shouldStopLoss && (currentConfig.AUTO_SELL_STOP_LOSS !== false)) {
-          logger.info(`📉 STOP LOSS ACIONADO para token ${tokenData.mint}`);
-          logger.info(`   Valor investido: ${position.buySolAmount} SOL`);
-          logger.info(`   Prejuízo esperado: -${position.stopLoss}%`);
-
-          if (tokenData.mode === "CURVE") {
-            logger.info(`❌ Stop Loss atingido para token ${tokenData.mint} (CURVE)`);
-            const signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
-            position.isActive = false;
-            logger.info(`✅ Posição fechada via PumpFun: ${signature}`);
-          } else if (tokenData.mode === "DEX") {
-            logger.info(`❌ Stop Loss atingido para token ${tokenData.mint} (DEX)`);
-            const signature = await sellViaJupiter(tokenData.mint, position.buyTokenAmount);
-            position.isActive = false;
-            logger.info(`✅ Posição fechada via Jupiter: ${signature}`);
+          // Notificar fechamento imediatamente
+          notifyDashboardUpdate();
+        } else {
+          // Atualizar High Water Mark se necessário
+          if (exitResult.newHighWaterMark > (position.lastHighPrice || 0)) {
+            position.lastHighPrice = exitResult.newHighWaterMark;
           }
         }
 

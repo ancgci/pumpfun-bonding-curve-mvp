@@ -12,10 +12,14 @@
   --accent-glow: rgba(99, 102, 241, 0.15);
 
   --profit: #10b981;
+  --profit-glow: rgba(16, 185, 129, 0.4);
   --profit-bg: rgba(16, 185, 129, 0.1);
   --loss: #ef4444;
+  --loss-glow: rgba(239, 68, 68, 0.4);
   --loss-bg: rgba(239, 68, 68, 0.1);
   --warn: #f59e0b;
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -92,19 +96,31 @@ header h1 {
 
 /* Utility for glass cards */
 .glass-card {
-  background: var(--bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border-subtle);
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
   border-radius: 20px;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+  transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  position: relative;
+}
+
+.glass-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  background: url('https://grainy-gradients.vercel.app/noise.svg');
+  opacity: 0.04;
+  pointer-events: none;
+  mix-blend-mode: overlay;
 }
 
 .glass-card:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--border-hover);
-  box-shadow: 0 12px 48px 0 rgba(0, 0, 0, 0.4), 0 0 24px var(--accent-glow);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 12px 48px 0 rgba(0, 0, 0, 0.5), 0 0 24px rgba(0, 255, 150, 0.2);
   transform: translateY(-4px);
 }
 
@@ -127,12 +143,12 @@ section h2 {
 }
 
 .stat-card {
-  background: var(--bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
   padding: 30px 24px;
   text-align: center;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -153,9 +169,19 @@ section h2 {
 }
 
 .stat-card:hover {
-  transform: translateY(-5px);
-  border-color: var(--border-hover);
-  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.4), 0 0 20px rgba(34, 211, 238, 0.1);
+  transform: translateY(-5px) scale(1.02);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.5), 0 0 30px rgba(34, 211, 238, 0.2);
+}
+
+.stat-card.profit-glow {
+  border-color: var(--profit);
+  box-shadow: 0 0 20px var(--profit-glow);
+}
+
+.stat-card.loss-glow {
+  border-color: var(--loss);
+  box-shadow: 0 0 20px var(--loss-glow);
 }
 
 .stat-card:hover::before {
@@ -184,6 +210,93 @@ section h2 {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   font-weight: 600;
+}
+
+/* Chart Styles */
+.glass-chart-card {
+  text-align: left !important;
+  padding: 20px !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.chart-header h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.live-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.15);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  color: var(--profit);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.live-badge .dot {
+  width: 6px;
+  height: 6px;
+  background: var(--profit);
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--profit);
+  animation: live-pulse 1.5s infinite;
+}
+
+@keyframes live-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.5);
+    opacity: 0.5;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.chart-legend {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot.profit {
+  background: var(--profit);
+  box-shadow: 0 0 8px var(--profit);
 }
 
 /* Circuit Breaker */
@@ -397,11 +510,13 @@ section h2 {
 .trade-card.profit {
   border-left: 4px solid var(--profit);
   background: linear-gradient(90deg, var(--profit-bg) 0%, var(--bg-card) 50%);
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.05);
 }
 
 .trade-card.loss {
   border-left: 4px solid var(--loss);
   background: linear-gradient(90deg, var(--loss-bg) 0%, var(--bg-card) 50%);
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.05);
 }
 
 .trade-info {
@@ -1096,6 +1211,144 @@ footer p {
   background: var(--accent-cyan);
   border-radius: 50%;
   animation: pulse 2s infinite;
+}
+
+/* Simulation Trades Section */
+.sim-trades-section {
+  margin-bottom: 60px;
+}
+
+.sim-trades-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.sim-trade-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 24px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.sim-trade-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: transparent;
+}
+
+.sim-trade-card.profit::before { background: var(--profit); }
+.sim-trade-card.loss::before { background: var(--loss); }
+.sim-trade-card.open::before { background: var(--accent-cyan); animation: glow-pulse 2s infinite; }
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.sim-trade-card:hover {
+  transform: translateY(-5px) scale(1.02);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  background: var(--bg-card-hover);
+}
+
+.sim-trade-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sim-trade-token {
+  font-weight: 800;
+  font-size: 1.15rem;
+}
+
+.mint-link {
+  color: #fff;
+  text-decoration: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.mint-mini {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.sim-status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-open { background: rgba(34, 211, 238, 0.2); color: var(--accent-cyan); border: 1px solid var(--accent-cyan); }
+.status-win { background: var(--profit-bg); color: var(--profit); border: 1px solid var(--profit); }
+.status-loss { background: var(--loss-bg); color: var(--loss); border: 1px solid var(--loss); }
+
+.sim-trade-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 12px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.info-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.info-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.sim-trade-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sim-pnl {
+  font-size: 1.4rem;
+  font-weight: 900;
+  text-align: center;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.sim-pnl.profit { background: var(--profit-bg); color: var(--profit); }
+.sim-pnl.loss { background: var(--loss-bg); color: var(--loss); }
+
+.sim-reason {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
 }
 
 /* Responsive */

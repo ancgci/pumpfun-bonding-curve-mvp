@@ -3,11 +3,19 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
-import { getSimulationMetrics, getRecentTrades, isSimulationReadyForLive } from "../utils/simulationEngine";
+import { getSimulationMetrics, isSimulationReadyForLive } from "../utils/simulationEngine";
 import { CONFIG } from "../utils/config";
+import http from "http";
+import { Server } from "socket.io";
+import db from "../utils/db";
 
-const app = express();
+export const app = express();
+const httpServer = http.createServer(app);
 const PORT = 3001;
+
+const io = new Server(httpServer, {
+    cors: { origin: "*" }
+});
 
 // Middleware
 app.use(cors());
@@ -209,8 +217,34 @@ app.get("/api/agent/patterns", (req, res) => {
 });
 
 /**
- * POST /api/agent/toggle - Liga/Desliga agente
+ * GET /api/pl-history - Histórico de P&L acumulado (Persistente via SQLite)
  */
+app.get("/api/pl-history", (req, res) => {
+    try {
+        const history = getPnLHistory(30);
+        res.json(history);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/pnl-history/csv - Exportação de histórico em CSV
+ */
+app.get("/api/pnl-history/csv", (req, res) => {
+    try {
+        const history = getPnLHistory(30);
+        let csv = 'Timestamp,P&L (SOL),Positions\n';
+        history.timestamps.forEach((ts, i) => {
+            csv += `${ts},${history.plValues[i]},${history.positions[i]}\n`;
+        });
+        res.header('Content-Type', 'text/csv');
+        res.attachment('pnl_history.csv');
+        res.send(csv);
+    } catch (error: any) {
+        res.status(500).send(error.message);
+    }
+});
 app.post("/api/agent/toggle", (req, res) => {
     try {
         const cfg = loadAgentConfig();
@@ -257,13 +291,29 @@ app.get("/api/simulation/status", (req, res) => {
 });
 
 /**
- * GET /api/simulation/trades - Últimos trades simulados
+ * GET /api/simulation/trades - Últimos trades simulados (from SQLite)
  */
 app.get("/api/simulation/trades", (req, res) => {
     try {
         const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
-        const trades = getRecentTrades(limit);
-        res.json(trades);
+        const rows = db.prepare(`
+            SELECT 
+                token_mint as tokenMint,
+                token_symbol as tokenSymbol,
+                entry_time as entryTime,
+                entry_price as entryPrice,
+                exit_time as exitTime,
+                exit_price as exitPrice,
+                pnl_sol as pnl,
+                pnl_percent as pnlPercent,
+                confidence,
+                status,
+                reason
+            FROM simulated_trades
+            ORDER BY entry_time DESC
+            LIMIT ?
+        `).all(limit);
+        res.json(rows);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -692,6 +742,14 @@ app.delete("/api/agent/patterns", (req, res) => {
 });
 
 /**
+ * POST /api/internal/broadcast - Forçar broadcast via WebSocket (para processos internos)
+ */
+app.post("/api/internal/broadcast", (req, res) => {
+    broadcastPnLUpdate();
+    res.json({ success: true });
+});
+
+/**
  * GET /api/bot-health - Status de saúde geral do bot
  */
 app.get("/api/bot-health", (req, res) => {
@@ -724,21 +782,142 @@ app.get("/api/bot-health", (req, res) => {
     }
 });
 
-// Iniciar servidor
-app.listen(PORT, () => {
-    console.log(`✅ Dashboard server rodando em http://localhost:${PORT}`);
-    console.log(`📊 API disponível em:`);
-    console.log(`   - http://localhost:${PORT}/api/stats`);
-    console.log(`   - http://localhost:${PORT}/api/positions`);
-    console.log(`   - http://localhost:${PORT}/api/cb-status`);
-    console.log(`   - http://localhost:${PORT}/api/agent/stats`);
-    console.log(`   - http://localhost:${PORT}/api/agent/trades`);
-    console.log(`   - http://localhost:${PORT}/api/agent/patterns`);
-    console.log(`   - http://localhost:${PORT}/api/simulation/status`);
-    console.log(`   - http://localhost:${PORT}/api/simulation/trades`);
-    console.log(`   - http://localhost:${PORT}/api/trading-config (GET/POST)`);
-    console.log(`   - http://localhost:${PORT}/api/cb-reset (POST)`);
-    console.log(`   - http://localhost:${PORT}/api/emergency-stop (GET/POST)`);
-    console.log(`   - http://localhost:${PORT}/api/protocol-config (GET/POST)`);
-    console.log(`   - http://localhost:${PORT}/api/bot-health`);
+// Helper to get stats for broadcast
+function getStats() {
+    const positions = loadPositions();
+    const cbState = loadCBState();
+    const active = positions.filter((p: any) => p.isActive);
+    const closed = positions.filter((p: any) => !p.isActive);
+    const totalInvested = active.reduce((sum: number, p: any) => sum + p.buySolAmount, 0);
+    const wins = closed.filter((p: any) => p.buyTimestamp && Date.now() - p.buyTimestamp < 3600000).length;
+    const losses = closed.length - wins;
+
+    return {
+        totalPositions: positions.length,
+        activePositions: active.length,
+        closedPositions: closed.length,
+        totalInvested: parseFloat(totalInvested.toFixed(4)),
+        wins,
+        losses,
+        winRate: closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : "0.0",
+        circuitBreaker: {
+            isTripped: cbState.isTripped,
+            tripReason: cbState.tripReason,
+            dailyLoss: cbState.dailyLossSol,
+            consecutiveFailures: cbState.consecutiveFailures,
+        },
+        positions: active.map((p: any) => ({
+            ...p,
+            ageFormatted: formatAge(Date.now() - p.buyTimestamp)
+        }))
+    };
+}
+
+// WebSocket Broadcast
+export function broadcastPnLUpdate() {
+    const stats = getStats();
+
+    // Antes de emitir, registrar ponto P&L se houver mudança significativa ou apenas para histórico
+    const trades = loadAgentTrades();
+    const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+    recordPnLPoint(totalPnl, stats.activePositions);
+
+    const plHistory = getPnLHistory(30);
+    io.emit("pnl-update", { stats, plHistory });
+}
+
+// Persistência de P&L
+function recordPnLPoint(pnlSol: number, positionsCount: number) {
+    try {
+        const stmt = db.prepare(`
+            INSERT INTO pnl_history (timestamp, pnl_sol, positions_count)
+            VALUES (?, ?, ?)
+        `);
+        stmt.run(Date.now(), pnlSol, positionsCount);
+    } catch (error) {
+        console.error("Erro ao registrar ponto P&L no SQLite:", error);
+    }
+}
+
+function getPnLHistory(days: number = 30) {
+    try {
+        const since = Date.now() - (days * 24 * 60 * 60 * 1000);
+        const rows: any[] = db.prepare(`
+            SELECT timestamp, pnl_sol, positions_count
+            FROM pnl_history
+            WHERE timestamp >= ?
+            ORDER BY timestamp ASC
+        `).all(since);
+
+        if (rows.length === 0) {
+            // Se vazio, gerar ponto inicial a partir dos trades atuais
+            const trades = loadAgentTrades();
+            const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+            return {
+                timestamps: [new Date().toLocaleTimeString()],
+                plValues: [parseFloat(totalPnl.toFixed(4))],
+                positions: [0]
+            };
+        }
+
+        return {
+            timestamps: rows.map(r => formatTimestamp(r.timestamp)),
+            plValues: rows.map(r => parseFloat(r.pnl_sol.toFixed(4))),
+            positions: rows.map(r => r.positions_count)
+        };
+    } catch (error) {
+        console.error("Erro ao ler histórico P&L do SQLite:", error);
+        return { timestamps: [], plValues: [], positions: [] };
+    }
+}
+
+// Socket connection
+io.on("connection", (socket) => {
+    console.log(`🔌 Client connected: ${socket.id}`);
+
+    // Send initial data
+    socket.emit("pnl-update", { stats: getStats(), plHistory: getPnLHistory() });
+
+    // Handle bot notification (if bot connects as client)
+    socket.on("bot-event-update", () => {
+        broadcastPnLUpdate();
+    });
 });
+
+// Watch positions file as a fallback for cross-process updates
+if (require.main === module) {
+    fs.watch(POSITIONS_FILE, (event) => {
+        if (event === 'change') {
+            setTimeout(broadcastPnLUpdate, 100); // Small delay to let file write finish
+        }
+    });
+
+    fs.watch(AGENT_TRADES_FILE, (event) => {
+        if (event === 'change') {
+            setTimeout(broadcastPnLUpdate, 100);
+        }
+    });
+}
+
+// Snapshots horários e limpeza
+if (require.main === module) {
+    setInterval(() => {
+        const trades = loadAgentTrades();
+        const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+        const activeCount = loadPositions().filter(p => p.isActive).length;
+        recordPnLPoint(totalPnl, activeCount);
+    }, 60 * 60 * 1000);
+
+    setInterval(() => {
+        const tooOld = Date.now() - (90 * 24 * 60 * 60 * 1000);
+        db.prepare('DELETE FROM pnl_history WHERE timestamp < ?').run(tooOld);
+    }, 24 * 60 * 60 * 1000);
+}
+
+// Iniciar servidor apenas se o script for executado diretamente
+if (require.main === module) {
+    httpServer.listen(PORT, () => {
+        console.log(`✅ Dashboard + WebSocket + SQLite rodando em http://localhost:${PORT}`);
+        console.log(`✅ SQLite P&L History inicializado`);
+    });
+}
