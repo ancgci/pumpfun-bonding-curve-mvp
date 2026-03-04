@@ -96,7 +96,19 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
   ].join(" ");
 
   // ── Inject active skills into system prompt ──
-  const skillContext = getActiveSkillsPrompt({ action: "token_analysis" });
+  const skillTags = ["core", "trading"];
+  if (tokenAnalysis.mint.endsWith("pump")) {
+    skillTags.push("pumpfun");
+  }
+  if (tokenAnalysis.riskScore > 6) {
+    skillTags.push("risk");
+  }
+
+  const skillContext = getActiveSkillsPrompt({
+    action: "token_analysis",
+    tags: skillTags,
+    maxSkills: 6 // Allow 1-2 slots for the new specialized skills alongside core ones
+  });
 
   const sysPrompt = basePrompt + skillContext + learnedRules;
 

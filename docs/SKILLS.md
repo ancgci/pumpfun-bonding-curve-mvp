@@ -83,6 +83,21 @@ Quanto mais específico, melhor.
 
 ---
 
+## Seleção Dinâmica de Skills (Tag-based)
+
+O bot agora seleciona habilidades de forma inteligente baseada no contexto do token sendo analisado:
+
+| Condição | Tag Injetada | Objetivo |
+|----------|--------------|----------|
+| Token `pump.fun` | `pumpfun` | Injeta conhecimento específico do protocolo PumpFun. |
+| Altas taxas/risco | `risk` | Ativa análises de segurança profundas. |
+| Geral | `core`, `trading` | Mantém a estratégia base e regras de segurança sempre ativas. |
+
+### Como funciona a injeção:
+O orquestrador identifica o tipo de token e solicita ao `skillRegistry` as skills que possuam as tags correspondentes. O limite atual é de **6 skills por prompt** para garantir foco e economia de tokens.
+
+---
+
 ## Como Funciona
 
 1. **Boot**: `skillLoader.ts` escaneia `.agents/skills/` e carrega metadados
@@ -128,11 +143,28 @@ enableSkill("WalletTracker");
 
 ---
 
-## Skills Built-in
+## Skills Built-in (Core)
 
 | Skill | Tags | Prioridade | Função |
 |-------|------|------------|--------|
-| **PumpFunScalper** | trading, scalping | 1 | Estratégia de scalping agressivo |
-| **RiskAnalyzer** | risk, security | 5 | Detecção de honeypots e rug pulls |
-| **VolumeAnalysis** | analysis, volume | 10 | Identificação de wash trading |
-| **WalletTracker** | analysis, wallets | 10 | Análise de whales e concentração |
+| **PumpFunScalper** | trading, scalping, pumpfun, core | 1 | Estratégia de scalping agressivo |
+| **RiskAnalyzer** | risk, security, core | 5 | Detecção de honeypots e rug pulls |
+| **VolumeAnalysis** | analysis, volume, core | 10 | Identificação de wash trading |
+| **WalletTracker** | analysis, wallets, core | 10 | Análise de whales e concentração |
+
+> [!IMPORTANT]
+> A tag `core` garante que essas habilidades fundamentais sempre sejam enviadas ao LLM, independente das tags dinâmicas adicionais.
+
+---
+
+## Biblioteca de Protocolos (30+ Skills)
+
+Além das skills core, o bot agora vem pré-carregado com expertise em dezenas de protocolos Solana:
+
+- **DEX/AMM**: `jupiter`, `raydium`, `meteora`, `orca`, `lifinity`, `phoenix`.
+- **Lending/Yield**: `kamino`, `marginfi`, `drift`, `solend`.
+- **Análise/Oráculos**: `coingecko`, `pyth`, `switchboard`, `birdeye`.
+- **Especializados**: `pumpfun` (v2), `squads`, `debridge`, `fluxbeam`.
+
+### Como usar:
+Basta rodar `npm run skill:list` para ver a lista completa. O bot as selecionará automaticamente se você adicionar as tags correspondentes no `agentOrchestrator.ts` ou se o token exigir tal conhecimento.

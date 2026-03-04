@@ -46,17 +46,35 @@ function parseFrontmatter(raw: string): { meta: Record<string, any>; body: strin
     const yamlBlock = match[1];
     const body = match[2];
 
-    // Minimal YAML parser for flat key-value + arrays
+    // Minimal YAML parser for flat key-value + arrays + multi-line lists
     const meta: Record<string, any> = {};
+    let currentKey: string | null = null;
+
     for (const line of yamlBlock.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith("#")) continue;
+
+        // Handle multi-line list items: "- value"
+        if (trimmed.startsWith("-") && currentKey) {
+            const val = trimmed.slice(1).trim().replace(/^["']|["']$/g, "");
+            if (!Array.isArray(meta[currentKey])) {
+                meta[currentKey] = [];
+            }
+            meta[currentKey].push(val);
+            continue;
+        }
 
         const colonIdx = trimmed.indexOf(":");
         if (colonIdx === -1) continue;
 
         const key = trimmed.slice(0, colonIdx).trim();
+        currentKey = key;
         let value: any = trimmed.slice(colonIdx + 1).trim();
+
+        if (value === "") {
+            meta[key] = []; // Potential start of multi-line list
+            continue;
+        }
 
         // Remove surrounding quotes
         if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {

@@ -50,19 +50,26 @@ npm run start:dashboard
 ```
 
 
-## 🆕 Latest Changes (Mar 3, 2026)
+## 🆕 Latest Changes (Mar 4, 2026)
 
-### 🧩 Skills Architecture — Pluggable Agent Intelligence
+### 🚀 Dynamic Intelligence & Protocol Library
 
-O agente agora é alimentado por **Skills**: módulos de conhecimento plugáveis que podem ser adicionados, removidos ou importados do GitHub sem alterar código.
+O sistema de Skills foi expandido para incluir seleção dinâmica e uma biblioteca massiva de protocolos Solana.
 
 | Feature | Description |
 |---------|-------------|
-| **Skill Loader** | Auto-descobre skills em `.agents/skills/` com hot-reload |
-| **Skill Registry** | Seleciona skills por contexto/tags/prioridade e injeta no prompt do LLM |
-| **4 Skills Built-in** | PumpFunScalper, RiskAnalyzer, VolumeAnalysis, WalletTracker |
-| **GitHub Import CLI** | Importa skills de qualquer repo público via `npm run skill:import` |
-| **Runtime Enable/Disable** | Liga/desliga skills sem reiniciar o bot |
+| **Dynamic Selection** | O bot agora injeta tags dinamicamente (ex: `pumpfun`, `risk`) baseadas no token, otimizando o prompt. |
+| **30+ Added Skills** | Integração completa com Jupiter, Raydium, Meteora, Kamino, Drift, e muitos outros. |
+| **Core Skill Priority** | Garantia de que habilidades de segurança e estratégia base sempre estejam presentes no prompt. |
+| **Multi-line Tag Support** | Parser de metadados aprimorado para suportar diversos formatos de documentação externa. |
+
+**See:** [SKILLS.md](docs/SKILLS.md) para detalhes técnicos.
+
+---
+
+## 🔵 Previous Changes (Mar 3, 2026)
+
+### 🧩 Skills Architecture — Pluggable Agent Intelligence
 
 **Comandos:**
 ```bash
