@@ -516,7 +516,8 @@ async function getCurrentTokenPrice(mint: string): Promise<number | null> {
 
     if (data.pairs && data.pairs.length > 0) {
       // Get price from first DEX (usually highest liquidity)
-      const price = parseFloat(data.pairs[0].priceUsd);
+      // Extract priceNative (SOL) instead of priceUsd for accurate PnL vs entryPrice
+      const price = parseFloat(data.pairs[0].priceNative);
       return isNaN(price) ? null : price;
     }
 

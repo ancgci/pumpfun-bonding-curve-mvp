@@ -530,10 +530,17 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
     // Calcular informações adicionais
     const solBalance = Number(balance);
-    const tokenAmount = tOutput.tokenAmount || 0;
-    // Calcular preço atual do token (SOL/token)
-    const currentPrice = solBalance > 0 && tokenAmount > 0 ?
-      (solBalance * 1000000000) / tokenAmount : 0;
+    const solAmount = Number(tOutput.solAmount) || 0;
+    const tokenAmount = Number(tOutput.tokenAmount) || 0;
+    // Calculate current entry price based on actual trade if possible, else metadata
+    let currentPrice = 0;
+    if (solAmount > 0 && tokenAmount > 0) {
+      currentPrice = solAmount / tokenAmount;
+    } else if (tokenMetadata?.price) {
+      currentPrice = tokenMetadata.price;
+    } else {
+      currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance * 1000000000) / tokenAmount : 0;
+    }
     // registrar amostra para volatilidade intraday
     recordPriceSample(tOutput.mint, currentPrice);
 
