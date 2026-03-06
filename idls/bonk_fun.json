@@ -1,0 +1,3801 @@
+{
+  "version": "0.1.0",
+  "name": "program",
+  "instructions": [
+    {
+      "name": "buy_exact_in",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_base_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_quote_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "minimum_amount_out",
+          "type": "u64"
+        },
+        {
+          "name": "share_fee_rate",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "buy_exact_out",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_base_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_quote_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_out",
+          "type": "u64"
+        },
+        {
+          "name": "maximum_amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "share_fee_rate",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "claim_creator_fee",
+      "accounts": [
+        {
+          "name": "creator",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "fee_vault_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "creator_fee_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "recipient_token_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associated_token_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_platform_fee",
+      "accounts": [
+        {
+          "name": "platform_fee_wallet",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "recipient_token_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associated_token_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_platform_fee_from_vault",
+      "accounts": [
+        {
+          "name": "platform_fee_wallet",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "fee_vault_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_fee_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "recipient_token_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associated_token_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_vested_token",
+      "accounts": [
+        {
+          "name": "beneficiary",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vesting_record",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_base_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associated_token_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "collect_fee",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "recipient_token_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "token_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "collect_migrate_fee",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "recipient_token_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "token_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_config",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "global_config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "protocol_fee_owner",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "migrate_fee_owner",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "migrate_to_amm_wallet",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "migrate_to_cpswap_wallet",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "curve_type",
+          "type": "u8"
+        },
+        {
+          "name": "index",
+          "type": "u16"
+        },
+        {
+          "name": "migrate_fee",
+          "type": "u64"
+        },
+        {
+          "name": "trade_fee_rate",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "create_platform_config",
+      "accounts": [
+        {
+          "name": "platform_admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "platform_fee_wallet",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_nft_wallet",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "transfer_fee_extension_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_vesting_wallet",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "platform_params",
+          "type": {
+            "defined": "PlatformParams"
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_platform_vesting_account",
+      "accounts": [
+        {
+          "name": "platform_vesting_wallet",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "beneficiary",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "platform_vesting_record",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_vesting_account",
+      "accounts": [
+        {
+          "name": "creator",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "beneficiary",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vesting_record",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "share_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "creator",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_mint",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "metadata_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metadata_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "base_mint_param",
+          "type": {
+            "defined": "MintParams"
+          }
+        },
+        {
+          "name": "curve_param",
+          "type": {
+            "defined": "CurveParams"
+          }
+        },
+        {
+          "name": "vesting_param",
+          "type": {
+            "defined": "VestingParams"
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_v2",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "creator",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_mint",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "metadata_account",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metadata_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "base_mint_param",
+          "type": {
+            "defined": "MintParams"
+          }
+        },
+        {
+          "name": "curve_param",
+          "type": {
+            "defined": "CurveParams"
+          }
+        },
+        {
+          "name": "vesting_param",
+          "type": {
+            "defined": "VestingParams"
+          }
+        },
+        {
+          "name": "amm_fee_on",
+          "type": {
+            "defined": "AmmCreatorFeeOn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_with_token_2022",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "creator",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_mint",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "base_mint_param",
+          "type": {
+            "defined": "MintParams"
+          }
+        },
+        {
+          "name": "curve_param",
+          "type": {
+            "defined": "CurveParams"
+          }
+        },
+        {
+          "name": "vesting_param",
+          "type": {
+            "defined": "VestingParams"
+          }
+        },
+        {
+          "name": "amm_fee_on",
+          "type": {
+            "defined": "AmmCreatorFeeOn"
+          }
+        },
+        {
+          "name": "transfer_fee_extension_param",
+          "type": {
+            "option": {
+              "defined": "TransferFeeExtensionParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "migrate_to_amm",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "base_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "openbook_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "request_queue",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "event_queue",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "bids",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "asks",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "market_vault_signer",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "market_base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "market_quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "amm_pool",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "amm_open_orders",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_lp_mint",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_target_orders",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "amm_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "amm_create_fee_destination",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pool_lp_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "spl_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associated_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "base_lot_size",
+          "type": "u64"
+        },
+        {
+          "name": "quote_lot_size",
+          "type": "u64"
+        },
+        {
+          "name": "market_vault_signer_nonce",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "migrate_to_cpswap",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "base_mint",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_pool",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_lp_mint",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_create_pool_fee",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cpswap_observation",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "lock_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "lock_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "lock_lp_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pool_lp_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associated_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "metadata_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "remove_platform_curve_param",
+      "accounts": [
+        {
+          "name": "platform_admin",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "platform_config",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "index",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "sell_exact_in",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_base_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_quote_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "minimum_amount_out",
+          "type": "u64"
+        },
+        {
+          "name": "share_fee_rate",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "sell_exact_out",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "platform_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "pool_state",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_base_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user_quote_token",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "quote_vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "base_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "quote_token_program",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "event_authority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_out",
+          "type": "u64"
+        },
+        {
+          "name": "maximum_amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "share_fee_rate",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_config",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "global_config",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "param",
+          "type": "u8"
+        },
+        {
+          "name": "value",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_platform_config",
+      "accounts": [
+        {
+          "name": "platform_admin",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "platform_config",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "param",
+          "type": {
+            "defined": "PlatformConfigParam"
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_platform_curve_param",
+      "accounts": [
+        {
+          "name": "platform_admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "platform_config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "global_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "index",
+          "type": "u8"
+        },
+        {
+          "name": "bonding_curve_param",
+          "type": {
+            "defined": "BondingCurveParam"
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "GlobalConfig",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Account update epoch"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "0: Constant Product Curve",
+              "1: Fixed Price Curve",
+              "2: Linear Price Curve"
+            ],
+            "name": "curve_type",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Config index"
+            ],
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "docs": [
+              "The fee of migrate to amm"
+            ],
+            "name": "migrate_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The trade fee rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "trade_fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The maximum share fee rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "max_share_fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum base supply, the value without decimals"
+            ],
+            "name": "min_base_supply",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The maximum lock rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "max_lock_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum base sell rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "min_base_sell_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum base migrate rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "min_base_migrate_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum quote fund raising, the value with decimals"
+            ],
+            "name": "min_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Mint information for quote token"
+            ],
+            "name": "quote_mint",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Protocol Fee owner"
+            ],
+            "name": "protocol_fee_owner",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Migrate Fee owner"
+            ],
+            "name": "migrate_fee_owner",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Migrate to amm control wallet"
+            ],
+            "name": "migrate_to_amm_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Migrate to cpswap wallet"
+            ],
+            "name": "migrate_to_cpswap_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                16
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PlatformConfig",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "The epoch for update interval"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The platform fee wallet"
+            ],
+            "name": "platform_fee_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The platform nft wallet to receive the platform NFT after migration if platform_scale is not 0(Only support MigrateType::CPSWAP)"
+            ],
+            "name": "platform_nft_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Scale of the platform liquidity quantity rights will be converted into NFT(Only support MigrateType::CPSWAP)"
+            ],
+            "name": "platform_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Scale of the token creator liquidity quantity rights will be converted into NFT(Only support MigrateType::CPSWAP)"
+            ],
+            "name": "creator_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Scale of liquidity directly to burn"
+            ],
+            "name": "burn_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The platform fee rate"
+            ],
+            "name": "fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The platform name"
+            ],
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The platform website"
+            ],
+            "name": "web",
+            "type": {
+              "array": [
+                "u8",
+                256
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The platform img link"
+            ],
+            "name": "img",
+            "type": {
+              "array": [
+                "u8",
+                256
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The platform specifies the trade fee rate after migration to cp swap"
+            ],
+            "name": "cpswap_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Creator fee rate"
+            ],
+            "name": "creator_fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "If the base token belongs to token2022, then you can choose to support the transferfeeConfig extension, which includes permissions such as `transfer_fee_config_authority`` and `withdraw_withheld_authority`.",
+              "When initializing mint, `withdraw_withheld_authority` and `transfer_fee_config_authority` both belongs to the contract.",
+              "Once the token is migrated to AMM, the authorities will be reset to this value"
+            ],
+            "name": "transfer_fee_extension_auth",
+            "type": "publicKey"
+          },
+          {
+            "name": "platform_vesting_wallet",
+            "type": "publicKey"
+          },
+          {
+            "name": "platform_vesting_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "If a valid platform_cp_creator is configured for the platform,",
+              "it will be used as the creator for the AMM pool during migration to cpswap pool."
+            ],
+            "name": "platform_cp_creator",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                108
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The parameters for launching the pool"
+            ],
+            "name": "curve_params",
+            "type": {
+              "vec": {
+                "defined": "PlatformCurveParam"
+              }
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PoolState",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Account update epoch"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Bump seed used for PDA address derivation"
+            ],
+            "name": "auth_bump",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Current status of the pool",
+              "* 0: Pool is funding",
+              "* 1: Pool funding is end, waiting for migration",
+              "* 2: Pool migration is done"
+            ],
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Decimals of the pool base token"
+            ],
+            "name": "base_decimals",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Decimals of the pool quote token"
+            ],
+            "name": "quote_decimals",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Migrate to AMM or CpSwap, 0: amm\uff0c 1: cpswap"
+            ],
+            "name": "migrate_type",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Supply of the pool base token"
+            ],
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Total sell amount of the base token"
+            ],
+            "name": "total_base_sell",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "For different curves, virtual_base and virtual_quote have different meanings",
+              "For constant product curve, virtual_base and virtual_quote are virtual liquidity, virtual_quote/virtual_base is the initial price",
+              "For linear price curve, virtual_base is the price slope parameter a, virtual_quote has no effect",
+              "For fixed price curve, virtual_quote/virtual_base is the initial price"
+            ],
+            "name": "virtual_base",
+            "type": "u64"
+          },
+          {
+            "name": "virtual_quote",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Actual base token amount in the pool",
+              "Represents the real tokens available for trading"
+            ],
+            "name": "real_base",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Actual quote token amount in the pool",
+              "Represents the real tokens available for trading"
+            ],
+            "name": "real_quote",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The total quote fund raising of the pool"
+            ],
+            "name": "total_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Accumulated trading fees in quote tokens",
+              "Can be collected by the protocol fee owner"
+            ],
+            "name": "quote_protocol_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Accumulated platform fees in quote tokens",
+              "Can be collected by the platform wallet stored in platform config"
+            ],
+            "name": "platform_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The fee of migrate to amm"
+            ],
+            "name": "migrate_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Vesting schedule for the base token"
+            ],
+            "name": "vesting_schedule",
+            "type": {
+              "defined": "VestingSchedule"
+            }
+          },
+          {
+            "docs": [
+              "Public key of the global configuration account",
+              "Contains protocol-wide settings this pool adheres to"
+            ],
+            "name": "global_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the platform configuration account",
+              "Contains platform-wide settings this pool adheres to"
+            ],
+            "name": "platform_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the base mint address"
+            ],
+            "name": "base_mint",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the quote mint address"
+            ],
+            "name": "quote_mint",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the base token vault",
+              "Holds the actual base tokens owned by the pool"
+            ],
+            "name": "base_vault",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the quote token vault",
+              "Holds the actual quote tokens owned by the pool"
+            ],
+            "name": "quote_vault",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The creator of base token"
+            ],
+            "name": "creator",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "token program bits",
+              "bit0: base token program flag",
+              "0: spl_token_program",
+              "1: token_program_2022",
+              "",
+              "bit1: quote token program flag",
+              "0: spl_token_program",
+              "1: token_program_2022"
+            ],
+            "name": "token_program_flag",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "migrate to cpmm, creator fee on quote token or both token"
+            ],
+            "name": "amm_creator_fee_on",
+            "type": {
+              "defined": "AmmCreatorFeeOn"
+            }
+          },
+          {
+            "docs": [
+              "platform vesting token amount"
+            ],
+            "name": "platform_vesting_share",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                54
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "VestingRecord",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Account update epoch"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The pool state account"
+            ],
+            "name": "pool",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The beneficiary of the vesting account"
+            ],
+            "name": "beneficiary",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The amount of tokens claimed"
+            ],
+            "name": "claimed_amount",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The share amount of the token to be vested"
+            ],
+            "name": "token_share_amount",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "AmmCreatorFeeOn",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "QuoteToken"
+          },
+          {
+            "name": "BothToken"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BondingCurveParam",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Migrate to AMM or CpSwap, 0: amm\uff0c 1: cpswap\uff0c",
+              "Neither 0 nor 1: invalid"
+            ],
+            "name": "migrate_type",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "The migrate fee on, 0 means fee on the quote token, 1 means fee on both token",
+              "Neither 0 nor 1: invalid"
+            ],
+            "name": "migrate_cpmm_fee_on",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "The supply of the token,",
+              "0: invalid"
+            ],
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The total base sell of the token",
+              "0: invalid"
+            ],
+            "name": "total_base_sell",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The total quote fund raising of the token",
+              "0: invalid"
+            ],
+            "name": "total_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "total amount of tokens to be unlocked",
+              "u64::MAX: invalid"
+            ],
+            "name": "total_locked_amount",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Waiting time in seconds before unlocking after fundraising ends",
+              "u64::MAX: invalid"
+            ],
+            "name": "cliff_period",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Unlocking period in seconds",
+              "u64::MAX: invalid"
+            ],
+            "name": "unlock_period",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "ClaimVestedEvent",
+      "type": {
+        "fields": [
+          {
+            "name": "pool_state",
+            "type": "publicKey"
+          },
+          {
+            "name": "beneficiary",
+            "type": "publicKey"
+          },
+          {
+            "name": "claim_amount",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "ConstantCurve",
+      "type": {
+        "fields": [
+          {
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "name": "total_base_sell",
+            "type": "u64"
+          },
+          {
+            "name": "total_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "name": "migrate_type",
+            "type": "u8"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "CreateVestingEvent",
+      "type": {
+        "fields": [
+          {
+            "name": "pool_state",
+            "type": "publicKey"
+          },
+          {
+            "name": "beneficiary",
+            "type": "publicKey"
+          },
+          {
+            "name": "share_amount",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "CurveParams",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "data",
+                "type": {
+                  "defined": "ConstantCurve"
+                }
+              }
+            ],
+            "name": "Constant"
+          },
+          {
+            "fields": [
+              {
+                "name": "data",
+                "type": {
+                  "defined": "FixedCurve"
+                }
+              }
+            ],
+            "name": "Fixed"
+          },
+          {
+            "fields": [
+              {
+                "name": "data",
+                "type": {
+                  "defined": "LinearCurve"
+                }
+              }
+            ],
+            "name": "Linear"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FixedCurve",
+      "type": {
+        "fields": [
+          {
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "name": "total_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "name": "migrate_type",
+            "type": "u8"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "GlobalConfig",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Account update epoch"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "0: Constant Product Curve",
+              "1: Fixed Price Curve",
+              "2: Linear Price Curve"
+            ],
+            "name": "curve_type",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Config index"
+            ],
+            "name": "index",
+            "type": "u16"
+          },
+          {
+            "docs": [
+              "The fee of migrate to amm"
+            ],
+            "name": "migrate_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The trade fee rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "trade_fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The maximum share fee rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "max_share_fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum base supply, the value without decimals"
+            ],
+            "name": "min_base_supply",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The maximum lock rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "max_lock_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum base sell rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "min_base_sell_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum base migrate rate, denominated in hundredths of a bip (10^-6)"
+            ],
+            "name": "min_base_migrate_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The minimum quote fund raising, the value with decimals"
+            ],
+            "name": "min_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Mint information for quote token"
+            ],
+            "name": "quote_mint",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Protocol Fee owner"
+            ],
+            "name": "protocol_fee_owner",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Migrate Fee owner"
+            ],
+            "name": "migrate_fee_owner",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Migrate to amm control wallet"
+            ],
+            "name": "migrate_to_amm_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Migrate to cpswap wallet"
+            ],
+            "name": "migrate_to_cpswap_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                16
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "LinearCurve",
+      "type": {
+        "fields": [
+          {
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "name": "total_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "name": "migrate_type",
+            "type": "u8"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "MigrateNftInfo",
+      "type": {
+        "fields": [
+          {
+            "name": "platform_scale",
+            "type": "u64"
+          },
+          {
+            "name": "creator_scale",
+            "type": "u64"
+          },
+          {
+            "name": "burn_scale",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "MintParams",
+      "type": {
+        "fields": [
+          {
+            "name": "decimals",
+            "type": "u8"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "symbol",
+            "type": "string"
+          },
+          {
+            "name": "uri",
+            "type": "string"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PlatformConfig",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "The epoch for update interval"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The platform fee wallet"
+            ],
+            "name": "platform_fee_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The platform nft wallet to receive the platform NFT after migration if platform_scale is not 0(Only support MigrateType::CPSWAP)"
+            ],
+            "name": "platform_nft_wallet",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Scale of the platform liquidity quantity rights will be converted into NFT(Only support MigrateType::CPSWAP)"
+            ],
+            "name": "platform_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Scale of the token creator liquidity quantity rights will be converted into NFT(Only support MigrateType::CPSWAP)"
+            ],
+            "name": "creator_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Scale of liquidity directly to burn"
+            ],
+            "name": "burn_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The platform fee rate"
+            ],
+            "name": "fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The platform name"
+            ],
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The platform website"
+            ],
+            "name": "web",
+            "type": {
+              "array": [
+                "u8",
+                256
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The platform img link"
+            ],
+            "name": "img",
+            "type": {
+              "array": [
+                "u8",
+                256
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The platform specifies the trade fee rate after migration to cp swap"
+            ],
+            "name": "cpswap_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Creator fee rate"
+            ],
+            "name": "creator_fee_rate",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "If the base token belongs to token2022, then you can choose to support the transferfeeConfig extension, which includes permissions such as `transfer_fee_config_authority`` and `withdraw_withheld_authority`.",
+              "When initializing mint, `withdraw_withheld_authority` and `transfer_fee_config_authority` both belongs to the contract.",
+              "Once the token is migrated to AMM, the authorities will be reset to this value"
+            ],
+            "name": "transfer_fee_extension_auth",
+            "type": "publicKey"
+          },
+          {
+            "name": "platform_vesting_wallet",
+            "type": "publicKey"
+          },
+          {
+            "name": "platform_vesting_scale",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "If a valid platform_cp_creator is configured for the platform,",
+              "it will be used as the creator for the AMM pool during migration to cpswap pool."
+            ],
+            "name": "platform_cp_creator",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                108
+              ]
+            }
+          },
+          {
+            "docs": [
+              "The parameters for launching the pool"
+            ],
+            "name": "curve_params",
+            "type": {
+              "vec": {
+                "defined": "PlatformCurveParam"
+              }
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PlatformConfigInfo",
+      "type": {
+        "fields": [
+          {
+            "name": "fee_wallet",
+            "type": "publicKey"
+          },
+          {
+            "name": "nft_wallet",
+            "type": "publicKey"
+          },
+          {
+            "name": "migrate_nft_info",
+            "type": {
+              "defined": "MigrateNftInfo"
+            }
+          },
+          {
+            "name": "fee_rate",
+            "type": "u64"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "web",
+            "type": "string"
+          },
+          {
+            "name": "img",
+            "type": "string"
+          },
+          {
+            "name": "transfer_fee_extension_auth",
+            "type": "publicKey"
+          },
+          {
+            "name": "creator_fee_rate",
+            "type": "u64"
+          },
+          {
+            "name": "platform_vesting_scale",
+            "type": "u64"
+          },
+          {
+            "name": "vesting_wallet",
+            "type": "publicKey"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PlatformConfigParam",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "fields": [
+              "publicKey"
+            ],
+            "name": "FeeWallet"
+          },
+          {
+            "fields": [
+              "publicKey"
+            ],
+            "name": "NFTWallet"
+          },
+          {
+            "fields": [
+              {
+                "defined": "MigrateNftInfo"
+              }
+            ],
+            "name": "MigrateNftInfo"
+          },
+          {
+            "fields": [
+              "u64"
+            ],
+            "name": "FeeRate"
+          },
+          {
+            "fields": [
+              "string"
+            ],
+            "name": "Name"
+          },
+          {
+            "fields": [
+              "string"
+            ],
+            "name": "Web"
+          },
+          {
+            "fields": [
+              "string"
+            ],
+            "name": "Img"
+          },
+          {
+            "name": "CpSwapConfig"
+          },
+          {
+            "fields": [
+              {
+                "defined": "PlatformConfigInfo"
+              }
+            ],
+            "name": "AllInfo"
+          },
+          {
+            "fields": [
+              "publicKey"
+            ],
+            "name": "VestingWallet"
+          },
+          {
+            "fields": [
+              "u64"
+            ],
+            "name": "PlatformVestingScale"
+          },
+          {
+            "fields": [
+              "publicKey"
+            ],
+            "name": "PlatformCPCreator"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlatformCurveParam",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "The epoch for update interval, 0 means not update"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The curve params index"
+            ],
+            "name": "index",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "The global config address"
+            ],
+            "name": "global_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "bonding curve param"
+            ],
+            "name": "bonding_curve_param",
+            "type": {
+              "defined": "BondingCurveParam"
+            }
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                50
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PlatformParams",
+      "type": {
+        "fields": [
+          {
+            "name": "migrate_nft_info",
+            "type": {
+              "defined": "MigrateNftInfo"
+            }
+          },
+          {
+            "name": "fee_rate",
+            "type": "u64"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "web",
+            "type": "string"
+          },
+          {
+            "name": "img",
+            "type": "string"
+          },
+          {
+            "name": "creator_fee_rate",
+            "type": "u64"
+          },
+          {
+            "name": "platform_vesting_scale",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PoolCreateEvent",
+      "type": {
+        "fields": [
+          {
+            "name": "pool_state",
+            "type": "publicKey"
+          },
+          {
+            "name": "creator",
+            "type": "publicKey"
+          },
+          {
+            "name": "config",
+            "type": "publicKey"
+          },
+          {
+            "name": "base_mint_param",
+            "type": {
+              "defined": "MintParams"
+            }
+          },
+          {
+            "name": "curve_param",
+            "type": {
+              "defined": "CurveParams"
+            }
+          },
+          {
+            "name": "vesting_param",
+            "type": {
+              "defined": "VestingParams"
+            }
+          },
+          {
+            "name": "amm_fee_on",
+            "type": {
+              "defined": "AmmCreatorFeeOn"
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PoolState",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Account update epoch"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Bump seed used for PDA address derivation"
+            ],
+            "name": "auth_bump",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Current status of the pool",
+              "* 0: Pool is funding",
+              "* 1: Pool funding is end, waiting for migration",
+              "* 2: Pool migration is done"
+            ],
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Decimals of the pool base token"
+            ],
+            "name": "base_decimals",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Decimals of the pool quote token"
+            ],
+            "name": "quote_decimals",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Migrate to AMM or CpSwap, 0: amm\uff0c 1: cpswap"
+            ],
+            "name": "migrate_type",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "Supply of the pool base token"
+            ],
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Total sell amount of the base token"
+            ],
+            "name": "total_base_sell",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "For different curves, virtual_base and virtual_quote have different meanings",
+              "For constant product curve, virtual_base and virtual_quote are virtual liquidity, virtual_quote/virtual_base is the initial price",
+              "For linear price curve, virtual_base is the price slope parameter a, virtual_quote has no effect",
+              "For fixed price curve, virtual_quote/virtual_base is the initial price"
+            ],
+            "name": "virtual_base",
+            "type": "u64"
+          },
+          {
+            "name": "virtual_quote",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Actual base token amount in the pool",
+              "Represents the real tokens available for trading"
+            ],
+            "name": "real_base",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Actual quote token amount in the pool",
+              "Represents the real tokens available for trading"
+            ],
+            "name": "real_quote",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The total quote fund raising of the pool"
+            ],
+            "name": "total_quote_fund_raising",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Accumulated trading fees in quote tokens",
+              "Can be collected by the protocol fee owner"
+            ],
+            "name": "quote_protocol_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Accumulated platform fees in quote tokens",
+              "Can be collected by the platform wallet stored in platform config"
+            ],
+            "name": "platform_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The fee of migrate to amm"
+            ],
+            "name": "migrate_fee",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Vesting schedule for the base token"
+            ],
+            "name": "vesting_schedule",
+            "type": {
+              "defined": "VestingSchedule"
+            }
+          },
+          {
+            "docs": [
+              "Public key of the global configuration account",
+              "Contains protocol-wide settings this pool adheres to"
+            ],
+            "name": "global_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the platform configuration account",
+              "Contains platform-wide settings this pool adheres to"
+            ],
+            "name": "platform_config",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the base mint address"
+            ],
+            "name": "base_mint",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the quote mint address"
+            ],
+            "name": "quote_mint",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the base token vault",
+              "Holds the actual base tokens owned by the pool"
+            ],
+            "name": "base_vault",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "Public key of the quote token vault",
+              "Holds the actual quote tokens owned by the pool"
+            ],
+            "name": "quote_vault",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The creator of base token"
+            ],
+            "name": "creator",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "token program bits",
+              "bit0: base token program flag",
+              "0: spl_token_program",
+              "1: token_program_2022",
+              "",
+              "bit1: quote token program flag",
+              "0: spl_token_program",
+              "1: token_program_2022"
+            ],
+            "name": "token_program_flag",
+            "type": "u8"
+          },
+          {
+            "docs": [
+              "migrate to cpmm, creator fee on quote token or both token"
+            ],
+            "name": "amm_creator_fee_on",
+            "type": {
+              "defined": "AmmCreatorFeeOn"
+            }
+          },
+          {
+            "docs": [
+              "platform vesting token amount"
+            ],
+            "name": "platform_vesting_share",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                54
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "PoolStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Fund"
+          },
+          {
+            "name": "Migrate"
+          },
+          {
+            "name": "Trade"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TradeDirection",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Buy"
+          },
+          {
+            "name": "Sell"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TradeEvent",
+      "type": {
+        "fields": [
+          {
+            "name": "pool_state",
+            "type": "publicKey"
+          },
+          {
+            "name": "total_base_sell",
+            "type": "u64"
+          },
+          {
+            "name": "virtual_base",
+            "type": "u64"
+          },
+          {
+            "name": "virtual_quote",
+            "type": "u64"
+          },
+          {
+            "name": "real_base_before",
+            "type": "u64"
+          },
+          {
+            "name": "real_quote_before",
+            "type": "u64"
+          },
+          {
+            "name": "real_base_after",
+            "type": "u64"
+          },
+          {
+            "name": "real_quote_after",
+            "type": "u64"
+          },
+          {
+            "name": "amount_in",
+            "type": "u64"
+          },
+          {
+            "name": "amount_out",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          },
+          {
+            "name": "platform_fee",
+            "type": "u64"
+          },
+          {
+            "name": "creator_fee",
+            "type": "u64"
+          },
+          {
+            "name": "share_fee",
+            "type": "u64"
+          },
+          {
+            "name": "trade_direction",
+            "type": {
+              "defined": "TradeDirection"
+            }
+          },
+          {
+            "name": "pool_status",
+            "type": {
+              "defined": "PoolStatus"
+            }
+          },
+          {
+            "name": "exact_in",
+            "type": "bool"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "TransferFeeExtensionParams",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "denominator is 10000, currently, this value cannot exceed 5%, which is 500."
+            ],
+            "name": "transfer_fee_basis_points",
+            "type": "u16"
+          },
+          {
+            "docs": [
+              "Maximum fee on each transfers, the value must exceed supply * transfer_fee_basis_points / 10000"
+            ],
+            "name": "maximum_fee",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "VestingParams",
+      "type": {
+        "fields": [
+          {
+            "name": "total_locked_amount",
+            "type": "u64"
+          },
+          {
+            "name": "cliff_period",
+            "type": "u64"
+          },
+          {
+            "name": "unlock_period",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "VestingRecord",
+      "type": {
+        "fields": [
+          {
+            "docs": [
+              "Account update epoch"
+            ],
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The pool state account"
+            ],
+            "name": "pool",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The beneficiary of the vesting account"
+            ],
+            "name": "beneficiary",
+            "type": "publicKey"
+          },
+          {
+            "docs": [
+              "The amount of tokens claimed"
+            ],
+            "name": "claimed_amount",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "The share amount of the token to be vested"
+            ],
+            "name": "token_share_amount",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "padding for future updates"
+            ],
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    },
+    {
+      "name": "VestingSchedule",
+      "type": {
+        "fields": [
+          {
+            "name": "total_locked_amount",
+            "type": "u64"
+          },
+          {
+            "name": "cliff_period",
+            "type": "u64"
+          },
+          {
+            "name": "unlock_period",
+            "type": "u64"
+          },
+          {
+            "name": "start_time",
+            "type": "u64"
+          },
+          {
+            "docs": [
+              "Total allocated share amount of the base token, not greater than total_locked_amount"
+            ],
+            "name": "allocated_share_amount",
+            "type": "u64"
+          }
+        ],
+        "kind": "struct"
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "ClaimVestedEvent",
+      "fields": [
+        {
+          "name": "pool_state",
+          "type": "publicKey"
+        },
+        {
+          "name": "beneficiary",
+          "type": "publicKey"
+        },
+        {
+          "name": "claim_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "CreateVestingEvent",
+      "fields": [
+        {
+          "name": "pool_state",
+          "type": "publicKey"
+        },
+        {
+          "name": "beneficiary",
+          "type": "publicKey"
+        },
+        {
+          "name": "share_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "PoolCreateEvent",
+      "fields": [
+        {
+          "name": "pool_state",
+          "type": "publicKey"
+        },
+        {
+          "name": "creator",
+          "type": "publicKey"
+        },
+        {
+          "name": "config",
+          "type": "publicKey"
+        },
+        {
+          "name": "base_mint_param",
+          "type": {
+            "defined": "MintParams"
+          }
+        },
+        {
+          "name": "curve_param",
+          "type": {
+            "defined": "CurveParams"
+          }
+        },
+        {
+          "name": "vesting_param",
+          "type": {
+            "defined": "VestingParams"
+          }
+        },
+        {
+          "name": "amm_fee_on",
+          "type": {
+            "defined": "AmmCreatorFeeOn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "TradeEvent",
+      "fields": [
+        {
+          "name": "pool_state",
+          "type": "publicKey"
+        },
+        {
+          "name": "total_base_sell",
+          "type": "u64"
+        },
+        {
+          "name": "virtual_base",
+          "type": "u64"
+        },
+        {
+          "name": "virtual_quote",
+          "type": "u64"
+        },
+        {
+          "name": "real_base_before",
+          "type": "u64"
+        },
+        {
+          "name": "real_quote_before",
+          "type": "u64"
+        },
+        {
+          "name": "real_base_after",
+          "type": "u64"
+        },
+        {
+          "name": "real_quote_after",
+          "type": "u64"
+        },
+        {
+          "name": "amount_in",
+          "type": "u64"
+        },
+        {
+          "name": "amount_out",
+          "type": "u64"
+        },
+        {
+          "name": "protocol_fee",
+          "type": "u64"
+        },
+        {
+          "name": "platform_fee",
+          "type": "u64"
+        },
+        {
+          "name": "creator_fee",
+          "type": "u64"
+        },
+        {
+          "name": "share_fee",
+          "type": "u64"
+        },
+        {
+          "name": "trade_direction",
+          "type": {
+            "defined": "TradeDirection"
+          }
+        },
+        {
+          "name": "pool_status",
+          "type": {
+            "defined": "PoolStatus"
+          }
+        },
+        {
+          "name": "exact_in",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "msg": "Not approved",
+      "name": "NotApproved"
+    },
+    {
+      "code": 6001,
+      "msg": "Input account owner is not the program address",
+      "name": "InvalidOwner"
+    },
+    {
+      "code": 6002,
+      "msg": "InvalidInput",
+      "name": "InvalidInput"
+    },
+    {
+      "code": 6003,
+      "msg": "The input params are not match with curve type in config",
+      "name": "InputNotMatchCurveConfig"
+    },
+    {
+      "code": 6004,
+      "msg": "Exceeds desired slippage limit",
+      "name": "ExceededSlippage"
+    },
+    {
+      "code": 6005,
+      "msg": "Pool funding",
+      "name": "PoolFunding"
+    },
+    {
+      "code": 6006,
+      "msg": "Pool migrated",
+      "name": "PoolMigrated"
+    },
+    {
+      "code": 6007,
+      "msg": "Migrate type not match",
+      "name": "MigrateTypeNotMatch"
+    },
+    {
+      "code": 6008,
+      "msg": "Math overflow",
+      "name": "MathOverflow"
+    },
+    {
+      "code": 6009,
+      "msg": "No assets to collect",
+      "name": "NoAssetsToCollect"
+    },
+    {
+      "code": 6010,
+      "msg": "Vesting ratio too high",
+      "name": "VestingRatioTooHigh"
+    },
+    {
+      "code": 6011,
+      "msg": "Vesting setting ended",
+      "name": "VestingSettingEnded"
+    },
+    {
+      "code": 6012,
+      "msg": "Vesting not started",
+      "name": "VestingNotStarted"
+    },
+    {
+      "code": 6013,
+      "msg": "No vesting schedule",
+      "name": "NoVestingSchedule"
+    },
+    {
+      "code": 6014,
+      "msg": "The platform info input is invalid",
+      "name": "InvalidPlatformInfo"
+    },
+    {
+      "code": 6015,
+      "msg": "Pool not migrated",
+      "name": "PoolNotMigrated"
+    },
+    {
+      "code": 6016,
+      "msg": "The input cp swap config account is invalid",
+      "name": "InvalidCpSwapConfig"
+    },
+    {
+      "code": 6017,
+      "msg": "No support extension",
+      "name": "NoSupportExtension"
+    },
+    {
+      "code": 6018,
+      "msg": "Not enough remaining accounts",
+      "name": "NotEnoughRemainingAccounts"
+    },
+    {
+      "code": 6019,
+      "msg": "TransferFee calculate not match",
+      "name": "TransferFeeCalculateNotMatch"
+    },
+    {
+      "code": 6020,
+      "msg": "Curve param is not exist",
+      "name": "CurveParamIsNotExist"
+    },
+    {
+      "code": 6021,
+      "msg": "Total locked amount must great or equal to the platform vesting share amount",
+      "name": "InvalidTotalLockedAmount"
+    }
+  ],
+  "metadata": {
+    "address": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"
+  }
+}

@@ -113,6 +113,10 @@ export const CONFIG = {
 
   // Moralis
   MORALIS_API_KEY: process.env.MORALIS_API_KEY || "",
+
+  // Whale Watcher
+  WHALE_WATCHER_ENABLED: process.env.WHALE_WATCHER_ENABLED === "true",
+  WHALE_ALERT_THRESHOLD_SOL: parseFloat(process.env.WHALE_ALERT_THRESHOLD_SOL || "50"),
 };
 
 /**

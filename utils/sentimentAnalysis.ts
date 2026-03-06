@@ -118,6 +118,11 @@ async function fetchSantimentData(symbol: string) {
       }
     );
 
+    if (!response || !response.data) {
+      logger.debug(`[Sentiment] Invalid response from Santiment for ${symbol}`);
+      return null;
+    }
+
     const data = (response.data as any)?.data;
     if (!data) {
       logger.debug(`[Sentiment] No data returned for ${symbol}`);
@@ -163,6 +168,11 @@ async function getTwitterSentiment(symbol: string): Promise<number | null> {
       }
     );
 
+    if (!response || !response.data) {
+      logger.debug(`[Sentiment-HF] Invalid response from Hugging Face for ${symbol}`);
+      return null;
+    }
+
     const results = response.data;
     if (Array.isArray(results) && results[0] && Array.isArray(results[0])) {
       // Logic for twitter-roberta-base-sentiment-latest:
@@ -187,6 +197,12 @@ async function getTwitterSentiment(symbol: string): Promise<number | null> {
 async function getSenseAIAnalysis(mint: string) {
   try {
     const response = await axios.get(`${SENSE_AI_API_URL}?mint=${mint}`, { timeout: 5000 });
+
+    if (!response || !response.data) {
+      logger.debug(`[Sentiment-Sense] Invalid response from SenseAI for ${mint}`);
+      return null;
+    }
+
     const data = response.data as any;
 
     if (data && data.socialMetrics) {

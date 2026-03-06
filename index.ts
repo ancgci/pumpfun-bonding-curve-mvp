@@ -14,6 +14,11 @@ import { Idl } from "@project-serum/anchor";
 import { SolanaParser } from "@shyft-to/solana-transaction-parser";
 import { TransactionFormatter } from "./utils/transaction-formatter";
 import pumpFunIdl from "./idls/pump_0.1.0.json";
+import meteoraDbcIdl from "./idls/meteora_dbc.json";
+import moonshotIdl from "./idls/moonshot.json";
+import bonkFunIdl from "./idls/bonk_fun.json";
+import daosFunIdl from "./idls/daos_fun.json";
+import { initTelegramCommands } from "./utils/telegramBot";
 import { SolanaEventParser } from "./utils/event-parser";
 import { bnLayoutFormatter } from "./utils/bn-layout-formatter";
 import { transactionOutput } from "./utils/transactionOutput";
@@ -115,11 +120,6 @@ if (telegramEnabled) {
         timeout: 30000,
       },
     },
-    retry: 5,
-    retryTimeout: 10000,
-    pollingTimeout: 120000,
-    onlyFirstMatch: true,
-    baseApiUrl: "https://api.telegram.org",
   });
   telegramActive = true;
 
@@ -134,6 +134,9 @@ if (telegramEnabled) {
       disable_web_page_preview: true,
     });
   });
+
+  // Initialize Telegram Command Listener (/top10, /newlistings)
+  initTelegramCommands();
 } else {
   logger.warn("Telegram desabilitado (sem token/chat id); alertas não serão enviados.");
   alertQueue.setSendCallback(async (message: string) => {
@@ -324,8 +327,15 @@ let METEORA_DBC_IX_PARSER: SolanaParser | null = null;
 let METEORA_DBC_EVENT_PARSER: SolanaEventParser | null = null;
 if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
   METEORA_DBC_IX_PARSER = new SolanaParser([]);
+  METEORA_DBC_IX_PARSER.addParserFromIdl(
+    METEORA_DBC_PROGRAM_ID_OBJ.toBase58(),
+    meteoraDbcIdl as unknown as Idl
+  );
   METEORA_DBC_EVENT_PARSER = new SolanaEventParser([], console);
-  logger.warn("⚠️  Meteora DBC parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+  METEORA_DBC_EVENT_PARSER.addParserFromIdl(
+    METEORA_DBC_PROGRAM_ID_OBJ.toBase58(),
+    meteoraDbcIdl as unknown as Idl
+  );
 }
 
 // Parser para Bonk.fun (ATENÇÃO: Requer IDL para funcionar corretamente)
@@ -333,8 +343,15 @@ let BONK_FUN_IX_PARSER: SolanaParser | null = null;
 let BONK_FUN_EVENT_PARSER: SolanaEventParser | null = null;
 if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
   BONK_FUN_IX_PARSER = new SolanaParser([]);
+  BONK_FUN_IX_PARSER.addParserFromIdl(
+    BONK_FUN_PROGRAM_ID_OBJ.toBase58(),
+    bonkFunIdl as unknown as Idl
+  );
   BONK_FUN_EVENT_PARSER = new SolanaEventParser([], console);
-  logger.warn("⚠️  Bonk.fun parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+  BONK_FUN_EVENT_PARSER.addParserFromIdl(
+    BONK_FUN_PROGRAM_ID_OBJ.toBase58(),
+    bonkFunIdl as unknown as Idl
+  );
 }
 
 // Parser para daos.fun (ATENÇÃO: Requer IDL para funcionar corretamente)
@@ -342,8 +359,15 @@ let DAOS_FUN_IX_PARSER: SolanaParser | null = null;
 let DAOS_FUN_EVENT_PARSER: SolanaEventParser | null = null;
 if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
   DAOS_FUN_IX_PARSER = new SolanaParser([]);
+  DAOS_FUN_IX_PARSER.addParserFromIdl(
+    DAOS_FUN_PROGRAM_ID_OBJ.toBase58(),
+    daosFunIdl as unknown as Idl
+  );
   DAOS_FUN_EVENT_PARSER = new SolanaEventParser([], console);
-  logger.warn("⚠️  daos.fun parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+  DAOS_FUN_EVENT_PARSER.addParserFromIdl(
+    DAOS_FUN_PROGRAM_ID_OBJ.toBase58(),
+    daosFunIdl as unknown as Idl
+  );
 }
 
 // Parser para Moonshot Screener (ATENÇÃO: Requer IDL para funcionar corretamente)
@@ -351,8 +375,15 @@ let MOONSHOT_IX_PARSER: SolanaParser | null = null;
 let MOONSHOT_EVENT_PARSER: SolanaEventParser | null = null;
 if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
   MOONSHOT_IX_PARSER = new SolanaParser([]);
+  MOONSHOT_IX_PARSER.addParserFromIdl(
+    MOONSHOT_PROGRAM_ID_OBJ.toBase58(),
+    moonshotIdl as unknown as Idl
+  );
   MOONSHOT_EVENT_PARSER = new SolanaEventParser([], console);
-  logger.warn("⚠️  Moonshot parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+  MOONSHOT_EVENT_PARSER.addParserFromIdl(
+    MOONSHOT_PROGRAM_ID_OBJ.toBase58(),
+    moonshotIdl as unknown as Idl
+  );
 }
 
 // Parser para anoncoin.it (ATENÇÃO: Requer IDL para funcionar corretamente)
@@ -548,8 +579,8 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está ${tOutput.type === "SELL" ? "VENDENDO" : "COMPRANDO"}!`);
 
       const timestamp = new Date().toLocaleTimeString('pt-BR');
-      const tokenName = tokenMetadata?.name || "Unknown";
-      const tokenSymbol = tokenMetadata?.symbol || "UNK";
+      const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+      const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
 
       const alertMsg = `${emojiHeader} [${timestamp}]\n\n` +
         `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
@@ -577,6 +608,33 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     }
   }
 
+  // 🐳 WHALE WATCHER (Alertas de grandes movimentações externas)
+  if (ACTIVE_CONFIG.WHALE_WATCHER_ENABLED && Number(tOutput.solAmount) >= ACTIVE_CONFIG.WHALE_ALERT_THRESHOLD_SOL) {
+    const isBigBuy = tOutput.type === "BUY";
+    const isBigSell = tOutput.type === "SELL";
+
+    if (isBigBuy || isBigSell) {
+      const typeText = isBigBuy ? "BUY" : "SELL";
+      const emoji = isBigBuy ? "💰" : "🚨";
+      const headerEmoji = isBigBuy ? "🐳 <b>WHALE BUY DETECTED!</b> 🐳" : "💀 <b>WHALE SELL / DUMP!</b> 💀";
+
+      logger.warn(`🐳 [WHALE ALERT] Movimentação massiva (${typeText}) detectada no token ${tOutput.mint}: ${tOutput.solAmount} SOL!`);
+
+      const timestamp = new Date().toLocaleTimeString('pt-BR');
+      const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+      const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+
+      const whaleAlertMsg = `${headerEmoji} [${timestamp}]\n\n` +
+        `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
+        `Symbol: <b>${tokenSymbol}</b>\n` +
+        `Amount: <b>${Number(tOutput.solAmount).toFixed(2)} SOL</b> ${emoji}\n` +
+        `Whale Wallet: <a href="https://trojan.com/wallet?address=${tOutput.user}&period=1d">${tOutput.user}</a>\n` +
+        `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n`;
+
+      sendMessage(whaleAlertMsg);
+    }
+  }
+
   // 🚨 EMERGENCY STOP CHECK
   if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) {
     logger.warn(`🛑 EMERGENCY STOP ATIVO! Ignorando transação para ${tOutput.mint}`);
@@ -600,11 +658,14 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
     let currentPrice = 0;
     if (solAmount > 0 && tokenAmount > 0) {
-      currentPrice = solAmount / tokenAmount;
+      // OTIMIZAÇÃO: PumpFun tokens possuem 6 decimais. TokenAmount vem em unidades base.
+      // Preço correto = SOL / (Tokens / 10^6)
+      currentPrice = solAmount / (tokenAmount / 1_000_000);
     } else if (tokenMetadata?.price) {
       currentPrice = tokenMetadata.price;
     } else {
-      currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance * 1000000000) / tokenAmount : 0;
+      // Fallback baseada no balanço da curva
+      currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance / (tokenAmount / 1_000_000)) : 0;
     }
 
     recordPriceSample(tOutput.mint, currentPrice);
@@ -665,7 +726,11 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       bondingCurvePercent: Number(progress),
       riskScore: riskAnalysis?.score ?? 0,
       honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
-      isCopyTrade: followedWallet,
+      isCopyTrade: !!followedWallet,
+      holders: riskAnalysis?.metrics?.totalHolders ?? 0,
+      volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
+      liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+      top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
     };
 
     try {
@@ -700,8 +765,8 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
     // Alerta Telegram (apenas discovery)
     if (isDiscovery) {
-      let tokenName = tokenMetadata?.name || "Unknown";
-      let tokenSymbol = tokenMetadata?.symbol || "UNK";
+      const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+      const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
       const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
 
       const timestamp = new Date().toLocaleTimeString('pt-BR');
@@ -1964,8 +2029,7 @@ bot?.on('polling_error', async (error: any) => {
 
   // Tratamento específico para redirecionamentos 301
   if (error.message && error.message.includes('301')) {
-    logger.warn("⚠️  Redirecionamento 301 detectado. Atualizando baseApiUrl...");
-    if (bot) bot.options.baseApiUrl = 'https://api.telegram.org';
+    logger.warn("⚠️  Redirecionamento 301 detectado. Aguardando antes de tentar...");
     await new Promise(resolve => setTimeout(resolve, 5000));
     return;
   }

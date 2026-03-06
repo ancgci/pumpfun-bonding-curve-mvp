@@ -2,6 +2,12 @@
 process.env.AGENT_ENABLED = 'true';
 process.env.NV_LLM_API_KEY = 'mock-key';
 process.env.NODE_ENV = 'test';
+// Disable external integrations for a stable test environment
+process.env.SANTIMENT_API_KEY = '';
+process.env.HUGGINGFACE_API_KEY = '';
+process.env.SENSE_AI_ENABLED = 'false';
+process.env.SOLSNIFFER_API_KEY = '';
+process.env.RUGCHECK_XYZ_ENABLED = 'false';
 
 import { LearnerAgent } from '../../../utils/learnerAgent';
 import { agentOrchestrator } from '../../../utils/agentOrchestrator';

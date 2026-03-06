@@ -681,50 +681,55 @@ function updateSimulationStatus(data) {
   }
 }
 
+let lastTradesJson = '';
 function updateSimulationTrades(trades) {
   const list = document.getElementById('simTradesList');
   if (!trades || trades.length === 0) {
-    list.innerHTML = '<p class="empty">No simulation trades yet. Start the bot to see simulation trades here.</p>';
+    if (list.innerHTML.includes('loading')) {
+      list.innerHTML = '<tr><td colspan="10" class="empty">No simulation trades yet. Start the bot to see simulation trades here.</td></tr>';
+    }
     return;
   }
+
+  // Check if data actually changed to avoid unnecessary re-renders/scroll reset
+  const currentJson = JSON.stringify(trades);
+  if (currentJson === lastTradesJson) return;
+  lastTradesJson = currentJson;
+
   list.innerHTML = trades.map(t => {
     const isWin = t.pnl > 0;
-    const timeStr = t.entryTime ? new Date(t.entryTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '---';
-    const statusClass = t.status === 'OPEN' ? 'status-open' : (isWin ? 'status-win' : 'status-loss');
+    const isOpen = t.status === 'OPEN';
+    const rowClass = isOpen ? 'open' : (isWin ? 'profit' : 'loss');
+    const timeStr = t.entryTime ? new Date(t.entryTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '---';
+    const statusClass = isOpen ? 'status-open' : (isWin ? 'status-win' : 'status-loss');
+
+    // Formatting values safely
+    const entryAmt = t.entryAmount || 0.01; // Fallback to 0.01 if old DB row
+    const finalAmtStr = isOpen ? '---' : (entryAmt + (t.pnl || 0)).toFixed(4);
+    const pnlSol = t.pnl?.toFixed ? t.pnl.toFixed(4) : (t.pnl || 0);
+    const pnlPct = t.pnlPercent?.toFixed ? t.pnlPercent.toFixed(2) : (t.pnlPercent || 0);
+    const pnlClass = isOpen ? '' : (isWin ? 'profit' : 'loss');
 
     return `
-      <div class="sim-trade-card ${isWin ? 'profit' : 'loss'} ${t.status === 'OPEN' ? 'open' : ''}">
-        <div class="sim-trade-header">
-          <div class="sim-trade-token">
-            <a href="https://solscan.io/token/${t.tokenMint}" target="_blank" rel="noopener noreferrer" class="mint-link">
-              ${t.tokenSymbol || 'Unknown'} <span class="mint-mini">${t.tokenMint.substring(0, 4)}...</span>
-            </a>
-          </div>
-          <div class="sim-status-badge ${statusClass}">${t.status}</div>
-        </div>
-        <div class="sim-trade-info-grid">
-          <div class="info-item">
-            <span class="info-label">Entry</span>
-            <span class="info-value">${t.entryPrice?.toFixed ? t.entryPrice.toFixed(8) : t.entryPrice}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Exit/Current</span>
-            <span class="info-value">${t.exitPrice?.toFixed ? t.exitPrice.toFixed(8) : (t.exitPrice || '---')}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Confidence</span>
-            <span class="info-value">${t.confidence}%</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">Time</span>
-            <span class="info-value">${timeStr}</span>
-          </div>
-        </div>
-        <div class="sim-trade-footer">
-           <div class="sim-pnl ${isWin ? 'profit' : 'loss'}">${isWin ? '+' : ''}${t.pnl?.toFixed ? t.pnl.toFixed(4) : (t.pnl || 0)} SOL (${t.pnlPercent?.toFixed ? t.pnlPercent.toFixed(2) : (t.pnlPercent || 0)}%)</div>
-           <div class="sim-reason">${t.reason || ''}</div>
-        </div>
-      </div>
+      <tr class="${rowClass}">
+        <td><span class="text-muted">${timeStr}</span></td>
+        <td>
+          <a href="https://solscan.io/token/${t.tokenMint}" target="_blank" rel="noopener noreferrer" class="mint-link">
+            <strong>${t.tokenSymbol || 'Unknown'}</strong>
+            <span class="mint-mini">${truncateAddress(t.tokenMint)}</span>
+          </a>
+        </td>
+        <td><span class="status-badge ${statusClass}">${t.status}</span></td>
+        <td class="mono">${t.entryPrice?.toFixed ? t.entryPrice.toFixed(8) : (t.entryPrice || '---')}</td>
+        <td class="mono">${entryAmt.toFixed(4)}</td>
+        <td class="mono">${t.tokenHolders || '---'}</td>
+        <td class="mono">${t.exitPrice?.toFixed ? t.exitPrice.toFixed(8) : (t.exitPrice || '---')}</td>
+        <td class="mono ${pnlClass}">${finalAmtStr}</td>
+        <td class="pnl-cell ${pnlClass}">${isOpen ? pnlSol : (isWin ? '+' + pnlSol : pnlSol)}</td>
+        <td class="pnl-cell ${pnlClass}">${isOpen ? pnlPct + '%' : (isWin ? '+' + pnlPct + '%' : pnlPct + '%')}</td>
+        <td class="mono">${t.confidence}%</td>
+        <td class="reason-cell"><small title="${t.reason || ''}">${t.reason || ''}</small></td>
+      </tr>
     `;
   }).join('');
 }

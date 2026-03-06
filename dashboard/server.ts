@@ -302,13 +302,15 @@ app.get("/api/simulation/trades", (req, res) => {
                 token_symbol as tokenSymbol,
                 entry_time as entryTime,
                 entry_price as entryPrice,
+                entry_amount as entryAmount,
                 exit_time as exitTime,
                 exit_price as exitPrice,
                 pnl_sol as pnl,
                 pnl_percent as pnlPercent,
                 confidence,
                 status,
-                reason
+                reason,
+                token_holders as tokenHolders
             FROM simulated_trades
             ORDER BY entry_time DESC
             LIMIT ?

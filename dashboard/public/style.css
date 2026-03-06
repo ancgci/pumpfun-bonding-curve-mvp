@@ -1020,49 +1020,157 @@ section h2 {
   gap: 16px;
 }
 
-.sim-trade-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: 16px;
-  padding: 16px 20px;
-  transition: all 0.2s;
-}
-
-.sim-trade-card.profit {
-  border-left: 4px solid var(--profit);
-  background: linear-gradient(90deg, var(--profit-bg) 0%, var(--bg-card) 60%);
-}
-
-.sim-trade-card.loss {
-  border-left: 4px solid var(--loss);
-  background: linear-gradient(90deg, var(--loss-bg) 0%, var(--bg-card) 60%);
-}
-
-.sim-trade-card:hover {
-  transform: translateY(-3px);
-}
-
-.sim-trade-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: 800;
-  margin-bottom: 12px;
-  font-size: 1.05rem;
-}
-
-.sim-trade-body {
-  font-size: 0.9rem;
-  color: var(--text-muted);
-  display: grid;
-  gap: 6px;
-  margin-bottom: 12px;
-  font-weight: 500;
-}
-
 .sim-trade-pnl {
   font-weight: 800;
   font-size: 1.1rem;
+}
+
+/* Premium Table Styling */
+.table-container {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 400px;
+  /* Altura fixa para habilitar o scroll */
+  margin-top: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-indigo) transparent;
+}
+
+.table-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+  background: var(--accent-indigo);
+  border-radius: 10px;
+}
+
+.premium-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.premium-table th {
+  padding: 12px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.premium-table td {
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+
+.premium-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.premium-table tr.open td {
+  border-left: 2px solid var(--accent-cyan);
+}
+
+.premium-table tr.profit td {
+  border-left: 2px solid var(--profit);
+}
+
+.premium-table tr.loss td {
+  border-left: 2px solid var(--loss);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.pnl-cell {
+  font-weight: 700;
+}
+
+.pnl-cell.profit {
+  color: var(--profit);
+}
+
+.pnl-cell.loss {
+  color: var(--loss);
+}
+
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.status-badge.status-open {
+  background: rgba(34, 211, 238, 0.1);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+}
+
+.status-badge.status-win {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--profit);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-badge.status-loss {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--loss);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.confidence-mini-bar {
+  width: 80px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.confidence-mini-bar .fill {
+  height: 100%;
+  background: var(--accent-indigo);
+  border-radius: 4px;
+  box-shadow: 0 0 8px var(--accent-indigo);
+}
+
+.confidence-mini-bar span {
+  position: absolute;
+  right: -35px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.reason-cell {
+  max-width: 250px;
+  min-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.reason-cell:hover {
+  white-space: normal;
+  overflow: visible;
+  background: var(--bg-main);
+  position: relative;
+  z-index: 10;
 }
 
 /* Agent Live Logs Terminal */
@@ -1247,19 +1355,35 @@ footer p {
   background: transparent;
 }
 
-.sim-trade-card.profit::before { background: var(--profit); }
-.sim-trade-card.loss::before { background: var(--loss); }
-.sim-trade-card.open::before { background: var(--accent-cyan); animation: glow-pulse 2s infinite; }
+.sim-trade-card.profit::before {
+  background: var(--profit);
+}
+
+.sim-trade-card.loss::before {
+  background: var(--loss);
+}
+
+.sim-trade-card.open::before {
+  background: var(--accent-cyan);
+  animation: glow-pulse 2s infinite;
+}
 
 @keyframes glow-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .sim-trade-card:hover {
   transform: translateY(-5px) scale(1.02);
   border-color: rgba(255, 255, 255, 0.2);
-  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
   background: var(--bg-card-hover);
 }
 
@@ -1296,16 +1420,30 @@ footer p {
   text-transform: uppercase;
 }
 
-.status-open { background: rgba(34, 211, 238, 0.2); color: var(--accent-cyan); border: 1px solid var(--accent-cyan); }
-.status-win { background: var(--profit-bg); color: var(--profit); border: 1px solid var(--profit); }
-.status-loss { background: var(--loss-bg); color: var(--loss); border: 1px solid var(--loss); }
+.status-open {
+  background: rgba(34, 211, 238, 0.2);
+  color: var(--accent-cyan);
+  border: 1px solid var(--accent-cyan);
+}
+
+.status-win {
+  background: var(--profit-bg);
+  color: var(--profit);
+  border: 1px solid var(--profit);
+}
+
+.status-loss {
+  background: var(--loss-bg);
+  color: var(--loss);
+  border: 1px solid var(--loss);
+}
 
 .sim-trade-info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   padding: 12px;
-  background: rgba(0,0,0,0.2);
+  background: rgba(0, 0, 0, 0.2);
   border-radius: 12px;
 }
 
@@ -1341,8 +1479,15 @@ footer p {
   border-radius: 8px;
 }
 
-.sim-pnl.profit { background: var(--profit-bg); color: var(--profit); }
-.sim-pnl.loss { background: var(--loss-bg); color: var(--loss); }
+.sim-pnl.profit {
+  background: var(--profit-bg);
+  color: var(--profit);
+}
+
+.sim-pnl.loss {
+  background: var(--loss-bg);
+  color: var(--loss);
+}
 
 .sim-reason {
   font-size: 0.8rem;

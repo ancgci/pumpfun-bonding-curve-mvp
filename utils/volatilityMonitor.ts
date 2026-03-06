@@ -37,11 +37,116 @@ export function recordPriceSample(mint: string, price: number, now: number = Dat
     currentPeriod.close = price;
   }
 
-  // Prune old periods (keep 20 for buffer)
-  const periodCutoff = minuteTs - (20 * 60000);
+  // Prune old periods (keep 60 for buffer to support MACD-26)
+  const periodCutoff = minuteTs - (60 * 60000);
   const prunedPeriods = periods.filter(p => p.timestamp >= periodCutoff);
   periodStore.set(mint, prunedPeriods);
 }
+
+/**
+ * Calculate Relative Strength Index (RSI)
+ */
+export function getRSI(mint: string, period: number = 14): number | null {
+  const periods = periodStore.get(mint) || [];
+  if (periods.length < period + 1) return null;
+
+  const closes = periods.map(p => p.close).slice(-(period + 1));
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) gains += change;
+    else losses -= change;
+  }
+
+  if (losses === 0) return 100;
+  const rs = (gains / period) / (losses / period);
+  return 100 - (100 / (1 + rs));
+}
+
+/**
+ * Calculate Moving Average Convergence Divergence (MACD)
+ * Standard (12, 26, 9)
+ */
+export function getMACD(mint: string): { macd: number; signal: number; histogram: number } | null {
+  const periods = periodStore.get(mint) || [];
+  if (periods.length < 35) return null; // Need enough history for EMA 26 + Signal 9
+
+  const closes = periods.map(p => p.close);
+
+  const calculateEMA = (data: number[], p: number) => {
+    const k = 2 / (p + 1);
+    let ema = data[0];
+    for (let i = 1; i < data.length; i++) {
+      ema = data[i] * k + ema * (1 - k);
+    }
+    return ema;
+  };
+
+  const ema12 = calculateEMA(closes.slice(-12), 12);
+  const ema26 = calculateEMA(closes.slice(-26), 26);
+  const macdLine = ema12 - ema26;
+
+  // Signal line is 9-day EMA of MACD line (simplified for real-time buffer)
+  // We'll calculate the last 9 MACD points
+  const macdHistory: number[] = [];
+  for (let i = 0; i < 9; i++) {
+    const hCloses = closes.slice(-(26 + 9 - i), closes.length - (9 - i - 1) || undefined);
+    if (hCloses.length < 26) continue;
+    const hEma12 = calculateEMA(hCloses.slice(-12), 12);
+    const hEma26 = calculateEMA(hCloses.slice(-26), 26);
+    macdHistory.push(hEma12 - hEma26);
+  }
+
+  if (macdHistory.length < 9) return null;
+  const signalLine = calculateEMA(macdHistory, 9);
+
+  return {
+    macd: macdLine,
+    signal: signalLine,
+    histogram: macdLine - signalLine
+  };
+}
+
+/**
+ * Detects the trend of the last completed candle
+ * Returns % drop if red, % pump if green
+ */
+export function getPreviousCandleTrend(mint: string): { changePct: number; isRed: boolean; bodySize: number } | null {
+  const periods = periodStore.get(mint) || [];
+  if (periods.length < 2) return null;
+
+  const prev = periods[periods.length - 2];
+  const changePct = ((prev.close - prev.high) / prev.high) * 100;
+  const isRed = prev.close < prev.high; // Simplified for pump.fun volatility
+  const totalHeight = prev.high - prev.low;
+  const bodySize = totalHeight > 0 ? (Math.abs(prev.close - prev.high) / totalHeight) * 100 : 0;
+
+  return { changePct, isRed, bodySize };
+}
+
+/**
+ * Micro-Trend: High-resolution analysis of the last few seconds.
+ * Helps detect "heartbeat" dumps before a 1-minute candle closes.
+ */
+export function getMicroTrend(mint: string, windowMs: number = 10000): { changePct: number; samples: number } | null {
+  const arr = store.get(mint) || [];
+  if (arr.length < 2) return null;
+
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  const recent = arr.filter(s => s.t >= cutoff);
+
+  if (recent.length < 2) return null;
+
+  const first = recent[0].p;
+  const last = recent[recent.length - 1].p;
+  const changePct = ((last - first) / first) * 100;
+
+  return { changePct, samples: recent.length };
+}
+
 
 export interface WindowVol {
   windowSec: number;

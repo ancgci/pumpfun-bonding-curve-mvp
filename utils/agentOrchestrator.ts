@@ -10,7 +10,7 @@ import {
   updateSimulatedTradeExit,
   getOpenTradeForToken,
 } from "./simulationEngine";
-import { recordPriceSample, getVolatility } from "./volatilityMonitor";
+import { recordPriceSample, getVolatility, getPreviousCandleTrend, getRSI, getMACD, getMicroTrend } from "./volatilityMonitor";
 import { getTokenSentiment } from "./sentimentAnalysis";
 import { getSolSnifferAnalysis } from "./riskEngine/solSniffer";
 import { analyzeDevHistory } from "./riskEngine/devHistory";
@@ -84,6 +84,9 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `Honeypot: ${tokenAnalysis.honeypotRisk}`,
+    tokenAnalysis.rsi ? `RSI: ${tokenAnalysis.rsi.toFixed(1)}` : null,
+    tokenAnalysis.macd ? `MACD: H:${tokenAnalysis.macd.histogram.toFixed(8)}` : null,
+    tokenAnalysis.trend ? `Trend: ${tokenAnalysis.trend.isRed ? "RED" : "GREEN"} (${tokenAnalysis.trend.bodySize.toFixed(1)}% body)` : null,
     `Volatility: ${volSummary || "n/a"}`,
     // Enriched data for better decisions
     tokenAnalysis.tokenAgeSec !== undefined ? `TokenAge: ${tokenAnalysis.tokenAgeSec}s` : null,
@@ -245,6 +248,9 @@ interface TokenAnalysis {
   };
   creatorAddr?: string;
   isCopyTrade?: boolean;
+  trend?: { changePct: number; isRed: boolean; bodySize: number };
+  rsi?: number;
+  macd?: { macd: number; signal: number; histogram: number };
 }
 
 /**
@@ -275,11 +281,33 @@ export async function getAgentDecision(
     };
   }
 
+  // 🕵️ ENHANCED TA DATA
+  const trend = getPreviousCandleTrend(tokenAnalysis.mint);
+  const rsi = getRSI(tokenAnalysis.mint);
+  const macd = getMACD(tokenAnalysis.mint);
+
+  tokenAnalysis.trend = trend || undefined;
+  tokenAnalysis.rsi = rsi || undefined;
+  tokenAnalysis.macd = macd || undefined;
+
   // ══════════════════════════════════════════════════
   // PRE-FILTER: Instant reject without LLM (< 1ms)
   // Saves API calls and latency on obvious rejects
   // Only rejects when RiskEngine data is ACTUALLY available
   // ══════════════════════════════════════════════════
+
+  if (trend && trend.isRed && trend.bodySize > 40) {
+    logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Falling knife detected (-${trend.bodySize.toFixed(1)}% candle body)`);
+    return { action: "SKIP", confidence: 0, reasoning: `TrendPreFilter: sharp downward candle (${trend.bodySize.toFixed(1)}%)` };
+  }
+
+  // [NEW] Micro-Trend Pre-Filter: Fast rejection for "heartbeat" dumps (5-10s window)
+  const microTrend = getMicroTrend(tokenAnalysis.mint, 10000);
+  if (microTrend && microTrend.changePct < -8) { // 8% drop in 10s is very suspicious
+    logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Micro-dump detected (${microTrend.changePct.toFixed(1)}% in 10s)`);
+    return { action: "SKIP", confidence: 0, reasoning: `MicroTrend: sharp drop detected (${microTrend.changePct.toFixed(1)}% in 10s)` };
+  }
+
   const hasRiskData = tokenAnalysis.liquiditySol > 0 || tokenAnalysis.holders > 0 || tokenAnalysis.riskScore > 0;
 
   if (tokenAnalysis.honeypotRisk) {
@@ -293,9 +321,20 @@ export async function getAgentDecision(
       logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: liquidity ${tokenAnalysis.liquiditySol.toFixed(2)} SOL < 2 SOL`);
       return { action: "SKIP", confidence: 0, reasoning: "PreFilter: low liquidity" };
     }
-    if (tokenAnalysis.holders > 0 && tokenAnalysis.holders < 10) {
-      logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: only ${tokenAnalysis.holders} holders`);
-      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: too few holders (< 10)" };
+    if (tokenAnalysis.holders > 0) {
+      const curve = tokenAnalysis.bondingCurvePercent;
+      const h = tokenAnalysis.holders;
+
+      let minRequired = 10;
+      if (curve > 90) minRequired = 50;
+      else if (curve > 80) minRequired = 30;
+      else if (curve > 50) minRequired = 20; // Increased from 15
+      else minRequired = 15; // Increased from 10 for very early tokens
+
+      if (h < minRequired) {
+        logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Low holders (${h}) for curve progress (${curve.toFixed(1)}%). Min required: ${minRequired}`);
+        return { action: "SKIP", confidence: 0, reasoning: `PreFilter: too few holders (${h}) for ${curve.toFixed(1)}% curve` };
+      }
     }
     if (tokenAnalysis.riskScore > 70) {
       logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: riskScore ${tokenAnalysis.riskScore} > 70`);
@@ -446,7 +485,8 @@ export async function executeAgentTrade(
         reasoning: decision.reasoning,
         takeProfit: decision.takeProfit,
         stopLoss: decision.stopLoss,
-      }
+      },
+      tokenAnalysis.holders
     );
 
     // Schedule monitoring for exit (TP/SL/timeout)
@@ -490,9 +530,9 @@ function scheduleSimulationExit(
     `📈 [SIMULATION] Monitoring ${symbol}: TP=${tp.toFixed(8)} SL=${sl.toFixed(8)} (trailing 20%)`
   );
 
-  // Check every 10 seconds
+  // Check every 5 seconds (Fast monitoring for dump protection)
   let checkCount = 0;
-  const maxChecks = 360; // 1 hour
+  const maxChecks = 720; // 1 hour (720 * 5s)
 
   const exitCheckInterval = setInterval(async () => {
     checkCount++;
@@ -522,12 +562,12 @@ function scheduleSimulationExit(
 
       // ══════════════════════════════════════════════════
       // WHALE DUMP DETECTION: Fast exit on sudden crash
-      // If price drops > 30% from high water mark in one check, exit immediately
+      // If price drops > 25% from high water mark fast, exit immediately
       // ══════════════════════════════════════════════════
       const dropFromPeak = (highWaterMark - currentPrice) / highWaterMark;
-      if (dropFromPeak > 0.30) {
+      if (dropFromPeak > 0.25) {
         clearInterval(exitCheckInterval);
-        logger.info(
+        logger.warn(
           `🚨 [SIMULATION] ${symbol} WHALE DUMP DETECTED: -${(dropFromPeak * 100).toFixed(1)}% from peak! Emergency exit at ${currentPrice.toFixed(8)}`
         );
         await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", "Whale dump emergency exit");
@@ -565,7 +605,7 @@ function scheduleSimulationExit(
     } catch (error: any) {
       logger.debug(`Error checking exit for ${symbol}: ${error.message}`);
     }
-  }, 10000);
+  }, 5000);
 }
 
 /**
@@ -627,6 +667,11 @@ async function buildSystemPrompt(tokenAnalysis: TokenAnalysis): Promise<string> 
     "confidence must be 0-100. reason must be a short string.",
     "takeProfitPercent = % gain before selling. stopLossPercent = % loss before cutting.",
     "Use confidence as probability of a profitable trade.",
+    "SAFETY RULES:",
+    "1. REJECT if bondingCurve > 80% but holders < 30 (likely bundled).",
+    "2. REJECT if bondingCurve > 90% but holders < 50 (high rug risk).",
+    "3. CAUTION if RSI > 70 (overbought) or MACD Histogram is declining.",
+    "4. FAVOR entries where RSI < 30 (oversold) but showing a green reversal candle.",
     "RESPOND WITH ONLY THE JSON OBJECT. NOTHING ELSE.",
   ].join(" ");
 

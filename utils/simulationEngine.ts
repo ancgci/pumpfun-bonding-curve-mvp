@@ -22,6 +22,7 @@ interface SimulatedTrade {
   tokenSymbol: string;
   entryTime: number;
   entryPrice: number;
+  entryAmount: number; // SOL spent on entry
   exitTime: number | null;
   exitPrice: number | null;
   pnl: number; // P&L in SOL
@@ -29,6 +30,7 @@ interface SimulatedTrade {
   confidence: number; // AI decision confidence 0-100
   status: "OPEN" | "CLOSED_TP" | "CLOSED_SL" | "EXPIRED";
   reason?: string;
+  tokenHolders?: number;
 }
 
 interface SimulationMetrics {
@@ -65,7 +67,8 @@ export async function recordSimulatedTrade(
   tokenSymbol: string,
   entryPrice: number,
   confidence: number,
-  agentAnalysis: any
+  agentAnalysis: any,
+  holders?: number
 ): Promise<void> {
   ensureSimulationDir();
 
@@ -74,6 +77,7 @@ export async function recordSimulatedTrade(
     tokenSymbol,
     entryTime: Date.now(),
     entryPrice,
+    entryAmount: CONFIG.BUY_AMOUNT_SOL,
     exitTime: null,
     exitPrice: null,
     pnl: 0,
@@ -81,6 +85,7 @@ export async function recordSimulatedTrade(
     confidence,
     status: "OPEN",
     reason: `AI Agent confidence: ${confidence}%`,
+    tokenHolders: holders,
   };
 
   // 1. JSON Persistence (Backup)
@@ -102,23 +107,25 @@ export async function recordSimulatedTrade(
   try {
     db.prepare(`
       INSERT INTO simulated_trades (
-        token_mint, token_symbol, entry_time, entry_price, confidence, status, reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        token_mint, token_symbol, entry_time, entry_price, entry_amount, confidence, status, reason, token_holders
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       trade.tokenMint,
       trade.tokenSymbol,
       trade.entryTime,
       trade.entryPrice,
+      trade.entryAmount,
       trade.confidence,
       trade.status,
-      trade.reason
+      trade.reason,
+      trade.tokenHolders
     );
   } catch (error) {
     logger.error(`Error persisting simulation trade to DB:`, error);
   }
 
   logger.info(
-    `📊 [SIMULATION] Recorded trade entry: ${tokenSymbol} at ${entryPrice.toFixed(8)} (confidence: ${confidence}%)`
+    `📊 [SIMULATION] Recorded trade entry: ${tokenSymbol} (${tokenMint.substring(0, 8)}...) at ${entryPrice.toFixed(8)} (confidence: ${confidence}%)`
   );
 }
 

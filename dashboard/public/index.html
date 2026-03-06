@@ -603,11 +603,32 @@
       <div class="sim-reasons" id="simReasons"></div>
     </section>
 
-    <!-- ═══ SIMULATION TRADES ═══ -->
     <section class="sim-trades-section">
       <h2>🧪 Recent Simulation Trades</h2>
-      <div class="sim-trades-list" id="simTradesList">
-        <p class="loading">Loading simulation trades...</p>
+      <div class="table-container glass-card">
+        <table class="premium-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Token</th>
+              <th>Status</th>
+              <th>Entry<br>Price</th>
+              <th>Entry<br>Amount</th>
+              <th>Holders</th>
+              <th>Exit/Curr.<br>Price</th>
+              <th>Final<br>Amount</th>
+              <th>P&L<br>(SOL)</th>
+              <th>P&L<br>(%)</th>
+              <th>Conf.</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody id="simTradesList">
+            <tr>
+              <td colspan="11" class="loading">Loading simulation trades...</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
