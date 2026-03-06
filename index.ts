@@ -521,17 +521,20 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     creator = creatorWatchlist.get(tOutput.mint)!;
   }
 
-  // 🚨 ALERTA DE SAÍDA DO CRIADOR (DEV DUMP)
-  if (tOutput.type === "SELL" && tOutput.user.toLowerCase() === creator.toLowerCase()) {
+  // 🚨 ALERTA DE ATIVIDADE DO CRIADOR (DEV BUY/SELL)
+  if ((tOutput.type === "SELL" || tOutput.type === "BUY") && tOutput.user.toLowerCase() === creator.toLowerCase()) {
     const position = positionManager.getPosition(tOutput.mint);
     const isHolding = position && position.isActive;
 
-    logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está VENDENDO!`);
+    const actionText = tOutput.type === "SELL" ? "VENDENDO (SELL)" : "COMPRANDO (BUY)";
+    const emojiHeader = tOutput.type === "SELL" ? "🚨 <b>DEV DUMP DETECTED!</b> 🚨" : "💎 <b>DEV BUY DETECTED!</b> 💎";
 
-    const alertMsg = `🚨 <b>DEV DUMP DETECTED!</b> 🚨\n\n` +
+    logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está ${tOutput.type === "SELL" ? "VENDENDO" : "COMPRANDO"}!`);
+
+    const alertMsg = `${emojiHeader}\n\n` +
       `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tOutput.mint}</b></a>\n` +
       `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
-      `Action: <b>VENDENDO (SELL)</b>\n` +
+      `Action: <b>${actionText}</b>\n` +
       `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n` +
       (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
 
