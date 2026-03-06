@@ -235,6 +235,16 @@ async function saveTradingParams() {
     autoSellTakeProfit: document.getElementById('toggleAutoSellTPCheckbox').checked,
     autoSellStopLoss: document.getElementById('toggleAutoSellSLCheckbox').checked,
     sellPercentOnTp: parseInt(document.getElementById('sellPercentInput').value),
+    copyTradeEnabled: document.getElementById('copyTradeEnabledCheckbox').checked,
+    copyTradeAmountSol: parseFloat(document.getElementById('copyTradeAmountInput').value),
+    followWallets: document.getElementById('followWalletsInput').value.split(',').map(w => w.trim()).filter(w => w.length > 0),
+    volatilityAdjustedTpSl: document.getElementById('volatilityAdjustedTpSlCheckbox').checked,
+    autoTrackCreator: document.getElementById('autoTrackCreatorCheckbox').checked,
+    autoSellOnCreatorExit: document.getElementById('autoSellOnCreatorExitCheckbox').checked,
+    atrMultiplierTp: parseFloat(document.getElementById('atrMultiplierTpInput').value),
+    atrMultiplierSl: parseFloat(document.getElementById('atrMultiplierSlInput').value),
+    huggingfaceApiKey: document.getElementById('huggingfaceApiKeyInput').value,
+    senseAiEnabled: document.getElementById('senseAiEnabledCheckbox').checked,
   };
   try {
     await apiFetch(`${API_BASE}/trading-config`, {
@@ -364,6 +374,42 @@ function applyTradingConfig(cfg) {
   if (cfg.sellPercentOnTp !== undefined) {
     updateSliderAndInput('sellPercentSlider', 'sellPercentInput', cfg.sellPercentOnTp);
   }
+  if (cfg.copyTradeEnabled !== undefined) {
+    const chk = document.getElementById('copyTradeEnabledCheckbox');
+    if (chk) chk.checked = cfg.copyTradeEnabled;
+  }
+  if (cfg.copyTradeAmountSol !== undefined) {
+    updateSliderAndInput('copyTradeAmountSlider', 'copyTradeAmountInput', cfg.copyTradeAmountSol);
+  }
+  if (cfg.followWallets !== undefined) {
+    const input = document.getElementById('followWalletsInput');
+    if (input) input.value = Array.isArray(cfg.followWallets) ? cfg.followWallets.join(', ') : cfg.followWallets;
+  }
+  if (cfg.volatilityAdjustedTpSl !== undefined) {
+    const chk = document.getElementById('volatilityAdjustedTpSlCheckbox');
+    if (chk) chk.checked = cfg.volatilityAdjustedTpSl;
+  }
+  if (cfg.autoTrackCreator !== undefined) {
+    const chk = document.getElementById('autoTrackCreatorCheckbox');
+    if (chk) chk.checked = cfg.autoTrackCreator;
+  }
+  if (cfg.autoSellOnCreatorExit !== undefined) {
+    const chk = document.getElementById('autoSellOnCreatorExitCheckbox');
+    if (chk) chk.checked = cfg.autoSellOnCreatorExit;
+  }
+  if (cfg.huggingfaceApiKey !== undefined) {
+    document.getElementById('huggingfaceApiKeyInput').value = cfg.huggingfaceApiKey;
+  }
+  if (cfg.senseAiEnabled !== undefined) {
+    const chk = document.getElementById('senseAiEnabledCheckbox');
+    if (chk) chk.checked = cfg.senseAiEnabled;
+  }
+  if (cfg.atrMultiplierTp !== undefined) {
+    updateSliderAndInput('atrMultiplierTpSlider', 'atrMultiplierTpInput', cfg.atrMultiplierTp);
+  }
+  if (cfg.atrMultiplierSl !== undefined) {
+    updateSliderAndInput('atrMultiplierSlSlider', 'atrMultiplierSlInput', cfg.atrMultiplierSl);
+  }
 }
 
 function applyProtocolConfig(cfg) {
@@ -444,7 +490,10 @@ function updatePositions(positions) {
   positionsList.innerHTML = positions.map(pos => `
     <div class="position-card">
       <div class="position-header">
-        <div class="position-mint">${pos.mint.substring(0, 8)}...${pos.mint.substring(pos.mint.length - 6)}</div>
+        <div class="token-info">
+            <strong>${pos.symbol || 'UNK'}</strong>
+            <span>${truncateAddress(pos.mint)}</span>
+        </div>
         <div class="position-age">⏱️ ${pos.ageFormatted}</div>
       </div>
       <div class="position-details">
@@ -455,6 +504,16 @@ function updatePositions(positions) {
         <div class="detail-item">
           <div class="detail-label">Tokens</div>
           <div class="detail-value">${formatNumber(pos.buyTokenAmount)}</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Buy Price</div>
+          <div class="detail-value">${pos.buyPrice?.toFixed(10) || 'N/A'} SOL</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Creator</div>
+          <div class="detail-value creator-info">
+            <span title="${pos.creatorWallet || 'Unknown'}">${truncateAddress(pos.creatorWallet || 'Unknown')}</span>
+          </div>
         </div>
         <div class="detail-item">
           <div class="detail-label">Take Profit</div>
@@ -473,6 +532,11 @@ function formatNumber(num) {
   if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(2)}K`;
   return num.toFixed(2);
+}
+
+function truncateAddress(address) {
+  if (!address || address.length < 10) return address;
+  return `${address.substring(0, 4)}...${address.substring(address.length - 4)}`;
 }
 
 function updateAgentStatus(data) {
@@ -760,6 +824,9 @@ document.addEventListener('DOMContentLoaded', () => {
   setupSliderSync('jitoTipSlider', 'jitoTipInput');
   setupSliderSync('slippageSlider', 'slippageInput');
   setupSliderSync('sellPercentSlider', 'sellPercentInput');
+  setupSliderSync('copyTradeAmountSlider', 'copyTradeAmountInput');
+  setupSliderSync('atrMultiplierTpSlider', 'atrMultiplierTpInput');
+  setupSliderSync('atrMultiplierSlSlider', 'atrMultiplierSlInput');
 
   // Controls
   document.getElementById('toggleAgentCheckbox')?.addEventListener('change', toggleAgent);

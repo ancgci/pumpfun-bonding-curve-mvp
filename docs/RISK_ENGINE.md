@@ -28,6 +28,7 @@ gRPC Stream → processPumpFunTransaction()
 │  3. analyzeHolders()        ── Shyft  │
 │  4. checkTradingSanity()    ── DexS   │
 │  5. honeypotTest()          ── Jup    │
+│  6. moralisCheck()           ── Moralis│
 │                                       │
 │  → RiskAnalysis { score, decision,    │
 │    flags, metrics, reasons }          │
@@ -84,11 +85,13 @@ PostCurveMonitor (background, per token)
 - **Very New Token**: Checks transaction history for depth. If history < `RISK_MIN_AGE_HOURS` (default: 1h) = +10 points.
 - Uses a heuristic based on the oldest signature in the last 1000 transactions.
 
-### 7. Metadata Quality (`metadataCheck.ts`)
-- **No Image**: Missing or placeholder image = +5 points.
-- **No Socials**: No Twitter, Telegram, or Website linked = +10 points.
 - **Poor Description**: Description missing or too short = +10 points.
 - Detects low-effort spam tokens often associated with rugs.
+
+### 8. Moralis Integration (`moralisClient.ts`)
+- **Holder Insights**: Cross-references on-chain data with Moralis API for precise holder counts and distribution.
+- **Wallet Portfolio**: Used to evaluate the creator's history and portfolio diversity.
+- **Price Source**: Secondary price and market cap validation.
 
 ---
 

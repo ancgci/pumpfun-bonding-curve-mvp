@@ -16,6 +16,7 @@ export interface Position {
     isActive: boolean;
     lastHighPrice?: number;
     lastCheckedAt?: number;
+    creatorWallet?: string;
 }
 
 const POSITIONS_FILE = path.join(__dirname, "../data/positions.json");

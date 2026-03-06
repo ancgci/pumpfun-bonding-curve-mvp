@@ -80,6 +80,7 @@ The agent is instructed to return JSON with:
 | `RecentSells` | Number of recent sell transactions |
 | `Top10Holders` | % of supply held by top 10 wallets |
 | `DeployerHistory` | How many previous tokens the deployer created |
+| `Sentiment` | Multi-source sentiment volume and consensus (Santiment, Twitter, SenseAI) |
 
 ### Learned Rules Injection
 

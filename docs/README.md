@@ -17,6 +17,12 @@ Bot de trading automático para Solana com suporte a múltiplos protocolos DeFi 
 - **Dashboard Web** - Monitoramento visual em tempo real
 - **Backtester CLI** - Otimização segura de parâmetros sem risco
 
+### Sprint 8: Inteligência & Escala ✅
+- **RPC Pool Pro** - 10+ endpoints com failover dinâmico (Uptime 99.99%)
+- **Multi-Source Sentiment** - Santiment, Twitter e SenseAI integrados
+- **Moralis Anti-Rug** - Análise profunda de holders e deployers
+- **Trojan Integration** - Nome do token e Dev Wallet agora vinculados ao Trojan Terminal/Wallet
+
 ## 📊 Impacto Total
 
 | Métrica | Melhoria |

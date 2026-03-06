@@ -4,6 +4,48 @@ History of all improvements implemented in the project.
 
 ---
 
+## [Sprint 8] - 2026-03-05
+
+### 🔗 Robust Connectivity (RPC Pool Pro)
+- **Multi-Fallback Engine** (`utils/rpcPool.ts`)
+  - Integration with 10+ providers (Chainstack, Alchemy, Helius, GetBlock, Ankr, Tatum, etc.)
+  - Automatic rotation based on latency and health
+  - Detection of rate limits (429) and quota exhaustion (402)
+- **WebSocket Redundancy** (`utils/rpcPool.ts`, `.env`)
+  - Redundant listener support via `WS_FALLBACK_LIST`
+  - High availability for bonding curve events
+
+### 🧠 Multi-Source Sentiment Intelligence
+- **Sentiment Expansion** (`utils/sentimentAnalysis.ts`)
+  - **Santiment**: Social Volume and Dominance metrics via GraphQL API
+  - **HuggingFace (Twitter NLP)**: Sentiment analysis (Positive/Negative/Neutral) via Inference API
+  - **SenseAI**: Pump.fun-specific hype metrics and engagement analysis
+- **Consensus Filtering**: Risk Engine now includes social sentiment signals as filters
+
+### 💧 Moralis Anti-Rug Integration
+- **Moralis Client** (`utils/riskEngine/moralisClient.ts`)
+  - Cross-references on-chain holders with Moralis API for precise distribution checks
+  - Creator history analysis and portfolio diversity evaluation
+- **Secondary Price Validation**: Validates market cap and price consistency
+
+### 🚀 Advanced Telegram UX
+- **Trojan Terminal Integration**: Token names in alerts now link directly to Trojan Terminal with automated `token`, `pool`, and `ref` parameters.
+- **Trojan Wallet Link**: Dev Wallet addresses link to Trojan's wallet analyzer with a 1-day performance window.
+- **Enhanced Signatures**: Added explicit `(link)` to transaction signatures for faster mobile access.
+- **Refined technical metrics**: B/S ratio and cluster detection (YES/NO) simplified for quick reading.
+
+### 📁 New Files
+- `utils/riskEngine/moralisClient.ts` — Moralis Solana API client
+
+### 📁 Files Modified
+- `utils/rpcPool.ts` — Dynamic fallback logic
+- `utils/sentimentAnalysis.ts` — Multi-source integration
+- `utils/riskEngine.ts` — Phase 2 parallel integration with Moralis
+- `utils/config.ts` — New environment variables
+- `utils/riskConfig.ts` — Added priceUsd metric and weights
+
+---
+
 ## [Sprint 7] - 2026-03-02
 
 ### 🧠 AI Agent Autonomy
@@ -392,6 +434,21 @@ History of all improvements implemented in the project.
 ---
 
 ## Notas de Versão
+
+### v3.1.0 - 2026-03-05
+**Feature Release** - Connectivity Pro + Multi-Source Intelligence
+
+### Sprint 8: Inteligência & Escala ✅
+- **RPC Pool Pro** - 10+ endpoints com failover dinâmico (Uptime 99.99%)
+- **Multi-Source Sentiment** - Santiment, Twitter e SenseAI integrados
+- **Moralis Anti-Rug** - Análise profunda de holders e deployers
+- **Trojan Integration** - Nome do token e Dev Wallet agora vinculados ao Trojan Terminal/Wallet
+
+**Breaking Changes:** O `.env` agora usa `RPC_FALLBACK_LIST` em vez de fallbacks individuais numerados.
+
+**Upgrade Path:**
+1. Atualizar `.env` com a nova lista de RPCs e API keys.
+2. `npm install` (não há novas dependências externas críticas, mas cheque o package.json).
 
 ### v3.0.0 - 2026-03-02
 **Feature Release** - AI Autonomy + Dashboard Modernization

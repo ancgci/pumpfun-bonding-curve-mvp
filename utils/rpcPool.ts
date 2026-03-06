@@ -17,6 +17,8 @@ class RPCPool {
     private currentRPC: RPCConfig | null = null;
 
     constructor() {
+        const fallbacks = (process.env.RPC_FALLBACK_LIST || "").split(",").filter(u => u.length > 10);
+
         this.rpcs = [
             {
                 url: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
@@ -25,23 +27,19 @@ class RPCPool {
                 latency: 0,
                 isHealthy: true,
             },
-            {
-                url: process.env.RPC_URL_FALLBACK_1 || "https://mainnet.helius-rpc.com/?api-key=",
-                name: "Helius Fallback",
-                priority: 2,
+            ...fallbacks.map((url, i) => ({
+                url,
+                name: `Fallback ${i + 1}`,
+                priority: i + 2,
                 latency: 0,
                 isHealthy: true,
-            },
-            {
-                url: process.env.RPC_URL_FALLBACK_2 || "https://solana-mainnet.gateway.tatum.io/",
-                name: "Tatum Fallback",
-                priority: 3,
-                latency: 0,
-                isHealthy: true,
-            },
-        ].filter(rpc => rpc.url && rpc.url.length > 10); // Simple validation
+            }))
+        ];
 
         logger.info(`🔗 RPC Pool inicializado com ${this.rpcs.length} endpoints`);
+        if (process.env.WS_URL) {
+            logger.info(`🌐 WebSocket primário configurado: ${process.env.WS_URL.substring(0, 20)}...`);
+        }
     }
 
     /**

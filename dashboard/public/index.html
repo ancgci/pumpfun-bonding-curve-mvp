@@ -243,24 +243,137 @@
               <div class="toggle-thumb"></div>
             </div>
           </label>
-        </div>
 
-        <div class="param-card">
-          <label class="param-label">➗ Partial Sell %</label>
-          <div class="param-row">
-            <input type="range" id="sellPercentSlider" min="10" max="100" step="5" value="100">
-            <div class="param-value-box">
-              <input type="number" id="sellPercentInput" min="10" max="100" step="5" value="100">
-              <span class="param-unit">%</span>
+          <div class="param-card">
+            <label class="param-label">➗ Partial Sell %</label>
+            <div class="param-row">
+              <input type="range" id="sellPercentSlider" min="10" max="100" step="5" value="100">
+              <div class="param-value-box">
+                <input type="number" id="sellPercentInput" min="10" max="100" step="5" value="100">
+                <span class="param-unit">%</span>
+              </div>
             </div>
           </div>
-        </div>
 
-      </div>
-      <div class="params-actions">
-        <button class="btn-save-params" id="saveParamsBtn">💾 Save Parameters</button>
-        <span class="params-saved-msg" id="paramsSavedMsg"></span>
-      </div>
+          <div class="param-card">
+            <label class="param-label">👤 Copy-Trade Enabled</label>
+            <label class="premium-toggle mini-toggle">
+              <input type="checkbox" id="copyTradeEnabledCheckbox">
+              <div class="toggle-track">
+                <div class="toggle-thumb"></div>
+              </div>
+            </label>
+          </div>
+
+          <div class="param-card">
+            <label class="param-label">👤 Copy-Trade Amount</label>
+            <div class="param-row">
+              <input type="range" id="copyTradeAmountSlider" min="0.001" max="5" step="0.01" value="0.1">
+              <div class="param-value-box">
+                <input type="number" id="copyTradeAmountInput" min="0.001" max="5" step="0.01" value="0.1">
+                <span class="param-unit">SOL</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="param-card full-width">
+            <label class="param-label">👥 Followed Wallets (comma separated)</label>
+            <textarea id="followWalletsInput" placeholder="address1, address2, address3"
+              class="param-textarea"></textarea>
+          </div>
+
+          <div class="param-card">
+            <div class="param-row">
+              <div class="param-info">
+                <label>📈 Volatility TP/SL (ATR)</label>
+                <p>Adjust TP/SL based on market ATR</p>
+              </div>
+              <label class="premium-toggle mini-toggle">
+                <input type="checkbox" id="volatilityAdjustedTpSlCheckbox">
+                <div class="toggle-track">
+                  <div class="toggle-thumb"></div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="param-card">
+            <div class="param-row">
+              <div class="param-info">
+                <label>👀 Auto-Track Creator</label>
+                <p>Monitor creator wallet for dumps</p>
+              </div>
+              <label class="premium-toggle mini-toggle">
+                <input type="checkbox" id="autoTrackCreatorCheckbox">
+                <div class="toggle-track">
+                  <div class="toggle-thumb"></div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="param-card">
+            <div class="param-row">
+              <div class="param-info">
+                <label>🚫 Auto-Sell on Creator Exit</label>
+                <p>Exit position if creator sells (Dev Dump)</p>
+              </div>
+              <label class="premium-toggle mini-toggle">
+                <input type="checkbox" id="autoSellOnCreatorExitCheckbox">
+                <div class="toggle-track">
+                  <div class="toggle-thumb"></div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="param-card">
+            <label class="param-label">📈 ATR Multiplier (TP)</label>
+            <div class="param-row">
+              <input type="range" id="atrMultiplierTpSlider" min="1.0" max="10.0" step="0.1" value="3.0">
+              <div class="param-value-box">
+                <input type="number" id="atrMultiplierTpInput" min="1.0" max="10.0" step="0.1" value="3.0">
+                <span class="param-unit">x</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="param-card">
+            <label class="param-label">📉 ATR Multiplier (SL)</label>
+            <div class="param-row">
+              <input type="range" id="atrMultiplierSlSlider" min="0.5" max="5.0" step="0.1" value="1.5">
+              <div class="param-value-box">
+                <input type="number" id="atrMultiplierSlInput" min="0.5" max="5.0" step="0.1" value="1.5">
+                <span class="param-unit">x</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="param-card">
+            <div class="param-row">
+              <div class="param-info">
+                <label>🧠 SenseAI Analysis</label>
+                <p>Pump.fun specific AI metrics</p>
+              </div>
+              <label class="premium-toggle mini-toggle">
+                <input type="checkbox" id="senseAiEnabledCheckbox">
+                <div class="toggle-track">
+                  <div class="toggle-thumb"></div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="param-card">
+            <label class="param-label">🔑 Hugging Face API Key</label>
+            <input type="password" id="huggingfaceApiKeyInput" class="premium-input" placeholder="hf_...">
+          </div>
+
+        </div>
+        <div class="params-actions">
+          <button class="btn-save-params" id="saveParamsBtn">💾 Save Parameters</button>
+          <span class="params-saved-msg" id="paramsSavedMsg"></span>
+        </div>
     </section>
 
     <!-- ═══ PROTOCOL TOGGLES ═══ -->

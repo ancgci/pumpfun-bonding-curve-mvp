@@ -21,9 +21,18 @@ import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
 import { calculateCurveProgress } from "./utils/curveConstants";
 import { alertQueue } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade } from "./utils/agentOrchestrator";
+import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
 import { recordPriceSample } from "./utils/volatilityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
 import { CONFIG, validateConfig, getRuntimeConfig } from "./utils/config";
+import { positionManager } from "./utils/positionManager";
+import { executeHybridTrade, TokenData } from "./utils/hybridExecutor";
+import { getCachedTokenMetadata } from "./utils/metadataCache";
+import { recordTransaction, recordCacheHit, recordCacheMiss, recordApiCall, recordError, reportPerformance } from "./utils/performanceMonitor";
+import { analyzeToken, formatRiskForTelegram } from "./utils/riskEngine";
+import { RISK_CONFIG } from "./utils/riskConfig";
+import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
+import { circuitBreaker } from "./utils/circuitBreaker";
 import logger from "./utils/logger";
 
 import dotenv from "dotenv";
@@ -134,6 +143,8 @@ if (telegramEnabled) {
 
 // Create a Set to track sent addresses
 let sentAddresses = new Set();
+// Creator Watchlist: mint -> creatorAddress
+const creatorWatchlist = new Map<string, string>();
 
 // Persistence file path
 const SENT_ADDRESSES_FILE = path.join(__dirname, 'sent_addresses.json');
@@ -501,6 +512,45 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     `
   );
 
+  // 🕵️ EXTRAÇÃO DE CRIADOR (DEV)
+  let creator = tOutput.user; // O signer da transação Create ou da primeira transação vista
+  if (!creatorWatchlist.has(tOutput.mint)) {
+    creatorWatchlist.set(tOutput.mint, creator);
+    logger.debug(`🕵️  Criador detectado para ${tOutput.mint}: ${creator}`);
+  } else {
+    creator = creatorWatchlist.get(tOutput.mint)!;
+  }
+
+  // 🚨 ALERTA DE SAÍDA DO CRIADOR (DEV DUMP)
+  if (tOutput.type === "SELL" && tOutput.user.toLowerCase() === creator.toLowerCase()) {
+    const position = positionManager.getPosition(tOutput.mint);
+    const isHolding = position && position.isActive;
+
+    logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está VENDENDO!`);
+
+    const alertMsg = `🚨 <b>DEV DUMP DETECTED!</b> 🚨\n\n` +
+      `Token: <code>${tOutput.mint}</code>\n` +
+      `Dev Wallet: <code>${creator}</code>\n` +
+      `Action: <b>VENDENDO (SELL)</b>\n` +
+      (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
+
+    sendMessage(alertMsg);
+
+    // Auto-Sell on Creator Exit
+    if (isHolding && (ACTIVE_CONFIG as any).AUTO_SELL_ON_CREATOR_EXIT) {
+      logger.warn(`🛑 [Auto-Sell] Criador saiu, fechando posição por segurança.`);
+      const tokenData: TokenData = {
+        mint: tOutput.mint,
+        bondingCurve: tOutput.bondingCurve,
+        curvePercent: progress,
+        isLaunched: Number(progress) >= 100,
+        mode: Number(progress) >= 100 ? "DEX" : "CURVE",
+        creatorWallet: creator
+      };
+      await executeHybridTrade(tokenData, "SELL", true); // Force sell
+    }
+  }
+
   // Buscar metadados do token, se disponível
   let tokenMetadata = null;
   let riskAnalysis: any = null;
@@ -518,21 +568,22 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     return;
   }
 
+  const followedWallet = isFollowedWallet(tOutput.user);
   const currentAlertThreshold = (ACTIVE_CONFIG as any).ALERT_THRESHOLD || ALERT_THRESHOLD;
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
+  const isDiscovery = withinAlertBand && !sentAddresses.has(tOutput.mint);
 
-  if (withinAlertBand && !sentAddresses.has(tOutput.mint)) {
-    // Registrar transação no monitor de desempenho
-    recordTransaction(tOutput.mint);
+  if (followedWallet || isDiscovery) {
+    if (isDiscovery) {
+      recordTransaction(tOutput.mint);
+      sentAddresses.add(tOutput.mint);
+    }
 
-    // Adicionar imediatamente aos endereços enviados para evitar duplicatas em alta concorrência
-    sentAddresses.add(tOutput.mint);
-
-    // Calcular informações adicionais
+    // Calcular informações adicionais (preco, balance, etc se necessário)
     const solBalance = Number(balance);
     const solAmount = Number(tOutput.solAmount) || 0;
     const tokenAmount = Number(tOutput.tokenAmount) || 0;
-    // Calculate current entry price based on actual trade if possible, else metadata
+
     let currentPrice = 0;
     if (solAmount > 0 && tokenAmount > 0) {
       currentPrice = solAmount / tokenAmount;
@@ -541,7 +592,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     } else {
       currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance * 1000000000) / tokenAmount : 0;
     }
-    // registrar amostra para volatilidade intraday
+
     recordPriceSample(tOutput.mint, currentPrice);
 
     // ── Risk Engine Analysis ──
@@ -550,130 +601,107 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       try {
         riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata);
 
-        // 🚫 NOVO FILTRO: Se LP não lockado/burnado -> IGNORAR (sem alert, sem trade)
-        if (RISK_CONFIG.detection.blockUnlockedLP &&
-          !riskAnalysis.flags.LP_LOCKED &&
-          !riskAnalysis.flags.LP_BURNED) {
-          logger.warn(`🚫 [RiskEngine] Token ${tOutput.mint} IGNORADO: LP não lockado/burnado. (RISK_BLOCK_UNLOCKED_LP=true)`);
+        // Bloqueio de risco apenas para discovery (Mirror confia na wallet?)
+        if (isDiscovery && RISK_CONFIG.detection.blockUnlockedLP &&
+          !riskAnalysis.flags.LP_LOCKED && !riskAnalysis.flags.LP_BURNED) {
+          logger.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
           return;
         }
-
         riskSection = formatRiskForTelegram(riskAnalysis);
-
-        // Start post-curve monitoring for approved trades
-        if (riskAnalysis.decision === "ALLOW_TRADE" || riskAnalysis.decision === "ALLOW_ALERT") {
-          postCurveMonitor.startMonitoring(
-            tOutput.mint,
-            riskAnalysis.metrics.liquiditySol,
-            tokenMetadata
-          );
-        }
-
-        // Record honeypot in circuit breaker
-        if (riskAnalysis.flags.HONEYPOT_OP) {
-          circuitBreaker.recordHoneypot(tOutput.mint);
-        }
       } catch (riskError: any) {
-        logger.warn(`⚠️  [RiskEngine] Falha na análise para alerta: ${riskError.message}`);
+        logger.warn(`⚠️ [RiskEngine] Análise falhou: ${riskError.message}`);
         riskSection = "\n⚠️ Risk: análise indisponível";
       }
     }
 
-    // Preparar dados do token para o executor híbrido
+    // Preparar dados do token para o executor
     const tokenData: TokenData = {
       mint: tOutput.mint,
       bondingCurve: tOutput.bondingCurve,
+      creatorWallet: creator,
       curvePercent: Number(progress),
       isLaunched: Number(progress) >= 100,
       mode: Number(progress) >= 100 ? "DEX" : "CURVE"
     };
 
-    // Retry wrapper para execução real (LIVE)
-    const executeTradeWithRetry = async () => {
+    const executeTradeWithRetry = async (force: boolean = false) => {
       const maxRetries = 3;
-      const baseDelay = 1000;
-
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          await executeHybridTrade(tokenData, tOutput.type);
-          logger.info(`✅ Trade executado com sucesso para token ${tOutput.mint}`);
+          await executeHybridTrade(tokenData, tOutput.type, force);
+          logger.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
           return;
         } catch (error: any) {
-          logger.warn(`⚠️ Tentativa ${attempt}/${maxRetries} falhou para ${tOutput.mint}: ${error.message}`);
-
-          if (attempt < maxRetries) {
-            const delay = baseDelay * Math.pow(2, attempt - 1);
-            await new Promise(resolve => setTimeout(resolve, delay));
-          } else {
-            logger.error(`❌ Todas as tentativas falharam para token ${tOutput.mint}`);
+          if (attempt === maxRetries) {
+            logger.error(`❌ Trade falhou após retries: ${error.message}`);
             recordError();
-
-            // Enviar notificação de falha
-            sendMessage(
-              `❌ <b>FALHA NO TRADE</b>\n\n` +
-              `Token: ${tOutput.mint}\n` +
-              `Tipo: ${tOutput.type}\n` +
-              `Erro: ${error.message}`
-            ).catch(err => logger.error("Erro ao enviar notificação de falha:", err));
+          } else {
+            await new Promise(r => setTimeout(r, 1000 * attempt));
           }
         }
       }
     };
 
-    // ── AI Agent orchestration (SIM/LIVE) ──
+    // ── AI Agent / Copy-Trading orchestration ──
     const agentEnabled = process.env.AGENT_ENABLED === "true";
-    if (agentEnabled) {
-      const tokenAnalysis: any = {
-        mint: tOutput.mint,
-        symbol: tokenMetadata?.symbol || "UNK",
-        price: Number(currentPrice) || 0,
-        bondingCurvePercent: Number(progress),
-        holders: riskAnalysis?.metrics?.totalHolders ?? 0,
-        volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
-        liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
-        riskScore: riskAnalysis?.score ?? 0,
-        honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
-        volWindows: undefined, // preenchido no orchestrator
-      };
+    const tokenAnalysis: any = {
+      mint: tOutput.mint,
+      symbol: tokenMetadata?.symbol || "UNK",
+      price: currentPrice,
+      bondingCurvePercent: Number(progress),
+      riskScore: riskAnalysis?.score ?? 0,
+      honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
+      isCopyTrade: followedWallet,
+    };
 
-      try {
-        const decision = await getAgentDecision(tokenAnalysis);
-        await executeAgentTrade(tokenAnalysis, decision, async () => {
-          await executeTradeWithRetry();
+    try {
+      let decision: any = null;
+      if (followedWallet) {
+        decision = getCopyTradeDecision({
+          mint: tOutput.mint,
+          user: tOutput.user,
+          type: tOutput.type as any,
+          solAmount: Number(tOutput.solAmount),
+          tokenAmount: Number(tOutput.tokenAmount),
+          signature: txn.transaction.signatures[0]
         });
-      } catch (agentErr: any) {
-        logger.error(`❌ [Agent] Falha na decisão/execução: ${agentErr.message}`);
+        if (decision) decision.force = true; // Forçar mirror sells/buys
       }
-    } else {
-      // fallback legacy: executar trade direto
-      executeTradeWithRetry();
+
+      if (!decision && agentEnabled && isDiscovery) {
+        decision = await getAgentDecision(tokenAnalysis);
+      }
+
+      if (decision) {
+        await executeAgentTrade(tokenAnalysis, decision, async (force) => {
+          await executeTradeWithRetry(force || decision.force);
+        });
+      } else if (isDiscovery && !agentEnabled) {
+        // Fallback discovery sem agent
+        await executeTradeWithRetry(false);
+      }
+    } catch (agentErr: any) {
+      logger.error(`❌ [Decisão] Erro: ${agentErr.message}`);
     }
 
-    // Preparar mensagem com metadados + risco
-    let tokenName = tokenMetadata?.name || "Unknown";
-    let tokenSymbol = tokenMetadata?.symbol || "UNK";
+    // Alerta Telegram (apenas discovery)
+    if (isDiscovery) {
+      let tokenName = tokenMetadata?.name || "Unknown";
+      let tokenSymbol = tokenMetadata?.symbol || "UNK";
+      const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
 
-    // Sanitize HTML to prevent Telegram parse errors
-    tokenName = tokenName.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    tokenSymbol = tokenSymbol.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-    const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : "N/A";
-    const priceSol = tokenMetadata?.price ? tokenMetadata.price.toFixed(9) : currentPrice.toFixed(9);
-
-    // Enviar alerta formatado com risk score
-    sendMessage(
-      `🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-      `Token: <a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tokenName}</a>\n` +
-      `Symbol: <b>${tokenSymbol}</b>\n` +
-      `Source: <b>🚀 PumpFun</b>` +
-      riskSection + `\n` +
-      `Market Cap: <b>${marketCap}</b>\n` +
-      `Current Price: <b>${priceSol} SOL</b>\n` +
-      `Type: <b>${tOutput.type}</b>\n` +
-      `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
-      `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 8)}...</a>`
-    );
-
+      sendMessage(
+        `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨\n\n` +
+        `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
+        `Symbol: <b>${tokenSymbol}</b>\n` +
+        `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
+        riskSection + `\n` +
+        `Market Cap: <b>${marketCap}</b>\n` +
+        `Type: <b>${tOutput.type}</b>\n` +
+        `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
+        `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`
+      );
+    }
   }
 }
 
@@ -1698,7 +1726,7 @@ if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
     vote: false,
     failed: false,
     signature: undefined,
-    accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+    accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58(), ...CONFIG.FOLLOW_WALLETS],
     accountExclude: [],
     accountRequired: [],
   };
@@ -1782,7 +1810,7 @@ if (Object.keys(req.transactions).length === 0) {
     vote: false,
     failed: false,
     signature: undefined,
-    accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+    accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58(), ...CONFIG.FOLLOW_WALLETS],
     accountExclude: [],
     accountRequired: [],
   };
@@ -2110,10 +2138,3 @@ function decodeAnoncoinTxn(tx: VersionedTransactionResponse) {
   return result;
 }
 
-import { executeHybridTrade, TokenData } from "./utils/hybridExecutor";
-import { getCachedTokenMetadata } from "./utils/metadataCache";
-import { recordTransaction, recordCacheHit, recordCacheMiss, recordApiCall, recordError, reportPerformance } from "./utils/performanceMonitor";
-import { analyzeToken, formatRiskForTelegram } from "./utils/riskEngine";
-import { RISK_CONFIG } from "./utils/riskConfig";
-import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
-import { circuitBreaker } from "./utils/circuitBreaker";

@@ -18,6 +18,7 @@ import { analyzeHolders } from "./riskEngine/holderAnalyzer";
 import { checkTradingSanity } from "./riskEngine/tradingSanity";
 import { fetchCombinedMetadata, TokenMetadata } from "./fetchTokenMetadata";
 import { getCachedTokenMetadata } from "./metadataCache";
+import { getMoralisTokenStats, getMoralisWalletHistory } from "./riskEngine/moralisClient";
 
 /**
  * Risk Engine — Main Orchestrator
@@ -93,6 +94,9 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
     let tokenMetadata: TokenMetadata | null = null;
     if (metaRes.status === "fulfilled") {
         tokenMetadata = metaRes.value;
+        if (tokenMetadata?.creator) {
+            metrics.creatorAddr = tokenMetadata.creator;
+        }
     } else {
         logger.debug(`[RiskEngine] Metadata fetch falhou: ${metaRes.reason.message}`);
     }
@@ -100,10 +104,11 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
     // ═══════════════════════════════════════════════════════
     // PHASE 2: Parallel fetch of Analysis (Liquidity, Holders, Metadata Quality)
     // ═══════════════════════════════════════════════════════
-    const [liqRes, holderRes, metaQualRes] = await Promise.allSettled([
+    const [liqRes, holderRes, metaQualRes, moralisRes] = await Promise.allSettled([
         analyzeLiquidity(tokenAddr, tokenMetadata),
         analyzeHolders(tokenAddr, tokenMetadata?.creator),
-        checkMetadataQuality(tokenMetadata)
+        checkMetadataQuality(tokenMetadata),
+        getMoralisTokenStats(tokenAddr)
     ]);
 
     // Apply Phase 2 Results
@@ -147,6 +152,13 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
         logger.debug(`[RiskEngine] Metadata check: score+${metaQual.score}`);
     } else {
         logger.error(`[RiskEngine] Metadata check falhou: ${metaQualRes.reason.message}`);
+    }
+
+    if (moralisRes.status === "fulfilled" && moralisRes.value) {
+        const moralis = moralisRes.value;
+        metrics.totalHolders = metrics.totalHolders || moralis.totalHolders;
+        metrics.priceUsd = moralis.priceUsd;
+        logger.debug(`[RiskEngine] Moralis check: holders=${moralis.totalHolders}, price=${moralis.priceUsd}`);
     }
 
     // ═══════════════════════════════════════════════════════
@@ -246,7 +258,7 @@ export function formatRiskForTelegram(analysis: RiskAnalysis): string {
         msg += ` | Dev: ${metrics.devWalletPercent.toFixed(1)}%`;
     }
     msg += `\n`;
-    msg += `📊 B/S: ${metrics.buySellRatio.toFixed(2)} | Cluster: ${flags.CLUSTERING}`;
+    msg += `📊 B/S: ${metrics.buySellRatio.toFixed(2)} | Cluster: ${flags.CLUSTERING === "NO" ? "NO" : "YES"}`;
 
     // Top 2 reasons
     if (reasons.length > 0) {

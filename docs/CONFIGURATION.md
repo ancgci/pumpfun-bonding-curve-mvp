@@ -5,27 +5,22 @@ Todas as variáveis de ambiente disponíveis no arquivo `.env`.
 ## RPCs
 
 ### `RPC_URL` **(obrigatório)**
-Endpoint principal da Solana.
-
-**Exemplos:**
-```bash
-RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
-RPC_URL=https://rpc.ankr.com/solana
-RPC_URL=https://api.mainnet-beta.solana.com
-```
-
-**Recomendação:** Use serviços premium (Helius, Triton, QuickNode) para melhor performance.
+Endpoint principal da Solana. Agora integrado ao `rpcPool` para failover automático.
 
 ---
 
-### `RPC_URL_FALLBACK_1` e `RPC_URL_FALLBACK_2`
-Endpoints de backup caso o principal falhe.
+### `RPC_FALLBACK_LIST`
+Lista de URLs de backup separadas por vírgula. O bot rotacionará entre elas se o principal falhar ou atingir limite de cota.
 
-**Padrão:**
+**Exemplo:**
 ```bash
-RPC_URL_FALLBACK_1=https://api.mainnet-beta.solana.com
-RPC_URL_FALLBACK_2=https://solana-api.projectserum.com
+RPC_FALLBACK_LIST=https://url1,https://url2,https://url3
 ```
+
+---
+
+### `WS_URL` e `WS_FALLBACK_LIST`
+URL de WebSocket primária e lista de fallbacks. Usado como redundância ao gRPC para captura de eventos em tempo real.
 
 ---
 
@@ -339,6 +334,26 @@ Chave de API da Jupiter (opcional).
 ```bash
 JUPITER_API_KEY=your_api_key_here
 ```
+
+---
+
+## Sentiment Analysis (Social Listening)
+
+### `SANTIMENT_API_KEY`
+Chave para volume social e dominância via Santiment.
+
+### `HUGGINGFACE_API_KEY`
+Chave para análise de sentimento NLP via HuggingFace Inference API.
+
+### `SENSE_AI_ENABLED`
+Ativa análise de hype específica para tokens Pump.fun (`true`/`false`).
+
+---
+
+## Moralis
+
+### `MORALIS_API_KEY`
+Chave de API da Moralis Solana para análise profunda de holders e risco.
 
 ---
 

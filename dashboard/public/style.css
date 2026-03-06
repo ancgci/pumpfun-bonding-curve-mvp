@@ -1612,6 +1612,29 @@ header {
   border-color: rgba(99, 102, 241, 0.4);
 }
 
+.param-card.full-width {
+  grid-column: 1 / -1;
+}
+
+.param-textarea {
+  width: 100%;
+  min-height: 80px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-main);
+  padding: 12px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.param-textarea:focus {
+  border-color: var(--accent-indigo);
+}
+
 .param-label {
   display: block;
   font-size: 0.85rem;

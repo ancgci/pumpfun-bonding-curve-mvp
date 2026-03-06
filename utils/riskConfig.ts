@@ -111,6 +111,8 @@ export interface RiskMetrics {
     buySellRatio: number;
     priceImpactPercent: number;
     tokenAgeHours: number;
+    creatorAddr?: string;
+    priceUsd?: number;
 }
 
 export interface RiskAnalysis {
@@ -157,6 +159,8 @@ export function getDefaultMetrics(): RiskMetrics {
         buySellRatio: 1,
         priceImpactPercent: 0,
         tokenAgeHours: 0,
+        creatorAddr: undefined,
+        priceUsd: 0,
     };
 }
 

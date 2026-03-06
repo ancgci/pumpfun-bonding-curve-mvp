@@ -510,6 +510,12 @@ app.get("/api/trading-config", (req, res) => {
             jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
             autoBuyEnabled: process.env.AUTO_BUY_ENABLED === "true",
             singleTradeMode: process.env.SINGLE_TRADE_MODE === "true",
+            copyTradeEnabled: process.env.COPY_TRADE_ENABLED === "true",
+            copyTradeAmountSol: parseFloat(process.env.COPY_TRADE_AMOUNT_SOL || "0.1"),
+            followWallets: (process.env.FOLLOW_WALLETS || "").split(",").filter((w: string) => w.length > 30),
+            volatilityAdjustedTpSl: process.env.VOLATILITY_ADJUSTED_TP_SL === "true",
+            atrMultiplierTp: parseFloat(process.env.ATR_MULTIPLIER_TP || "3.0"),
+            atrMultiplierSl: parseFloat(process.env.ATR_MULTIPLIER_SL || "1.5"),
         };
 
         let saved: any = {};
@@ -539,6 +545,16 @@ app.post("/api/trading-config", (req, res) => {
             autoSellTakeProfit,
             autoSellStopLoss,
             sellPercentOnTp,
+            copyTradeEnabled,
+            copyTradeAmountSol,
+            followWallets,
+            volatilityAdjustedTpSl,
+            atrMultiplierTp,
+            atrMultiplierSl,
+            autoTrackCreator,
+            autoSellOnCreatorExit,
+            huggingfaceApiKey,
+            senseAiEnabled,
         } = req.body;
 
         // Validações de segurança
@@ -566,6 +582,16 @@ app.post("/api/trading-config", (req, res) => {
             ...(autoSellTakeProfit !== undefined && { autoSellTakeProfit }),
             ...(autoSellStopLoss !== undefined && { autoSellStopLoss }),
             ...(sellPercentOnTp !== undefined && { sellPercentOnTp }),
+            ...(copyTradeEnabled !== undefined && { copyTradeEnabled }),
+            ...(copyTradeAmountSol !== undefined && { copyTradeAmountSol }),
+            ...(followWallets !== undefined && { followWallets }),
+            ...(volatilityAdjustedTpSl !== undefined && { volatilityAdjustedTpSl }),
+            ...(atrMultiplierTp !== undefined && { atrMultiplierTp }),
+            ...(atrMultiplierSl !== undefined && { atrMultiplierSl }),
+            ...(autoTrackCreator !== undefined && { autoTrackCreator }),
+            ...(autoSellOnCreatorExit !== undefined && { autoSellOnCreatorExit }),
+            ...(huggingfaceApiKey !== undefined && { huggingfaceApiKey }),
+            ...(senseAiEnabled !== undefined && { senseAiEnabled }),
             updatedAt: new Date().toISOString(),
         };
 

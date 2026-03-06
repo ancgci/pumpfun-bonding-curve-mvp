@@ -11,6 +11,13 @@ import {
   getOpenTradeForToken,
 } from "./simulationEngine";
 import { recordPriceSample, getVolatility } from "./volatilityMonitor";
+import { getTokenSentiment } from "./sentimentAnalysis";
+import { getSolSnifferAnalysis } from "./riskEngine/solSniffer";
+import { analyzeDevHistory } from "./riskEngine/devHistory";
+import { getRugCheckXyzAnalysis } from "./riskEngine/rugCheckXyz";
+import { getRektShieldAnalysis } from "./riskEngine/rektShield";
+import { getGoPlusAnalysis } from "./riskEngine/goPlusLabs";
+import { getOnChainAnalysis } from "./riskEngine/onChainCheck";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -191,13 +198,14 @@ function persistAgentStatus(status: { rateLimited: boolean; reason?: string; at?
  * 4. Tracks results for learning
  */
 
-interface AgentDecision {
-  action: "BUY" | "SKIP";
+export interface AgentDecision {
+  action: "BUY" | "SELL" | "SKIP";
   confidence: number; // 0-100
   reasoning: string;
   entryPrice?: number;
   takeProfit?: number;
   stopLoss?: number;
+  force?: boolean; // Signal to bypass normal checks
 }
 
 interface TokenAnalysis {
@@ -217,6 +225,26 @@ interface TokenAnalysis {
   sellCount?: number;          // recent sell transactions count
   top10HolderPct?: number;     // % of supply held by top 10 wallets
   deployerPrevTokens?: number; // how many tokens deployer created before
+  sentiment?: {
+    balance: number;
+    socialVolume: number;
+    socialDominance: number;
+    twitterSentiment?: number;
+    senseAiVirality?: number;
+    senseAiQuality?: number;
+    senseAiOverall?: number;
+  };
+  snifScore?: number;
+  rugCheckXyz?: any;
+  rektShield?: any;
+  goPlus?: any;
+  onChain?: any;
+  devHistory?: {
+    totalCreated: number;
+    reputation: string;
+  };
+  creatorAddr?: string;
+  isCopyTrade?: boolean;
 }
 
 /**
@@ -277,6 +305,48 @@ export async function getAgentDecision(
     logger.info(`⚠️ [PreFilter] ${tokenAnalysis.symbol}: RiskEngine data unavailable, deferring to LLM`);
   }
 
+  // ── Fetch Global Sentiment ──
+  try {
+    const sentiment = await getTokenSentiment(tokenAnalysis.symbol, tokenAnalysis.mint);
+    if (sentiment) {
+      tokenAnalysis.sentiment = sentiment;
+      logger.info(`📊 [Sentiment] ${tokenAnalysis.symbol}: balance=${sentiment.balance}, vol=${sentiment.socialVolume}`);
+    }
+  } catch (err) {
+    logger.debug(`⚠️ [Agent] Failed to fetch sentiment: ${(err as any).message}`);
+  }
+
+  // ── Fetch Multi-Source Advanced Rug Check ──
+  try {
+    const [snifRes, rugXyzRes, rektRes, goPlusRes, onChainRes] = await Promise.allSettled([
+      // Selective Solsniffer
+      (async () => {
+        const isPromising = tokenAnalysis.riskScore < 50 && (tokenAnalysis.bondingCurvePercent > 10 || tokenAnalysis.liquiditySol > 5);
+        return isPromising ? await getSolSnifferAnalysis(tokenAnalysis.mint) : null;
+      })(),
+      getRugCheckXyzAnalysis(tokenAnalysis.mint),
+      getRektShieldAnalysis(tokenAnalysis.mint),
+      getGoPlusAnalysis(tokenAnalysis.mint),
+      getOnChainAnalysis(tokenAnalysis.mint)
+    ]);
+
+    if (snifRes.status === "fulfilled" && snifRes.value) tokenAnalysis.snifScore = snifRes.value.score;
+    if (rugXyzRes.status === "fulfilled" && rugXyzRes.value) tokenAnalysis.rugCheckXyz = rugXyzRes.value;
+    if (rektRes.status === "fulfilled" && rektRes.value) tokenAnalysis.rektShield = rektRes.value;
+    if (goPlusRes.status === "fulfilled" && goPlusRes.value) tokenAnalysis.goPlus = goPlusRes.value;
+    if (onChainRes.status === "fulfilled" && onChainRes.value) tokenAnalysis.onChain = onChainRes.value;
+
+    if (tokenAnalysis.creatorAddr) {
+      const devData = await analyzeDevHistory(tokenAnalysis.creatorAddr);
+      tokenAnalysis.devHistory = {
+        totalCreated: devData.totalCreated,
+        reputation: devData.reputation
+      };
+    }
+  } catch (err) {
+    logger.debug(`⚠️ [Agent] Failed to fetch advanced risk multi-data: ${(err as any).message}`);
+  }
+
   try {
     const cacheKey = `${tokenAnalysis.mint}:${Math.round(tokenAnalysis.price * 1e9)}`;
     const cached = decisionCache.get(cacheKey);
@@ -313,7 +383,7 @@ export async function getAgentDecision(
 export async function executeAgentTrade(
   tokenAnalysis: TokenAnalysis,
   decision: AgentDecision,
-  executeRealTrade: () => Promise<void>
+  executeRealTrade: (force?: boolean) => Promise<void>
 ): Promise<void> {
   // Get agent mode from config
   const agentMode = process.env.AGENT_MODE || "SIMULATION";
@@ -388,7 +458,7 @@ export async function executeAgentTrade(
     logger.info(`💰 [LIVE] Executing real trade...`);
 
     try {
-      await executeRealTrade();
+      await executeRealTrade(decision.force);
       logger.info(`✅ Trade executed successfully for ${tokenAnalysis.symbol}`);
     } catch (error: any) {
       logger.error(`❌ Live trade failed: ${error.message}`);
@@ -561,21 +631,66 @@ async function buildSystemPrompt(tokenAnalysis: TokenAnalysis): Promise<string> 
   ].join(" ");
 
   // ── Inject active skills into system prompt ──
-  const skillTags = ["core", "trading"];
-  if (tokenAnalysis.mint.endsWith("pump")) {
-    skillTags.push("pumpfun");
-  }
-  if (tokenAnalysis.riskScore > 6) {
-    skillTags.push("risk");
-  }
+  // Injetar habilidades ativas (Skills)
+  const skillTags = ["core", "trading", "risk", "mev", "execution"];
+  if (tokenAnalysis.bondingCurvePercent < 100) skillTags.push("pumpfun");
+  if (tokenAnalysis.sentiment) skillTags.push("sentiment");
+  if (tokenAnalysis.isCopyTrade) skillTags.push("copytrading");
 
-  const skillContext = getActiveSkillsPrompt({
+  const skillsPrompt = getActiveSkillsPrompt({
     action: "token_analysis",
     tags: skillTags,
-    maxSkills: 6
   });
 
-  return basePrompt + skillContext + learnedRules;
+  const jitoStatus = `
+MEV PROTECTION STATUS:
+- Jito Bundles: ENABLED ✅
+- Priority: HIGH
+- Privacy: ACTIVE (Private Transaction)
+`;
+
+  const copyTradeStatus = tokenAnalysis.isCopyTrade ? `
+COPY-TRADING STATUS:
+- SMART WALLET DETECTED: YES 👤
+- STRATEGY: MIRROR (PRIORITY)
+- ORIGIN WALLET: ${tokenAnalysis.creatorAddr || "Followed"}
+` : "";
+
+  const sentimentBlock = tokenAnalysis.sentiment ? `
+SENTIMENT METRICS:
+- Santiment Balance: ${tokenAnalysis.sentiment.balance}
+- Santiment Social Volume: ${tokenAnalysis.sentiment.socialVolume}
+- Santiment Social Dominance: ${tokenAnalysis.sentiment.socialDominance}%
+${tokenAnalysis.sentiment.twitterSentiment !== undefined ? `- Twitter NLP Sentiment: ${tokenAnalysis.sentiment.twitterSentiment.toFixed(2)} (-1 to 1)` : ""}
+${tokenAnalysis.sentiment.senseAiVirality !== undefined ? `- SenseAI Virality Score: ${tokenAnalysis.sentiment.senseAiVirality}/100` : ""}
+${tokenAnalysis.sentiment.senseAiQuality !== undefined ? `- SenseAI Quality Score: ${tokenAnalysis.sentiment.senseAiQuality}/100` : ""}
+${tokenAnalysis.sentiment.senseAiOverall !== undefined ? `- SenseAI Overall AI Score: ${tokenAnalysis.sentiment.senseAiOverall}/100` : ""}
+` : "";
+
+  const rugCheckBlock = `
+ADVANCED MULTI-SOURCE RUG CHECK:
+- Solsniffer Score: ${tokenAnalysis.snifScore !== undefined ? tokenAnalysis.snifScore + "/100" : "N/A (Skipped)"}
+- RugCheck.xyz Score: ${tokenAnalysis.rugCheckXyz?.score ?? "N/A"} (Status: ${tokenAnalysis.rugCheckXyz?.status ?? "unknown"})
+- REKT Shield Prediction: ${tokenAnalysis.rektShield?.prediction ?? "N/A"}
+- GoPlus Honeypot: ${tokenAnalysis.goPlus?.is_honeypot ? "YES🚨" : "NO"}
+- On-Chain (RPC) Safe: ${tokenAnalysis.onChain?.isSafe === false ? "RISKY🚨" : "YES"}
+- Dev History: ${tokenAnalysis.devHistory ? `${tokenAnalysis.devHistory.totalCreated} tokens (Reputation: ${tokenAnalysis.devHistory.reputation})` : "N/A"}
+`;
+
+  const systemPrompt = `
+You are a high-performance Solana trading agent.
+Your goal: Analyze a token and decide whether to BUY or SKIP.
+${basePrompt}
+
+${skillsPrompt}
+
+${jitoStatus}
+${copyTradeStatus}
+${sentimentBlock}
+${rugCheckBlock}
+ANALYSIS DATA:
+`
+  return systemPrompt + learnedRules;
 }
 
 export const agentOrchestrator = {

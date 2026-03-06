@@ -151,6 +151,8 @@ enableSkill("WalletTracker");
 | **RiskAnalyzer** | risk, security, core | 5 | Detecção de honeypots e rug pulls |
 | **VolumeAnalysis** | analysis, volume, core | 10 | Identificação de wash trading |
 | **WalletTracker** | analysis, wallets, core | 10 | Análise de whales e concentração |
+| **SentimentExpert** | analysis, sentiment, hype | 10 | Multi-source sentiment volume & consensus |
+| **MoralisDeepCheck** | risk, analysis, moralis | 5 | Deep holder check & wallet history |
 | **AIAgentLearning** | ai-agent, learning, advanced | 1 | Teste avançado de ciclo de aprendizado |
 
 > [!IMPORTANT]

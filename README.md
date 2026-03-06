@@ -84,7 +84,24 @@ npm run start:dashboard
 ```
 
 
-## 🆕 Latest Changes (Mar 4, 2026)
+## 🆕 Latest Changes (Mar 5, 2026)
+
+### 🔗 Robust Connectivity & Multi-Source Intelligence
+
+O bot agora conta com redundância de conexão de nível empresarial e análise de dados expandida.
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Source Sentiment** | Integração com Santiment, HuggingFace (Twitter NLP) e SenseAI para análise 360º de hype. |
+| **RPC Pool Pro** | Auto-rotacionamento entre 10+ provedores (Chainstack, Alchemy, Helius) com failover automático. |
+| **WS Redundancy** | WebSockets redundantes para garantir detecção instantânea em caso de falha no gRPC. |
+| **Moralis Anti-Rug** | Deep analytics de holders e metadados via Moralis Solana API integrado ao Risk Engine. |
+
+**Arquivos:** `utils/rpcPool.ts`, `utils/sentimentAnalysis.ts`, `utils/riskEngine/moralisClient.ts`.
+
+---
+
+## 🔵 Previous Changes (Mar 4, 2026)
 
 ### 🚀 Dynamic Intelligence & Protocol Library
 
@@ -358,6 +375,9 @@ RPC_URL_FALLBACK_4=https://public.api.rpc.solana
 - ✅ **Alert Queue** - Async, prioritized, with retry
 - ✅ **Skills Architecture** - Pluggable agent skills: create, import from GitHub, hot-reload
 - ✅ **Yellowstone gRPC** - New high-availability endpoint
+- ✅ **RPC Pool Pro** - 10+ endpoints with automatic latency-based failover
+- ✅ **Multi-Source Sentiment** - Social listening via Santiment, HuggingFace, and SenseAI
+- ✅ **Moralis Integration** - Advanced holder and token analytics via Moralis.com
 
 ## 📊 Impact
 

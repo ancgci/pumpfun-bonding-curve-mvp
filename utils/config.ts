@@ -10,6 +10,9 @@ const EMERGENCY_STOP_FILE = path.join(__dirname, "../data/emergency-stop.json");
 export const CONFIG = {
   // RPC & Network
   RPC_URL: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+  RPC_FALLBACK_LIST: process.env.RPC_FALLBACK_LIST || "",
+  WS_URL: process.env.WS_URL || "",
+  WS_FALLBACK_LIST: process.env.WS_FALLBACK_LIST || "",
   SHYFT_RPC: process.env.SHYFT_RPC || "",
   SHYFT_GRPC: process.env.SHYFT_GRPC || "",
 
@@ -88,6 +91,28 @@ export const CONFIG = {
 
   // Environment
   NODE_ENV: process.env.NODE_ENV || "development",
+
+  // Copy-Trading
+  COPY_TRADE_ENABLED: process.env.COPY_TRADE_ENABLED === "true",
+  FOLLOW_WALLETS: (process.env.FOLLOW_WALLETS || "").split(",").filter(w => w.length > 30),
+  COPY_TRADE_AMOUNT_SOL: parseFloat(process.env.COPY_TRADE_AMOUNT_SOL || "0.1"),
+
+  // Volatility-Adjusted TP/SL
+  VOLATILITY_ADJUSTED_TP_SL: process.env.VOLATILITY_ADJUSTED_TP_SL === "true",
+  ATR_MULTIPLIER_TP: parseFloat(process.env.ATR_MULTIPLIER_TP || "3.0"),
+  ATR_MULTIPLIER_SL: parseFloat(process.env.ATR_MULTIPLIER_SL || "1.5"),
+
+  // Sentiment Analysis Expansion
+  SANTIMENT_API_KEY: process.env.SANTIMENT_API_KEY || "",
+  HUGGINGFACE_API_KEY: process.env.HUGGINGFACE_API_KEY || "",
+  SENSE_AI_ENABLED: process.env.SENSE_AI_ENABLED !== "false",
+
+  // Creator Tracking
+  AUTO_TRACK_CREATOR: process.env.AUTO_TRACK_CREATOR !== "false",
+  AUTO_SELL_ON_CREATOR_EXIT: process.env.AUTO_SELL_ON_CREATOR_EXIT === "true",
+
+  // Moralis
+  MORALIS_API_KEY: process.env.MORALIS_API_KEY || "",
 };
 
 /**
@@ -111,6 +136,20 @@ export function getRuntimeConfig() {
       if (saved.sellPercentOnTp !== undefined) runtimeConfig.SELL_PERCENT_ON_TP = saved.sellPercentOnTp;
       if (saved.jitoTipAmount !== undefined) (runtimeConfig as any).JITO_TIP_AMOUNT = saved.jitoTipAmount;
       if (saved.agentMinConfidence !== undefined) (runtimeConfig as any).AGENT_MIN_CONFIDENCE = saved.agentMinConfidence;
+      if (saved.copyTradeEnabled !== undefined) runtimeConfig.COPY_TRADE_ENABLED = saved.copyTradeEnabled;
+      if (saved.copyTradeAmountSol !== undefined) runtimeConfig.COPY_TRADE_AMOUNT_SOL = saved.copyTradeAmountSol;
+      if (saved.followWallets !== undefined) {
+        runtimeConfig.FOLLOW_WALLETS = Array.isArray(saved.followWallets)
+          ? saved.followWallets
+          : saved.followWallets.split(",").filter((w: string) => w.length > 30);
+      }
+      if (saved.volatilityAdjustedTpSl !== undefined) runtimeConfig.VOLATILITY_ADJUSTED_TP_SL = saved.volatilityAdjustedTpSl;
+      if (saved.atrMultiplierTp !== undefined) runtimeConfig.ATR_MULTIPLIER_TP = saved.atrMultiplierTp;
+      if (saved.atrMultiplierSl !== undefined) runtimeConfig.ATR_MULTIPLIER_SL = saved.atrMultiplierSl;
+      if (saved.huggingfaceApiKey !== undefined) runtimeConfig.HUGGINGFACE_API_KEY = saved.huggingfaceApiKey;
+      if (saved.senseAiEnabled !== undefined) runtimeConfig.SENSE_AI_ENABLED = saved.senseAiEnabled;
+      if (saved.autoTrackCreator !== undefined) (runtimeConfig as any).AUTO_TRACK_CREATOR = saved.autoTrackCreator;
+      if (saved.autoSellOnCreatorExit !== undefined) (runtimeConfig as any).AUTO_SELL_ON_CREATOR_EXIT = saved.autoSellOnCreatorExit;
     } catch (e) {
       console.error("Erro ao carregar trading-config.json:", e);
     }
