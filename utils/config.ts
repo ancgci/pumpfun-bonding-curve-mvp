@@ -117,6 +117,7 @@ export const CONFIG = {
   // Whale Watcher
   WHALE_WATCHER_ENABLED: process.env.WHALE_WATCHER_ENABLED === "true",
   WHALE_ALERT_THRESHOLD_SOL: parseFloat(process.env.WHALE_ALERT_THRESHOLD_SOL || "50"),
+  SIMULATION_TIMEOUT_MIN: parseInt(process.env.SIMULATION_TIMEOUT_MIN || "20"),
 };
 
 /**
@@ -154,6 +155,7 @@ export function getRuntimeConfig() {
       if (saved.senseAiEnabled !== undefined) runtimeConfig.SENSE_AI_ENABLED = saved.senseAiEnabled;
       if (saved.autoTrackCreator !== undefined) (runtimeConfig as any).AUTO_TRACK_CREATOR = saved.autoTrackCreator;
       if (saved.autoSellOnCreatorExit !== undefined) (runtimeConfig as any).AUTO_SELL_ON_CREATOR_EXIT = saved.autoSellOnCreatorExit;
+      if (saved.simulationTimeoutMin !== undefined) runtimeConfig.SIMULATION_TIMEOUT_MIN = saved.simulationTimeoutMin;
     } catch (e) {
       console.error("Erro ao carregar trading-config.json:", e);
     }

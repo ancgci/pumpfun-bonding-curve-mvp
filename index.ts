@@ -25,7 +25,7 @@ import { transactionOutput } from "./utils/transactionOutput";
 import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
 import { calculateCurveProgress } from "./utils/curveConstants";
 import { alertQueue } from "./utils/alertQueue";
-import { getAgentDecision, executeAgentTrade } from "./utils/agentOrchestrator";
+import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from "./utils/agentOrchestrator";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
 import { recordPriceSample } from "./utils/volatilityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
@@ -1772,6 +1772,21 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
     }
   }
 }
+
+// Initialize learning cycle
+setInterval(() => runLearningCycle(), 3600_000); // once per hour
+
+// Resume simulation monitoring for open trades
+resumeSimulationMonitoring().catch(err => logger.error(`Error resuming simulation: ${err.message}`));
+
+const shyftParser = new SolanaParser(
+  [
+    {
+      programId: "6EF17G986kg5Za1iM9Cc6L6U97vT57c2Pq4p4G6i9Lp", // Pump.fun
+      idl: pumpFunIdl as Idl,
+    },
+  ]
+);
 
 const GRPC_ENDPOINT = GRPC_URL || SHYFT_GRPC;
 const GRPC_AUTH_TOKEN = GRPC_TOKEN || process.env.SHYFT_GRPC_TOKEN || "";

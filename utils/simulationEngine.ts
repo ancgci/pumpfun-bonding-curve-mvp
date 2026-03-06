@@ -200,6 +200,66 @@ export async function updateSimulatedTradeExit(
 }
 
 /**
+ * Update a simulated trade's current price in the DB
+ * Used to show live P&L on the dashboard even for OPEN trades
+ */
+export async function updateSimulatedTradePrice(
+  tokenMint: string,
+  currentPrice: number
+): Promise<void> {
+  try {
+    const entry = db.prepare(`SELECT entry_price FROM simulated_trades WHERE token_mint = ? AND status = 'OPEN'`).get(tokenMint) as any;
+    if (entry) {
+      const pnlPercent = ((currentPrice - entry.entry_price) / entry.entry_price) * 100;
+      const pnlSol = CONFIG.BUY_AMOUNT_SOL * (pnlPercent / 100);
+
+      db.prepare(`
+        UPDATE simulated_trades 
+        SET exit_price = ?, pnl_sol = ?, pnl_percent = ?
+        WHERE token_mint = ? AND status = 'OPEN'
+      `).run(currentPrice, pnlSol, pnlPercent, tokenMint);
+    }
+  } catch (error) {
+    logger.error(`Error updating simulation trade price in DB:`, error);
+  }
+}
+
+/**
+ * Fetch all OPEN simulated trades from the database
+ */
+export function getOpenTradesFromDb(): SimulatedTrade[] {
+  try {
+    const rows = db.prepare(`
+      SELECT 
+        token_mint as tokenMint,
+        token_symbol as tokenSymbol,
+        entry_time as entryTime,
+        entry_price as entryPrice,
+        entry_amount as entryAmount,
+        exit_time as exitTime,
+        exit_price as exitPrice,
+        pnl_sol as pnl,
+        pnl_percent as pnlPercent,
+        confidence,
+        status,
+        reason,
+        token_holders as tokenHolders
+      FROM simulated_trades
+      WHERE status = 'OPEN'
+    `).all() as any[];
+
+    return rows.map(row => ({
+      ...row,
+      entryTime: Number(row.entryTime),
+      exitTime: row.exitTime ? Number(row.exitTime) : null,
+    }));
+  } catch (error) {
+    logger.error(`Error fetching open trades from DB:`, error);
+    return [];
+  }
+}
+
+/**
  * Recalculate simulation metrics
  */
 async function recalculateSimulationMetrics(trades: SimulatedTrade[]): Promise<void> {

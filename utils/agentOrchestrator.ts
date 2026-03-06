@@ -8,7 +8,9 @@ import { getActiveSkillsPrompt } from "./skillRegistry";
 import {
   recordSimulatedTrade,
   updateSimulatedTradeExit,
+  updateSimulatedTradePrice,
   getOpenTradeForToken,
+  getOpenTradesFromDb,
 } from "./simulationEngine";
 import { recordPriceSample, getVolatility, getPreviousCandleTrend, getRSI, getMACD, getMicroTrend } from "./volatilityMonitor";
 import { getTokenSentiment } from "./sentimentAnalysis";
@@ -512,8 +514,8 @@ export async function executeAgentTrade(
  * Monitors price using DexScreener API
  * Closes trade when: TP reached, SL hit, or 1 hour expires
  */
-function scheduleSimulationExit(
-  tokenAnalysis: TokenAnalysis,
+export function scheduleSimulationExit(
+  tokenAnalysis: { mint: string, symbol: string, price: number },
   decision: AgentDecision
 ): void {
   const mint = tokenAnalysis.mint;
@@ -522,20 +524,27 @@ function scheduleSimulationExit(
   const tp = decision.takeProfit || entryPrice * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100);
   let sl = decision.stopLoss || entryPrice * (1 - CONFIG.STOP_LOSS_PERCENT / 100);
 
+  // Calculate remaining timeout if this is a resumed trade
+  const entryTime = (decision as any).entryTime || Date.now();
+  const elapsedMs = Date.now() - entryTime;
+  const timeoutMs = (CONFIG.SIMULATION_TIMEOUT_MIN || 20) * 60 * 1000;
+  const remainingMs = Math.max(0, timeoutMs - elapsedMs);
+
   // Trailing stop state
   let highWaterMark = entryPrice;
   const trailingPct = 0.20; // 20% trailing from peak
 
   logger.info(
-    `📈 [SIMULATION] Monitoring ${symbol}: TP=${tp.toFixed(8)} SL=${sl.toFixed(8)} (trailing 20%)`
+    `📈 [SIMULATION] Monitoring ${symbol}: TP=${tp.toFixed(8)} SL=${sl.toFixed(8)} (trailing 20%)${elapsedMs > 0 ? ` (Resumed: ${Math.round(elapsedMs / 60000)}m elapsed)` : ""}`
   );
 
-  // Check every 5 seconds (Fast monitoring for dump protection)
-  let checkCount = 0;
-  const maxChecks = 720; // 1 hour (720 * 5s)
+  // Check every 10 seconds to reduce API load but keep it updated
+  const intervalMs = 10000;
+  let elapsedCount = 0;
+  const maxElapsed = remainingMs / intervalMs;
 
   const exitCheckInterval = setInterval(async () => {
-    checkCount++;
+    elapsedCount++;
 
     try {
       const currentPrice = await getCurrentTokenPrice(mint);
@@ -543,6 +552,11 @@ function scheduleSimulationExit(
       if (!currentPrice) {
         logger.debug(`⚠️  Could not get price for ${symbol}`);
         return;
+      }
+
+      // Update price in DB for dashboard visibility (every ~30s)
+      if (elapsedCount % 3 === 0) {
+        await updateSimulatedTradePrice(mint, currentPrice);
       }
 
       // ══════════════════════════════════════════════════
@@ -596,16 +610,47 @@ function scheduleSimulationExit(
       }
 
       // Timeout
-      if (checkCount >= maxChecks) {
+      if (elapsedCount >= maxElapsed) {
         clearInterval(exitCheckInterval);
-        logger.info(`⏱️  [SIMULATION] ${symbol} EXPIRED (1 hour): exit at ${currentPrice.toFixed(8)}`);
-        await updateSimulatedTradeExit(mint, currentPrice, "EXPIRED", "1 hour timeout");
+        logger.info(`⏱️  [SIMULATION] ${symbol} EXPIRED: exit at ${currentPrice.toFixed(8)}`);
+        await updateSimulatedTradeExit(mint, currentPrice, "EXPIRED", "Timeout reached");
         return;
       }
     } catch (error: any) {
       logger.debug(`Error checking exit for ${symbol}: ${error.message}`);
     }
-  }, 5000);
+  }, intervalMs);
+}
+
+/**
+ * Resume monitoring for all OPEN simulated trades in the DB
+ * Called on bot startup
+ */
+export async function resumeSimulationMonitoring(): Promise<void> {
+  const openTrades = getOpenTradesFromDb();
+  if (openTrades.length === 0) return;
+
+  logger.info(`🔄 [SIMULATION] Resuming monitoring for ${openTrades.length} open trades...`);
+
+  for (const trade of openTrades) {
+    const decision: AgentDecision = {
+      action: "BUY",
+      confidence: trade.confidence,
+      reasoning: trade.reason || "Resumed trade",
+      entryPrice: trade.entryPrice,
+      // Recalculate TP/SL based on entry price if not stored (or we could extend DB to store them)
+      takeProfit: trade.entryPrice * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100),
+      stopLoss: trade.entryPrice * (1 - CONFIG.STOP_LOSS_PERCENT / 100),
+    };
+
+    // Attach entryTime so scheduleSimulationExit knows how much time is left
+    (decision as any).entryTime = trade.entryTime;
+
+    scheduleSimulationExit(
+      { mint: trade.tokenMint, symbol: trade.tokenSymbol, price: trade.entryPrice },
+      decision
+    );
+  }
 }
 
 /**

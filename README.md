@@ -81,6 +81,7 @@ npm start
 **Dashboard (separate terminal):**
 ```bash
 npm run start:dashboard
+npm run start:all
 ```
 
 
