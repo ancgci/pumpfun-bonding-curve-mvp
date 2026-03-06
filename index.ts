@@ -521,48 +521,59 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     creator = creatorWatchlist.get(tOutput.mint)!;
   }
 
-  // 🚨 ALERTA DE ATIVIDADE DO CRIADOR (DEV BUY/SELL)
-  if ((tOutput.type === "SELL" || tOutput.type === "BUY") && tOutput.user.toLowerCase() === creator.toLowerCase()) {
-    const position = positionManager.getPosition(tOutput.mint);
-    const isHolding = position && position.isActive;
-
-    const actionText = tOutput.type === "SELL" ? "VENDENDO (SELL)" : "COMPRANDO (BUY)";
-    const emojiHeader = tOutput.type === "SELL" ? "🚨 <b>DEV DUMP DETECTED!</b> 🚨" : "💎 <b>DEV BUY DETECTED!</b> 💎";
-
-    logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está ${tOutput.type === "SELL" ? "VENDENDO" : "COMPRANDO"}!`);
-
-    const alertMsg = `${emojiHeader}\n\n` +
-      `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tOutput.mint}</b></a>\n` +
-      `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
-      `Action: <b>${actionText}</b>\n` +
-      `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n` +
-      (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
-
-    sendMessage(alertMsg);
-
-    // Auto-Sell on Creator Exit
-    if (isHolding && (ACTIVE_CONFIG as any).AUTO_SELL_ON_CREATOR_EXIT) {
-      logger.warn(`🛑 [Auto-Sell] Criador saiu, fechando posição por segurança.`);
-      const tokenData: TokenData = {
-        mint: tOutput.mint,
-        bondingCurve: tOutput.bondingCurve,
-        curvePercent: progress,
-        isLaunched: Number(progress) >= 100,
-        mode: Number(progress) >= 100 ? "DEX" : "CURVE",
-        creatorWallet: creator
-      };
-      await executeHybridTrade(tokenData, "SELL", true); // Force sell
-    }
-  }
-
   // Buscar metadados do token, se disponível
   let tokenMetadata = null;
   let riskAnalysis: any = null;
   if (tOutput.mint) {
     try {
       tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
-    } catch (metadataError) {
+    } catch (metadataError: any) {
       logger.debug(`❌ Erro ao buscar metadados para token ${tOutput.mint}:`, metadataError.message);
+    }
+  }
+
+  // 🚨 ALERTA DE ATIVIDADE DO CRIADOR (DEV BUY/SELL)
+  // Avisar apenas se já estiver na banda de 90%+, se for uma carteira seguida, ou se o usuário possuir o token
+  const currentAlertThreshold = (ACTIVE_CONFIG as any).ALERT_THRESHOLD || ALERT_THRESHOLD;
+  const isInteresting = Number(progress) >= currentAlertThreshold || isFollowedWallet(tOutput.user);
+
+  if ((tOutput.type === "SELL" || tOutput.type === "BUY") && tOutput.user.toLowerCase() === creator.toLowerCase()) {
+    const position = positionManager.getPosition(tOutput.mint);
+    const isHolding = position && position.isActive;
+
+    if (isInteresting || isHolding) {
+      const actionText = tOutput.type === "SELL" ? "VENDENDO (SELL)" : "COMPRANDO (BUY)";
+      const emojiHeader = tOutput.type === "SELL" ? "🚨 <b>DEV DUMP DETECTED!</b> 🚨" : "💎 <b>DEV BUY DETECTED!</b> 💎";
+
+      logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está ${tOutput.type === "SELL" ? "VENDENDO" : "COMPRANDO"}!`);
+
+      const timestamp = new Date().toLocaleTimeString('pt-BR');
+      const tokenName = tokenMetadata?.name || "Unknown";
+      const tokenSymbol = tokenMetadata?.symbol || "UNK";
+
+      const alertMsg = `${emojiHeader} [${timestamp}]\n\n` +
+        `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
+        `Symbol: <b>${tokenSymbol}</b>\n` +
+        `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
+        `Action: <b>${actionText}</b>\n` +
+        `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n` +
+        (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
+
+      sendMessage(alertMsg);
+
+      // Auto-Sell on Creator Exit
+      if (isHolding && (ACTIVE_CONFIG as any).AUTO_SELL_ON_CREATOR_EXIT && tOutput.type === "SELL") {
+        logger.warn(`🛑 [Auto-Sell] Criador saiu, fechando posição por segurança.`);
+        const tokenData: TokenData = {
+          mint: tOutput.mint,
+          bondingCurve: tOutput.bondingCurve,
+          curvePercent: progress,
+          isLaunched: Number(progress) >= 100,
+          mode: Number(progress) >= 100 ? "DEX" : "CURVE",
+          creatorWallet: creator
+        };
+        await executeHybridTrade(tokenData, "SELL", true); // Force sell
+      }
     }
   }
 
@@ -573,7 +584,6 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   }
 
   const followedWallet = isFollowedWallet(tOutput.user);
-  const currentAlertThreshold = (ACTIVE_CONFIG as any).ALERT_THRESHOLD || ALERT_THRESHOLD;
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
   const isDiscovery = withinAlertBand && !sentAddresses.has(tOutput.mint);
 
@@ -694,8 +704,9 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       let tokenSymbol = tokenMetadata?.symbol || "UNK";
       const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
 
+      const timestamp = new Date().toLocaleTimeString('pt-BR');
       sendMessage(
-        `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨\n\n` +
+        `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
         `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
         `Symbol: <b>${tokenSymbol}</b>\n` +
         `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
