@@ -529,9 +529,10 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     logger.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está VENDENDO!`);
 
     const alertMsg = `🚨 <b>DEV DUMP DETECTED!</b> 🚨\n\n` +
-      `Token: <code>${tOutput.mint}</code>\n` +
-      `Dev Wallet: <code>${creator}</code>\n` +
+      `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tOutput.mint}</b></a>\n` +
+      `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
       `Action: <b>VENDENDO (SELL)</b>\n` +
+      `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n` +
       (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
 
     sendMessage(alertMsg);
