@@ -15,6 +15,7 @@ All project documentation is in the `/docs` folder:
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system: create, import, and manage agent skills
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard UI guide
+- **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - High-res Technical Analysis scalping guide
 - **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
 
 ## 🚀 Quick Start
@@ -85,7 +86,23 @@ npm run start:all
 ```
 
 
-## 🆕 Latest Changes (Mar 5, 2026)
+## 🆕 Latest Changes (Mar 6, 2026)
+
+### ⚡ Simulation Resurrection & High-Res TA
+O bot agora é capaz de retomar simulações após reinicializações e possui indicadores técnicos de altíssima frequência.
+
+| Feature | Description |
+|---------|-------------|
+| **Simulation Persistence** | Retomada automática de trades abertos após restart, recalculando timeouts e monitorando em tempo real. |
+| **High-Res Indicators** | RSI, MACD e EMAs calculados em buckets de **5 segundos** para scalping de precisão. |
+| **Strict Pre-Filters** | Proteção contra sobrecompra e reversão de tendência integrada diretamente no Agent Orchestrator. |
+| **Multi-Provider IDs** | Detecção robusta entre Helius e Shyft para contagem de holders automática no dashboard. |
+
+**Arquivos:** `utils/volatilityMonitor.ts`, `utils/agentOrchestrator.ts`, `docs/SCALPER_STRATEGY_OPTIMIZATION.md`.
+
+---
+
+## 🔵 Previous Changes (Mar 5, 2026)
 
 ### 🔗 Robust Connectivity & Multi-Source Intelligence
 

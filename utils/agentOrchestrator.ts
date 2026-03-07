@@ -12,7 +12,7 @@ import {
   getOpenTradeForToken,
   getOpenTradesFromDb,
 } from "./simulationEngine";
-import { recordPriceSample, getVolatility, getPreviousCandleTrend, getRSI, getMACD, getMicroTrend } from "./volatilityMonitor";
+import { recordPriceSample, getVolatility, getPreviousCandleTrend, getRSI, getMACD, getMicroTrend, getHighResRSI, getHighResMACD, getMovingAverage } from "./volatilityMonitor";
 import { getTokenSentiment } from "./sentimentAnalysis";
 import { getSolSnifferAnalysis } from "./riskEngine/solSniffer";
 import { analyzeDevHistory } from "./riskEngine/devHistory";
@@ -86,8 +86,12 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `Honeypot: ${tokenAnalysis.honeypotRisk}`,
-    tokenAnalysis.rsi ? `RSI: ${tokenAnalysis.rsi.toFixed(1)}` : null,
-    tokenAnalysis.macd ? `MACD: H:${tokenAnalysis.macd.histogram.toFixed(8)}` : null,
+    tokenAnalysis.rsi ? `RSI(1m): ${tokenAnalysis.rsi.toFixed(1)}` : null,
+    tokenAnalysis.rsi5s ? `RSI(5s): ${tokenAnalysis.rsi5s.toFixed(1)}` : null,
+    tokenAnalysis.macd ? `MACD(1m): H:${tokenAnalysis.macd.histogram.toFixed(8)}` : null,
+    tokenAnalysis.macd5s ? `MACD(5s): L:${tokenAnalysis.macd5s.macd.toFixed(8)} S:${tokenAnalysis.macd5s.signal.toFixed(8)} H:${tokenAnalysis.macd5s.histogram.toFixed(8)}` : null,
+    tokenAnalysis.ema9 ? `EMA9: ${tokenAnalysis.ema9.toFixed(8)}` : null,
+    tokenAnalysis.ema21 ? `EMA21: ${tokenAnalysis.ema21.toFixed(8)}` : null,
     tokenAnalysis.trend ? `Trend: ${tokenAnalysis.trend.isRed ? "RED" : "GREEN"} (${tokenAnalysis.trend.bodySize.toFixed(1)}% body)` : null,
     `Volatility: ${volSummary || "n/a"}`,
     // Enriched data for better decisions
@@ -224,6 +228,11 @@ interface TokenAnalysis {
   riskScore: number;
   honeypotRisk: boolean;
   volWindows?: { windowSec: number; pctChange: number | null; stdDev: number | null }[];
+  // Indicators
+  rsi5s?: number;
+  macd5s?: { macd: number; signal: number; histogram: number };
+  ema9?: number;
+  ema21?: number;
   // Enriched fields (optional, populated when available)
   tokenAgeSec?: number;        // seconds since token creation
   buyCount?: number;           // recent buy transactions count
@@ -292,11 +301,34 @@ export async function getAgentDecision(
   tokenAnalysis.rsi = rsi || undefined;
   tokenAnalysis.macd = macd || undefined;
 
+  // 🕵️ EXTRA HIGH-RES TA
+  tokenAnalysis.rsi5s = getHighResRSI(tokenAnalysis.mint) || undefined;
+  tokenAnalysis.macd5s = getHighResMACD(tokenAnalysis.mint) || undefined;
+  tokenAnalysis.ema9 = getMovingAverage(tokenAnalysis.mint, 9, "5s") || undefined;
+  tokenAnalysis.ema21 = getMovingAverage(tokenAnalysis.mint, 21, "5s") || undefined;
+
   // ══════════════════════════════════════════════════
   // PRE-FILTER: Instant reject without LLM (< 1ms)
   // Saves API calls and latency on obvious rejects
-  // Only rejects when RiskEngine data is ACTUALLY available
   // ══════════════════════════════════════════════════
+
+  // 1. Overbought Filter
+  if (tokenAnalysis.rsi5s && tokenAnalysis.rsi5s > 75) {
+    logger.info(`⏭️  [Agent] Skipping ${tokenAnalysis.symbol}: Overbought (RSI=${tokenAnalysis.rsi5s.toFixed(1)})`);
+    return { action: "SKIP", confidence: 0, reasoning: "Technical: Overbought RSI > 75" };
+  }
+
+  // 2. Bearish EMA Filter (Price below short term averages)
+  if (tokenAnalysis.ema9 && tokenAnalysis.price < tokenAnalysis.ema9) {
+    logger.info(`⏭️  [Agent] Skipping ${tokenAnalysis.symbol}: Bearish (Price < EMA9)`);
+    return { action: "SKIP", confidence: 0, reasoning: "Technical: Bearish trend (Price < EMA9)" };
+  }
+
+  // 3. MACD Bearish Gap
+  if (tokenAnalysis.macd5s && tokenAnalysis.macd5s.histogram < 0) {
+    logger.info(`⏭️  [Agent] Skipping ${tokenAnalysis.symbol}: MACD Bearish Histogram`);
+    return { action: "SKIP", confidence: 0, reasoning: "Technical: MACD Bearish Histogram" };
+  }
 
   if (trend && trend.isRed && trend.bodySize > 40) {
     logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Falling knife detected (-${trend.bodySize.toFixed(1)}% candle body)`);
@@ -657,7 +689,7 @@ export async function resumeSimulationMonitoring(): Promise<void> {
  * Get current token price from DexScreener
  * Used for real-time simulation exit monitoring
  */
-async function getCurrentTokenPrice(mint: string): Promise<number | null> {
+export async function getCurrentTokenPrice(mint: string): Promise<number | null> {
   try {
     const response = await fetch(
       `https://api.dexscreener.com/latest/dex/tokens/${mint}`

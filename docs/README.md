@@ -23,6 +23,12 @@ Bot de trading automático para Solana com suporte a múltiplos protocolos DeFi 
 - **Moralis Anti-Rug** - Análise profunda de holders e deployers
 - **Trojan Integration** - Nome do token e Dev Wallet agora vinculados ao Trojan Terminal/Wallet
 
+### Sprint 9: Ressurreição & Alta Precisão ✅
+- **Persistência de Simulação** - Retomada automática de trades e monitores após restart do bot.
+- **Indicadores de Alta Frequência** - RSI, MACD e EMAs calculados em janelas de 5 segundos.
+- **Filtros Estritos de Entrada** - Travas automáticas contra sobrecompra (RSI > 75) e tendência de queda.
+- **Multi-Provider Holder Check** - Detecção inteligente de provedores Helius e Shyft.
+
 ## 📊 Impacto Total
 
 | Métrica | Melhoria |

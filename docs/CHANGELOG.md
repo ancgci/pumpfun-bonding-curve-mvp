@@ -4,6 +4,48 @@ History of all improvements implemented in the project.
 
 ---
 
+## [Sprint 9] - 2026-03-06
+
+### 🔄 Simulation Persistence & Resurrection
+- **State Recovery** (`utils/agentOrchestrator.ts`, `utils/simulationEngine.ts`)
+  - Automatic resumption of all "OPEN" simulation trades on bot restart.
+  - Monitors (TP/SL/Timeout) are recalculated and restarted based on the original `entryTime`.
+  - P&L for open trades is updated in real-time in the database for better visibility.
+- **Configurable Timeouts** (`utils/config.ts`, `.env`)
+  - New `SIMULATION_TIMEOUT_MIN` variable to control the maximum duration of a simulated trade.
+
+### 📊 Dashboard & UI Precision
+- **Data Integrity** (`utils/riskEngine/holderAnalyzer.ts`, `dashboard/server.ts`)
+  - **Multi-Provider Holder Analysis**: Robust detection of Helius vs Shyft providers for automatic holder count fetching.
+  - Refined API key parsing to handle multiple formats (`api-key`, `api_key`).
+- **UI Enhancements** (`dashboard/public/index.html`, `app.js`)
+  - Added "Seconds" to time column for HFT monitoring.
+  - New "Entry Amount" and "Final Amount" (SOL) columns for precise P&L tracking.
+  - Corrected row coloring for "OPEN" trades to distinguish from profit/loss.
+
+### 🚀 Scalper EA Optimization (HFT)
+- **High-Resolution TA** (`utils/volatilityMonitor.ts`)
+  - Implementation of **5-second OHLC buckets** for nanosecond price action.
+  - High-res **RSI (5s)** and **MACD (5s)** indicators.
+  - High-res **Moving Averages (EMA 9/21/50)**.
+- **Strategic Pre-Filters** (`utils/agentOrchestrator.ts`)
+  - **Overbought Protection**: Automatic rejection of entries if 5s RSI > 75.
+  - **Trend Guard**: Rejection of entries if price is below EMA 9 or histogram is bearish.
+- **Skill Evolution**: Updated `pumpfun-dip-rip-scalper.md` with high-resolution logic.
+
+### 📁 New Files
+- `docs/SCALPER_STRATEGY_OPTIMIZATION.md` — Technical guide for high-res scalping strategy.
+
+### 📁 Files Modified
+- `utils/volatilityMonitor.ts` — High-res bucket implementation.
+- `utils/agentOrchestrator.ts` — Simulation resurrection + TA filters.
+- `utils/simulationEngine.ts` — Real-time price updates for simulators.
+- `utils/riskEngine/holderAnalyzer.ts` — Provider-agnostic holder fetching.
+- `dashboard/public/app.js` — Simulation table rewrite.
+- `.env` — Added simulation configuration.
+
+---
+
 ## [Sprint 8] - 2026-03-05
 
 ### 🔗 Robust Connectivity (RPC Pool Pro)

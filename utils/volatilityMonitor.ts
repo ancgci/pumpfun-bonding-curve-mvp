@@ -13,6 +13,7 @@ interface PricePeriod {
 }
 const ATR_PERIODS = 14;
 const periodStore: Map<string, PricePeriod[]> = new Map();
+const periodStore5s: Map<string, PricePeriod[]> = new Map();
 
 export function recordPriceSample(mint: string, price: number, now: number = Date.now()): void {
   if (!price || !isFinite(price)) return;
@@ -23,13 +24,21 @@ export function recordPriceSample(mint: string, price: number, now: number = Dat
   while (arr.length && arr[0].t < cutoff) arr.shift();
   store.set(mint, arr);
 
-  // Update 1-minute bucket for ATR
+  // 1. Update 1-minute bucket (ATR/Slow Indicators)
   const minuteTs = Math.floor(now / 60000) * 60000;
-  const periods = periodStore.get(mint) || [];
-  let currentPeriod = periods.find(p => p.timestamp === minuteTs);
+  updatePeriodStore(periodStore, mint, price, minuteTs, 60);
+
+  // 2. Update 5-second bucket (High-Res Scalping Indicators)
+  const fiveSecTs = Math.floor(now / 5000) * 5000;
+  updatePeriodStore(periodStore5s, mint, price, fiveSecTs, 120); // Keep 10 mins of 5s data (120 periods)
+}
+
+function updatePeriodStore(map: Map<string, PricePeriod[]>, mint: string, price: number, ts: number, maxPeriods: number) {
+  const periods = map.get(mint) || [];
+  let currentPeriod = periods.find(p => p.timestamp === ts);
 
   if (!currentPeriod) {
-    currentPeriod = { high: price, low: price, close: price, timestamp: minuteTs };
+    currentPeriod = { high: price, low: price, close: price, timestamp: ts };
     periods.push(currentPeriod);
   } else {
     currentPeriod.high = Math.max(currentPeriod.high, price);
@@ -37,14 +46,89 @@ export function recordPriceSample(mint: string, price: number, now: number = Dat
     currentPeriod.close = price;
   }
 
-  // Prune old periods (keep 60 for buffer to support MACD-26)
-  const periodCutoff = minuteTs - (60 * 60000);
-  const prunedPeriods = periods.filter(p => p.timestamp >= periodCutoff);
-  periodStore.set(mint, prunedPeriods);
+  // Prune old periods
+  const resolutionMs = ts - (periods.length > 1 ? periods[periods.length - 2].timestamp : ts);
+  const cutoff = ts - (maxPeriods * (resolutionMs || 1000));
+  const prunedPeriods = periods.filter(p => p.timestamp >= cutoff);
+  map.set(mint, prunedPeriods);
 }
 
 /**
- * Calculate Relative Strength Index (RSI)
+ * Calculate Moving Average (EMA)
+ */
+export function getMovingAverage(mint: string, period: number, resolution: "1m" | "5s" = "1m"): number | null {
+  const map = resolution === "5s" ? periodStore5s : periodStore;
+  const periods = map.get(mint) || [];
+  if (periods.length < period) return null;
+
+  const closes = periods.map(p => p.close).slice(-period);
+  return calculateEMA(closes, period);
+}
+
+function calculateEMA(data: number[], p: number): number {
+  const k = 2 / (p + 1);
+  let ema = data[0];
+  for (let i = 1; i < data.length; i++) {
+    ema = data[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+/**
+ * High-Resolution RSI (5s buckets)
+ */
+export function getHighResRSI(mint: string, period: number = 14): number | null {
+  const periods = periodStore5s.get(mint) || [];
+  if (periods.length < period + 1) return null;
+
+  const closes = periods.map(p => p.close).slice(-(period + 1));
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) gains += change;
+    else losses -= change;
+  }
+
+  if (losses === 0) return 100;
+  const rs = (gains / period) / (losses / period);
+  return 100 - (100 / (1 + rs));
+}
+
+/**
+ * High-Resolution MACD (5s buckets)
+ */
+export function getHighResMACD(mint: string): { macd: number; signal: number; histogram: number } | null {
+  const periods = periodStore5s.get(mint) || [];
+  if (periods.length < 35) return null;
+
+  const closes = periods.map(p => p.close);
+  const ema12 = calculateEMA(closes.slice(-12), 12);
+  const ema26 = calculateEMA(closes.slice(-26), 26);
+  const macdLine = ema12 - ema26;
+
+  const macdHistory: number[] = [];
+  for (let i = 0; i < 9; i++) {
+    const hCloses = closes.slice(-(26 + 9 - i), closes.length - (9 - i - 1) || undefined);
+    if (hCloses.length < 26) continue;
+    const hEma12 = calculateEMA(hCloses.slice(-12), 12);
+    const hEma26 = calculateEMA(hCloses.slice(-26), 26);
+    macdHistory.push(hEma12 - hEma26);
+  }
+
+  if (macdHistory.length < 9) return null;
+  const signalLine = calculateEMA(macdHistory, 9);
+
+  return {
+    macd: macdLine,
+    signal: signalLine,
+    histogram: macdLine - signalLine
+  };
+}
+
+/**
+ * Calculate Relative Strength Index (RSI) - 1m resolution (Legacy)
  */
 export function getRSI(mint: string, period: number = 14): number | null {
   const periods = periodStore.get(mint) || [];
@@ -66,30 +150,17 @@ export function getRSI(mint: string, period: number = 14): number | null {
 }
 
 /**
- * Calculate Moving Average Convergence Divergence (MACD)
- * Standard (12, 26, 9)
+ * Calculate Moving Average Convergence Divergence (MACD) - 1m resolution (Legacy)
  */
 export function getMACD(mint: string): { macd: number; signal: number; histogram: number } | null {
   const periods = periodStore.get(mint) || [];
-  if (periods.length < 35) return null; // Need enough history for EMA 26 + Signal 9
+  if (periods.length < 35) return null;
 
   const closes = periods.map(p => p.close);
-
-  const calculateEMA = (data: number[], p: number) => {
-    const k = 2 / (p + 1);
-    let ema = data[0];
-    for (let i = 1; i < data.length; i++) {
-      ema = data[i] * k + ema * (1 - k);
-    }
-    return ema;
-  };
-
   const ema12 = calculateEMA(closes.slice(-12), 12);
   const ema26 = calculateEMA(closes.slice(-26), 26);
   const macdLine = ema12 - ema26;
 
-  // Signal line is 9-day EMA of MACD line (simplified for real-time buffer)
-  // We'll calculate the last 9 MACD points
   const macdHistory: number[] = [];
   for (let i = 0; i < 9; i++) {
     const hCloses = closes.slice(-(26 + 9 - i), closes.length - (9 - i - 1) || undefined);

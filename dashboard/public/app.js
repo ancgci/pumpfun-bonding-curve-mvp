@@ -904,10 +904,32 @@ function initWebSocket() {
     document.body.classList.remove('ws-connected');
   });
 
-  socket.on('pnl-update', (data) => {
-    console.log('📉 Received P&L Update:', data);
+  socket.on('dashboardUpdate', (data) => {
+    console.log('⚡ Received Real-Time Update:', data);
+
+    // 1. Stats and Chart
     if (data.stats) updateStats(data.stats);
     if (data.plHistory) updatePLChart(data.plHistory);
+
+    // 2. Positions
+    if (data.stats && data.stats.positions) {
+      updatePositions(data.stats.positions);
+    }
+
+    // 3. Agent and Simulation Stats
+    if (data.stats && data.stats.agent) {
+      updateAgentStatus(data.stats.agent);
+      if (data.stats.agent.simulation) {
+        updateSimulationStatus(data.stats.agent.simulation);
+      }
+    }
+
+    // 4. Recent Simulation Trades
+    if (data.simTrades) {
+      updateSimulationTrades(data.simTrades);
+    }
+
+    showToast('Dashboard updated in real-time', 'info');
   });
 }
 

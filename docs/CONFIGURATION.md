@@ -225,6 +225,21 @@ CB_RESET_HOURS=12  # Reset após 12 horas
 
 ---
 
+## Configurações de Simulação
+
+### `SIMULATION_TIMEOUT_MIN`
+Tempo máximo (em minutos) para uma trade simulada permanecer aberta se não atingir TP ou SL.
+
+**Padrão:** `20`
+
+**Exemplo:** `10` = fechar automaticamente após 10 minutos.
+
+```bash
+SIMULATION_TIMEOUT_MIN=20
+```
+
+---
+
 ## Gas Pricing (Otimização)
 
 ### `GAS_BASE_FEE`

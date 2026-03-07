@@ -773,7 +773,7 @@ app.delete("/api/agent/patterns", (req, res) => {
  * POST /api/internal/broadcast - Forçar broadcast via WebSocket (para processos internos)
  */
 app.post("/api/internal/broadcast", (req, res) => {
-    broadcastPnLUpdate();
+    broadcastDashboardUpdate();
     res.json({ success: true });
 });
 
@@ -820,6 +820,14 @@ function getStats() {
     const wins = closed.filter((p: any) => p.buyTimestamp && Date.now() - p.buyTimestamp < 3600000).length;
     const losses = closed.length - wins;
 
+    // Agent Stats
+    const agentConfig = loadAgentConfig();
+    const learningMetrics = loadLearningMetrics();
+    const agentStatus = loadAgentStatus();
+
+    // Simulation Stats
+    const simMetrics = getSimulationMetrics();
+
     return {
         totalPositions: positions.length,
         activePositions: active.length,
@@ -837,21 +845,34 @@ function getStats() {
         positions: active.map((p: any) => ({
             ...p,
             ageFormatted: formatAge(Date.now() - p.buyTimestamp)
-        }))
+        })),
+        agent: {
+            enabled: agentConfig.enabled || false,
+            mode: agentConfig.mode || "SIMULATION",
+            rateLimited: agentStatus.rateLimited || false,
+            simulation: simMetrics
+        }
     };
 }
 
 // WebSocket Broadcast
-export function broadcastPnLUpdate() {
+export function broadcastDashboardUpdate() {
     const stats = getStats();
-
-    // Antes de emitir, registrar ponto P&L se houver mudança significativa ou apenas para histórico
     const trades = loadAgentTrades();
     const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
     recordPnLPoint(totalPnl, stats.activePositions);
 
     const plHistory = getPnLHistory(30);
-    io.emit("pnl-update", { stats, plHistory });
+
+    // Recent simulation trades
+    const simTrades = db.prepare(`SELECT * FROM simulated_trades ORDER BY entry_time DESC LIMIT 10`).all();
+
+    io.emit("dashboardUpdate", {
+        stats,
+        plHistory,
+        simTrades,
+        timestamp: Date.now()
+    });
 }
 
 // Persistência de P&L
@@ -908,7 +929,7 @@ io.on("connection", (socket) => {
 
     // Handle bot notification (if bot connects as client)
     socket.on("bot-event-update", () => {
-        broadcastPnLUpdate();
+        broadcastDashboardUpdate();
     });
 });
 
@@ -916,13 +937,13 @@ io.on("connection", (socket) => {
 if (require.main === module) {
     fs.watch(POSITIONS_FILE, (event) => {
         if (event === 'change') {
-            setTimeout(broadcastPnLUpdate, 100); // Small delay to let file write finish
+            setTimeout(broadcastDashboardUpdate, 100); // Small delay to let file write finish
         }
     });
 
     fs.watch(AGENT_TRADES_FILE, (event) => {
         if (event === 'change') {
-            setTimeout(broadcastPnLUpdate, 100);
+            setTimeout(broadcastDashboardUpdate, 100);
         }
     });
 }
