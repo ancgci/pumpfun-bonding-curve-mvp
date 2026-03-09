@@ -6,9 +6,21 @@ import { History } from "lucide-react";
 export function TradeHistory() {
   const { tradeHistory, simTrades } = useDashboardData();
 
-  // Combine both or let the user toggle. But for now show recent from simTrades as it merges the WebSocket feed
-  const trades =
+  // Normalize field names: the sim API returns tokenSymbol/tokenMint/reason
+  // while agent trades API returns symbol/mint/exitReason
+  const rawTrades =
     simTrades && simTrades.length > 0 ? simTrades : tradeHistory || [];
+
+  const trades = rawTrades.map((t: any) => ({
+    symbol: t.symbol || t.tokenSymbol || null,
+    mint: t.mint || t.tokenMint || null,
+    isSimulation: t.isSimulation !== undefined ? t.isSimulation : true,
+    status: t.status || 'OPEN',
+    entryTime: t.entryTime,
+    exitTime: t.exitTime,
+    exitReason: t.exitReason || t.reason || null,
+    pnl: t.pnl || 0,
+  }));
 
   return (
     <Card className="glass mt-4">
@@ -50,7 +62,7 @@ export function TradeHistory() {
                       className="border-b border-white/5 hover:bg-white/5 transition-colors"
                     >
                       <td className="px-4 py-3 font-medium font-mono text-purple-300">
-                        {trade.symbol || trade.mint.substring(0, 6) + "..."}
+                        {trade.symbol || (trade.mint ? trade.mint.substring(0, 6) + "..." : "Unknown")}
                       </td>
                       <td className="px-4 py-3">
                         <Badge
@@ -67,12 +79,16 @@ export function TradeHistory() {
                       <td className="px-4 py-3">
                         <Badge
                           variant={
-                            trade.status === "CLOSED" ? "secondary" : "default"
+                            trade.status === "OPEN" ? "default" : "secondary"
                           }
                           className={
                             trade.status === "OPEN"
                               ? "bg-yellow-500/20 text-yellow-500"
-                              : ""
+                              : trade.status?.includes("TP")
+                                ? "bg-green-500/20 text-green-400"
+                                : trade.status?.includes("SL")
+                                  ? "bg-red-500/20 text-red-400"
+                                  : ""
                           }
                         >
                           {trade.status}
@@ -96,7 +112,7 @@ export function TradeHistory() {
                       </td>
                       <td className="px-4 py-3 text-right text-xs">
                         <span className="bg-black/40 px-2 py-1 rounded border border-white/10">
-                          {trade.exitReason || "HOLDING"}
+                          {trade.exitReason || (trade.status === "OPEN" ? "HOLDING" : trade.status)}
                         </span>
                       </td>
                       <td

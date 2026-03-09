@@ -43,7 +43,7 @@ export function PositionsList() {
                       className="border-b border-white/5 hover:bg-white/5 transition-colors"
                     >
                       <td className="px-4 py-3 font-medium font-mono">
-                        {pos.symbol || pos.mint.substring(0, 6) + "..."}
+                        {pos.symbol || (pos.mint ? pos.mint.substring(0, 6) + "..." : "Unknown")}
                       </td>
                       <td className="px-4 py-3">
                         <Badge

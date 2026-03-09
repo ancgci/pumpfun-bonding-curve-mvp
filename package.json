@@ -41,7 +41,12 @@
     "test:qa": "export LD_LIBRARY_PATH=$PWD/.browser_deps/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH && npm run test:fast:full && npm run test:frontend",
     "test:smoke": "npx ts-node test/smokeTest.ts",
     "test:ai-agent": "jest --config jest.config.js test/ai-agent",
-    "test:ai-agent:full": "jest --config jest.config.js test/ai-agent/advanced"
+    "test:ai-agent:full": "jest --config jest.config.js test/ai-agent/advanced",
+    "qa:unit": "jest --config jest.config.js .agents/agents/QAAgent/tests/unit",
+    "qa:api": "jest --config jest.config.js .agents/agents/QAAgent/tests/api",
+    "qa:e2e": "npx playwright test .agents/agents/QAAgent/tests/e2e",
+    "qa:regression": "npx playwright test .agents/agents/QAAgent/tests/regression",
+    "qa:full": "npm run qa:unit && npm run qa:api && npm run qa:e2e && npm run qa:regression"
   },
   "author": "",
   "license": "ISC",

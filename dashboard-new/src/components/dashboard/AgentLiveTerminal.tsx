@@ -30,17 +30,20 @@ export function AgentLiveTerminal() {
                 <div
                   key={i}
                   className={`flex gap-3 leading-relaxed ${log.type === "error"
-                      ? "text-red-400"
-                      : log.type === "warn"
-                        ? "text-yellow-400"
-                        : "text-green-300"
+                    ? "text-red-400"
+                    : log.type === "warn"
+                      ? "text-yellow-400"
+                      : "text-green-300"
                     }`}
                 >
                   <span className="text-muted-foreground shrink-0 w-24">
                     [
-                    {new Date(log.time).toLocaleTimeString([], {
-                      hour12: false,
-                    })}
+                    {(() => {
+                      const d = new Date(log.time);
+                      return isNaN(d.getTime())
+                        ? String(log.time).slice(0, 8)
+                        : d.toLocaleTimeString([], { hour12: false });
+                    })()}
                     ]
                   </span>
                   <span className="break-words font-medium">{log.message}</span>
