@@ -26,6 +26,7 @@ import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
 import { calculateCurveProgress } from "./utils/curveConstants";
 import { alertQueue } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from "./utils/agentOrchestrator";
+import { rebuildMetricsFromFile } from "./utils/simulationEngine";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
 import { recordPriceSample } from "./utils/volatilityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
@@ -136,13 +137,16 @@ if (telegramEnabled) {
   });
 
   // Initialize Telegram Command Listener (/top10, /newlistings)
-  initTelegramCommands();
+  initTelegramCommands(bot);
 } else {
   logger.warn("Telegram desabilitado (sem token/chat id); alertas não serão enviados.");
   alertQueue.setSendCallback(async (message: string) => {
     logger.info(`(TELEGRAM OFF) ${message}`);
   });
 }
+
+// Rebuild simulation metrics from existing trades history on startup
+rebuildMetricsFromFile().catch(err => logger.warn(`⚠️ Could not rebuild simulation metrics: ${err.message}`));
 
 // Create a Set to track sent addresses
 let sentAddresses = new Set();
@@ -1772,9 +1776,6 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
     }
   }
 }
-
-// Initialize learning cycle
-setInterval(() => runLearningCycle(), 3600_000); // once per hour
 
 // Resume simulation monitoring for open trades
 resumeSimulationMonitoring().catch(err => logger.error(`Error resuming simulation: ${err.message}`));

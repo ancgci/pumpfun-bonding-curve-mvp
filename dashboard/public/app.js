@@ -115,12 +115,10 @@ async function fetchEmergencyStop() {
 
 async function fetchLearnedRules() {
   try {
-    // We re-use the patterns endpoint but display as rules for LearnerAgent
-    const rawRes = await fetch(`${API_BASE}/agent/logs`);
-    // Also load patterns file which has the learned rules
-    const patternsRes = await fetch(`${API_BASE}/agent/patterns`);
-    const patterns = await patternsRes.json();
-    updateLearnedRules(patterns);
+    // Use the dedicated learned-rules endpoint (LearnerAgent LLM output)
+    const rulesRes = await fetch(`${API_BASE}/agent/learned-rules`);
+    const rules = await rulesRes.json();
+    updateLearnedRules(rules);
   } catch (e) { console.error('Error fetching learned rules:', e); }
 }
 
@@ -243,7 +241,6 @@ async function saveTradingParams() {
     autoSellOnCreatorExit: document.getElementById('autoSellOnCreatorExitCheckbox').checked,
     atrMultiplierTp: parseFloat(document.getElementById('atrMultiplierTpInput').value),
     atrMultiplierSl: parseFloat(document.getElementById('atrMultiplierSlInput').value),
-    huggingfaceApiKey: document.getElementById('huggingfaceApiKeyInput').value,
     senseAiEnabled: document.getElementById('senseAiEnabledCheckbox').checked,
   };
   try {
@@ -396,9 +393,6 @@ function applyTradingConfig(cfg) {
   if (cfg.autoSellOnCreatorExit !== undefined) {
     const chk = document.getElementById('autoSellOnCreatorExitCheckbox');
     if (chk) chk.checked = cfg.autoSellOnCreatorExit;
-  }
-  if (cfg.huggingfaceApiKey !== undefined) {
-    document.getElementById('huggingfaceApiKeyInput').value = cfg.huggingfaceApiKey;
   }
   if (cfg.senseAiEnabled !== undefined) {
     const chk = document.getElementById('senseAiEnabledCheckbox');

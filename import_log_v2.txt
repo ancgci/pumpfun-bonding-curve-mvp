@@ -1,0 +1,89 @@
+🚀 Importando skills OpenAI que ainda existem (atualizado 09/mar/2026)...
+📥 jupyter-notebook → https://raw.githubusercontent.com/openai/skills/main/skills/.curated/jupyter-notebook/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/jupyter-notebook/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/jupyter-notebook/SKILL.md
+✅ Skill 'jupyter-notebook' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/jupyter-notebook.md
+   Version: ?
+   Description: Use when the user asks to create, scaffold, or edit Jupyter notebooks (`.ipynb`) for experiments, explorations, or tutorials; prefer the bundled templates and run the helper script `new_notebook.py` to generate a clean starting notebook.
+✅ Importada!
+----------------------------------------
+📥 notion-research-documentation → https://raw.githubusercontent.com/openai/skills/main/skills/.curated/notion-research-documentation/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/notion-research-documentation/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/notion-research-documentation/SKILL.md
+✅ Skill 'notion-research-documentation' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/notion-research-documentation.md
+   Version: ?
+   Description: Research across Notion and synthesize into structured documentation; use when gathering info from multiple Notion sources to produce briefs, comparisons, or reports with citations.
+✅ Importada!
+----------------------------------------
+📥 skill-creator → https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-creator/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-creator/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-creator/SKILL.md
+⚠️  Skill 'skill-creator' already exists. Overwriting...
+✅ Skill 'skill-creator' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/skill-creator.md
+   Version: ?
+   Description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations.
+✅ Importada!
+----------------------------------------
+📥 spreadsheet → https://raw.githubusercontent.com/openai/skills/main/skills/.curated/spreadsheet/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/spreadsheet/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/spreadsheet/SKILL.md
+✅ Skill 'spreadsheet' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/spreadsheet.md
+   Version: ?
+   Description: Use when tasks involve creating, editing, analyzing, or formatting spreadsheets (`.xlsx`, `.csv`, `.tsv`) with formula-aware workflows, cached recalculation, and visual review.
+✅ Importada!
+----------------------------------------
+📥 skill-installer → https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-installer/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-installer/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-installer/SKILL.md
+⚠️  Skill 'skill-installer' already exists. Overwriting...
+✅ Skill 'skill-installer' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/skill-installer.md
+   Version: ?
+   Description: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos).
+✅ Importada!
+----------------------------------------
+📥 openai-docs → https://raw.githubusercontent.com/openai/skills/main/skills/.curated/openai-docs/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/openai-docs/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/openai-docs/SKILL.md
+✅ Skill 'openai-docs' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/openai-docs.md
+   Version: ?
+   Description: Use when the user asks how to build with OpenAI products or APIs and needs up-to-date official documentation with citations, help choosing the latest model for a use case, or explicit GPT-5.4 upgrade and prompt-upgrade guidance; prioritize OpenAI docs MCP tools, use bundled references only as helper context, and restrict any fallback browsing to official OpenAI domains.
+✅ Importada!
+----------------------------------------
+📥 playwright-interactive → https://raw.githubusercontent.com/openai/skills/main/skills/.curated/playwright-interactive/SKILL.md
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/playwright-interactive/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/playwright-interactive/SKILL.md
+✅ Skill 'playwright-interactive' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/playwright-interactive.md
+   Version: ?
+   Description: Persistent browser and Electron interaction through `js_repl` for fast iterative UI debugging.
+✅ Importada!
+----------------------------------------
+Resumo: 7 sucessos / 0 falhas
+Dica: Rode 'npm run skill:list' para ver as novas.

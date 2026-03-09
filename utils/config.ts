@@ -23,6 +23,7 @@ export const CONFIG = {
   // Telegram
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || "",
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || "",
+  TELEGRAM_ADMIN_IDS: (process.env.TELEGRAM_ADMIN_IDS || "").split(",").filter(id => id.length > 0),
   MIN_MESSAGE_INTERVAL: parseInt(process.env.MIN_MESSAGE_INTERVAL || "5000"),
   HTTPS_PROXY: process.env.HTTPS_PROXY,
   HTTP_PROXY: process.env.HTTP_PROXY,

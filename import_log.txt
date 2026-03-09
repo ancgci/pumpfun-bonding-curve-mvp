@@ -1,0 +1,72 @@
+🚀 Importando apenas as 6 skills ÚTEIS da OpenAI para o seu bot...
+📥 Tentando importar: api-integration
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/api-integration/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/api-integration/SKILL.md
+❌ Failed to download: Request failed with status code 404
+⚠️ Falha ao importar api-integration (verifique se o URL está correto ou se o comando npm roda)
+----------------------------------------
+📥 Tentando importar: skill-creator
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-creator/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-creator/SKILL.md
+⚠️  Skill 'skill-creator' already exists. Overwriting...
+✅ Skill 'skill-creator' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/skill-creator.md
+   Version: ?
+   Description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations.
+✅ skill-creator importada com sucesso!
+----------------------------------------
+📥 Tentando importar: research
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/research/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/research/SKILL.md
+❌ Failed to download: Request failed with status code 404
+⚠️ Falha ao importar research (verifique se o URL está correto ou se o comando npm roda)
+----------------------------------------
+📥 Tentando importar: skill-installer
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-installer/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.system/skill-installer/SKILL.md
+⚠️  Skill 'skill-installer' already exists. Overwriting...
+✅ Skill 'skill-installer' imported successfully!
+   File: /home/srant/projects/pumpfun-bonding-curve-Test/.agents/skills/skill-installer.md
+   Version: ?
+   Description: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos).
+✅ skill-installer importada com sucesso!
+----------------------------------------
+📥 Tentando importar: data-analysis
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/data-analysis/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/data-analysis/SKILL.md
+❌ Failed to download: Request failed with status code 404
+⚠️ Falha ao importar data-analysis (verifique se o URL está correto ou se o comando npm roda)
+----------------------------------------
+📥 Tentando importar: tool-calling
+
+> shyft@1.0.0 skill:import
+> npx ts-node tools/import-skill.ts --url https://raw.githubusercontent.com/openai/skills/main/skills/.curated/tool-calling/SKILL.md
+
+⬇️  Downloading skill from: https://raw.githubusercontent.com/openai/skills/main/skills/.curated/tool-calling/SKILL.md
+❌ Failed to download: Request failed with status code 404
+⚠️ Falha ao importar tool-calling (verifique se o URL está correto ou se o comando npm roda)
+----------------------------------------
+
+🎉 RESUMO DA IMPORTAÇÃO
+Skills importadas com sucesso: 2 / 6
+Falhas: 4
+
+Próximos passos:
+1. Rode 'npm run skill:list' para ver as novas skills
+2. Teste dizendo ao agente: 'usa skill-creator para criar uma nova skill de scalping'
+3. Se alguma falhar, verifique se o repo OpenAI ainda tem o arquivo (atualizado em março 2026)

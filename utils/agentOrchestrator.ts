@@ -20,6 +20,7 @@ import { getRugCheckXyzAnalysis } from "./riskEngine/rugCheckXyz";
 import { getRektShieldAnalysis } from "./riskEngine/rektShield";
 import { getGoPlusAnalysis } from "./riskEngine/goPlusLabs";
 import { getOnChainAnalysis } from "./riskEngine/onChainCheck";
+import { orchestrator } from "../.agents/orchestrator/main-orchestrator";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -282,6 +283,7 @@ export async function getAgentDecision(
   const isDev = CONFIG.NODE_ENV === "development";
   const isTest = process.env.NODE_ENV === "test";
   const agentEnabled = process.env.AGENT_ENABLED === "true";
+  const agentMode = process.env.AGENT_MODE || "SIMULATION";
 
   if ((isDev && !isTest) || !agentEnabled) {
     logger.info(`⏭️  [Agent] Skipping: dev=${isDev}, test=${isTest}, enabled=${agentEnabled}`);
@@ -330,16 +332,22 @@ export async function getAgentDecision(
     return { action: "SKIP", confidence: 0, reasoning: "Technical: MACD Bearish Histogram" };
   }
 
-  if (trend && trend.isRed && trend.bodySize > 40) {
-    logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Falling knife detected (-${trend.bodySize.toFixed(1)}% candle body)`);
-    return { action: "SKIP", confidence: 0, reasoning: `TrendPreFilter: sharp downward candle (${trend.bodySize.toFixed(1)}%)` };
+  if (trend && trend.isRed) {
+    const threshold = agentMode === "SIMULATION" ? 60 : 40;
+    if (trend.bodySize > threshold) {
+      logger.warn(`⚡ [PreFilter ${agentMode}] ${tokenAnalysis.symbol} REJECTED: Falling knife detected (-${trend.bodySize.toFixed(1)}% candle body)`);
+      return { action: "SKIP", confidence: 0, reasoning: `TrendPreFilter: sharp downward candle (${trend.bodySize.toFixed(1)}%)` };
+    }
   }
 
   // [NEW] Micro-Trend Pre-Filter: Fast rejection for "heartbeat" dumps (5-10s window)
   const microTrend = getMicroTrend(tokenAnalysis.mint, 10000);
-  if (microTrend && microTrend.changePct < -8) { // 8% drop in 10s is very suspicious
-    logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Micro-dump detected (${microTrend.changePct.toFixed(1)}% in 10s)`);
-    return { action: "SKIP", confidence: 0, reasoning: `MicroTrend: sharp drop detected (${microTrend.changePct.toFixed(1)}% in 10s)` };
+  if (microTrend) {
+    const microThreshold = agentMode === "SIMULATION" ? -15 : -8;
+    if (microTrend.changePct < microThreshold) {
+      logger.warn(`⚡ [PreFilter ${agentMode}] ${tokenAnalysis.symbol} REJECTED: Micro-dump detected (${microTrend.changePct.toFixed(1)}% in 10s)`);
+      return { action: "SKIP", confidence: 0, reasoning: `MicroTrend: sharp drop detected (${microTrend.changePct.toFixed(1)}% in 10s)` };
+    }
   }
 
   const hasRiskData = tokenAnalysis.liquiditySol > 0 || tokenAnalysis.holders > 0 || tokenAnalysis.riskScore > 0;
@@ -365,8 +373,12 @@ export async function getAgentDecision(
       else if (curve > 50) minRequired = 20; // Increased from 15
       else minRequired = 15; // Increased from 10 for very early tokens
 
+      if (agentMode === "SIMULATION") {
+        minRequired = Math.max(5, Math.floor(minRequired / 2)); // Soften by 50% for simulation
+      }
+
       if (h < minRequired) {
-        logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Low holders (${h}) for curve progress (${curve.toFixed(1)}%). Min required: ${minRequired}`);
+        logger.warn(`⚡ [PreFilter ${agentMode}] ${tokenAnalysis.symbol} REJECTED: Low holders (${h}) for curve progress (${curve.toFixed(1)}%). Min required: ${minRequired}`);
         return { action: "SKIP", confidence: 0, reasoning: `PreFilter: too few holders (${h}) for ${curve.toFixed(1)}% curve` };
       }
     }
@@ -428,7 +440,25 @@ export async function getAgentDecision(
     }
 
     const decision = await llmLimiter.schedule(async () => {
-      return await callLlm(tokenAnalysis);
+      // Use the new Multi-Agent Orchestrator
+      const orchestratedResult = await orchestrator.decide(tokenAnalysis);
+
+      // Map orchestrated result to AgentDecision
+      const tpPercent = (typeof orchestratedResult.takeProfitPercent === "number" && orchestratedResult.takeProfitPercent > 0)
+        ? orchestratedResult.takeProfitPercent
+        : CONFIG.TAKE_PROFIT_PERCENT;
+      const slPercent = (typeof orchestratedResult.stopLossPercent === "number" && orchestratedResult.stopLossPercent > 0)
+        ? orchestratedResult.stopLossPercent
+        : CONFIG.STOP_LOSS_PERCENT;
+
+      return {
+        action: orchestratedResult.action === "BUY" ? "BUY" : "SKIP",
+        confidence: orchestratedResult.confidence || 0,
+        reasoning: orchestratedResult.reasoning || "Orchestrated decision",
+        entryPrice: tokenAnalysis.price,
+        takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),
+        stopLoss: tokenAnalysis.price * (1 - slPercent / 100),
+      } as AgentDecision;
     });
 
     persistAgentStatus({ rateLimited: false, at: Date.now() });
@@ -469,7 +499,14 @@ export async function executeAgentTrade(
   }
 
   // Minimum confidence check
-  const minConfidence = parseInt(process.env.AGENT_MIN_CONFIDENCE || "70");
+  const minConfidenceStr = process.env.AGENT_MIN_CONFIDENCE || "70";
+  let minConfidence = parseInt(minConfidenceStr);
+
+  // Soften confidence requirement to allow more simulated trades
+  if (agentMode === "SIMULATION") {
+    minConfidence = Math.max(50, minConfidence - 20);
+  }
+
   if (decision.confidence < minConfidence) {
     logger.info(
       `⏭️  [Agent ${agentMode}] Skipping ${tokenAnalysis.symbol}: confidence ${decision.confidence}% < ${minConfidence}%`

@@ -153,16 +153,28 @@ async function analyzeLosses(losses: any[]): Promise<string[]> {
 
         let parsed: any;
         try {
+            // Try to parse the full JSON object
             parsed = JSON.parse(content);
         } catch {
-            const match = content.match(/\[[\s\S]*\]/);
-            parsed = match ? JSON.parse(match[0]) : null;
+            // Fallback: find the first JSON block in the content
+            const match = content.match(/\{[\s\S]*\}/);
+            try { parsed = match ? JSON.parse(match[0]) : null; } catch { parsed = null; }
         }
 
+        // Handle {insights, learnedRules: [{rule, weight}]} format
+        if (parsed && Array.isArray(parsed.learnedRules)) {
+            return parsed.learnedRules
+                .filter((r: any) => typeof r.rule === "string" && r.rule.length > 5)
+                .map((r: any) => r.rule)
+                .slice(0, 5);
+        }
+
+        // Handle plain array of strings (legacy format)
         if (Array.isArray(parsed)) {
             return parsed.filter((r: any) => typeof r === "string" && r.length > 5).slice(0, 5);
         }
 
+        logger.warn(`[LearnerAgent] Unexpected LLM response format. Content: ${content.substring(0, 200)}`);
         return [];
     } catch (err: any) {
         logger.error(`[LearnerAgent] LLM call failed: ${err.message}`);
@@ -267,9 +279,12 @@ export async function runLearningCycle(): Promise<void> {
 
 export const LearnerAgent = {
     runLearningCycle,
-    runFullLearningCycle: runLearningCycle, // Alias for the test
     isScheduled: true, // For test verification
     lastRun: new Date().toISOString() // Initial state
 };
+
+// Initialize learning cycle - run immediately on startup, then every hour
+runLearningCycle().catch(err => logger.warn(`⚠️ Initial learning cycle failed: ${err.message}`));
+setInterval(() => runLearningCycle(), 3600_000); // repeat once per hour
 
 logger.info("✅ Learner Agent module loaded");

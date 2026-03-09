@@ -3,39 +3,50 @@ import axios from 'axios';
 import { CONFIG } from './config';
 import logger from './logger';
 
-export function initTelegramCommands() {
+export function initTelegramCommands(existingBot?: TelegramBot) {
     if (!CONFIG.TELEGRAM_BOT_TOKEN) {
         logger.warn("TELEGRAM_BOT_TOKEN não configurado. Comandos /top10 e /newlistings desativados.");
         return null;
     }
 
+    const isAuthorized = (chatId: number) => {
+        const idStr = chatId.toString();
+        // Check if chatId matches main alert chat OR is in the admin list
+        return idStr === CONFIG.TELEGRAM_CHAT_ID || CONFIG.TELEGRAM_ADMIN_IDS.includes(idStr);
+    };
+
     try {
-        // Inicializa o bot em modo polling
-        const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, { polling: true });
-        logger.info("🤖 Telegram Command Listener (Polling) iniciado com sucesso.");
+        // Use existing bot instance to avoid session conflicts (409 Conflict)
+        const bot = existingBot || new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, { polling: true });
+
+        if (!existingBot) {
+            logger.info("🤖 Telegram Command Listener (Standalone Polling) iniciado.");
+        } else {
+            logger.info("🤖 Telegram Command Listener (Shared Instance) vinculado.");
+        }
 
         // Comando /top10
         bot.onText(/\/top10/, async (msg) => {
             const chatId = msg.chat.id;
+            logger.info(`📩 Comando /top10 recebido de: ${chatId}`);
 
-            // Verifica se o comando veio do chat autorizado (opcional, mas recomendado por segurança)
-            if (CONFIG.TELEGRAM_CHAT_ID && chatId.toString() !== CONFIG.TELEGRAM_CHAT_ID) {
-                return; // Ignora comandos de outros chats
+            if (!isAuthorized(chatId)) {
+                if (msg.chat.type === 'private') {
+                    bot.sendMessage(chatId, `⚠️ Apenas chats autorizados podem usar comandos. Seu ID: <code>${chatId}</code>`, { parse_mode: 'HTML' });
+                }
+                logger.warn(`🚫 Comando /top10 bloqueado para chat ID não autorizado: ${chatId}`);
+                return;
             }
 
             try {
-                // Envia mensagem de "carregando"
                 const processingMsg = await bot.sendMessage(chatId, "⏳ Buscando os Top 10 tokens na DexScreener...");
 
-                // Fetch Top 10 from DexScreener (Boosted/Trending tokens on Solana)
-                // The most reliable endpoint for trending pairs is often the chain search or token boosts
                 const response = await axios.get('https://api.dexscreener.com/token-boosts/top/v1');
 
                 if (!response.data || !Array.isArray(response.data)) {
                     throw new Error("Formato de resposta inesperado da DexScreener");
                 }
 
-                // Filter for Solana only and take top 10
                 const solTokens = response.data.filter((t: any) => t.chainId === 'solana').slice(0, 10);
 
                 if (solTokens.length === 0) {
@@ -49,7 +60,6 @@ export function initTelegramCommands() {
                 let reply = `🏆 <b>Top 10 Tokens em Destaque (Solana)</b> 🏆\n\n`;
 
                 solTokens.forEach((token: any, index: number) => {
-                    // Safe access in case fields are missing
                     const symbol = token.tokenAddress ? token.tokenAddress.substring(0, 4).toUpperCase() : 'UNK';
                     reply += `${index + 1}️⃣ <a href="${token.url}">Link DexScreener</a>\n`;
                     reply += `├ Token Address: <code>${token.tokenAddress}</code>\n`;
@@ -68,7 +78,7 @@ export function initTelegramCommands() {
 
             } catch (error: any) {
                 logger.error(`Erro ao buscar /top10: ${error.message}`);
-                bot.sendMessage(chatId, "❌ Erro ao buscar os top tokens. A API do DexScreener pode estar fora do ar.");
+                bot.sendMessage(chatId, "❌ Erro ao buscar os top tokens.");
             }
         });
 
@@ -76,17 +86,17 @@ export function initTelegramCommands() {
         bot.onText(/\/newlistings/, async (msg) => {
             const chatId = msg.chat.id;
 
-            if (CONFIG.TELEGRAM_CHAT_ID && chatId.toString() !== CONFIG.TELEGRAM_CHAT_ID) {
+            if (!isAuthorized(chatId)) {
+                if (msg.chat.type === 'private') {
+                    bot.sendMessage(chatId, `⚠️ Apenas chats autorizados podem usar comandos. Seu ID: <code>${chatId}</code>`, { parse_mode: 'HTML' });
+                }
+                logger.warn(`🚫 Comando /newlistings bloqueado para chat ID não autorizado: ${chatId}`);
                 return;
             }
 
             try {
                 const processingMsg = await bot.sendMessage(chatId, "⏳ Buscando novos pares na Solana...");
 
-                // Fetch latest pairs from DexScreener
-                // Fallback approach if specific 'latest' API is rate-limited: Use a known trending/latest endpoint or search
-                // Note: DexScreener's public API for raw "latest" across a whole chain can be tricky. 
-                // A good alternative is fetching "token profiles" or just using the search endpoint with "solana"
                 const response = await axios.get('https://api.dexscreener.com/latest/dex/search?q=solana');
 
                 const data = response.data as any;
@@ -94,7 +104,6 @@ export function initTelegramCommands() {
                     throw new Error("Formato de resposta inesperado");
                 }
 
-                // Sort pairs by creation time (descending) if pairCreatedAt exists, then take top 5
                 const pairs = data.pairs
                     .filter((p: any) => p.chainId === 'solana' && p.pairCreatedAt)
                     .sort((a: any, b: any) => b.pairCreatedAt - a.pairCreatedAt)
@@ -143,7 +152,12 @@ export function initTelegramCommands() {
 
         bot.onText(/\/(start|help)/, (msg) => {
             const chatId = msg.chat.id;
-            if (CONFIG.TELEGRAM_CHAT_ID && chatId.toString() !== CONFIG.TELEGRAM_CHAT_ID) return;
+            if (!isAuthorized(chatId)) {
+                if (msg.chat.type === 'private') {
+                    bot.sendMessage(chatId, `⚠️ Apenas chats autorizados podem usar comandos. Seu ID: <code>${chatId}</code>`, { parse_mode: 'HTML' });
+                }
+                return;
+            }
             bot.sendMessage(chatId, helpText, { parse_mode: 'HTML' });
         });
 

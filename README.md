@@ -86,19 +86,23 @@ npm run start:all
 ```
 
 
-## 🆕 Latest Changes (Mar 6, 2026)
+## 🆕 Latest Changes (Mar 8, 2026)
 
-### ⚡ Simulation Resurrection & High-Res TA
-O bot agora é capaz de retomar simulações após reinicializações e possui indicadores técnicos de altíssima frequência.
+### 🤖 Multi-Agent Architecture & Real-Time UX
+O bot agora opera com uma equipe de especialistas trabalhando em paralelo e um dashboard 100% real-time.
 
 | Feature | Description |
 |---------|-------------|
-| **Simulation Persistence** | Retomada automática de trades abertos após restart, recalculando timeouts e monitorando em tempo real. |
-| **High-Res Indicators** | RSI, MACD e EMAs calculados em buckets de **5 segundos** para scalping de precisão. |
-| **Strict Pre-Filters** | Proteção contra sobrecompra e reversão de tendência integrada diretamente no Agent Orchestrator. |
-| **Multi-Provider IDs** | Detecção robusta entre Helius e Shyft para contagem de holders automática no dashboard. |
+| **Multi-Agent PRO** | Transição de um LLM único para uma equipe (Scalper, Risk, Sentiment, Whale) orquestrada em tempo real. |
+| **Real-Time WebSocket** | Dashboard atualizado via Socket.io — zero delay, sem polling, atualizações instantâneas de P&L. |
+| **Scalper 5s (Dip & Rip)** | Agente especializado em HFT rodando em janelas de 5 segundos para precisão cirúrgica. |
+| **Risk Guardian** | Agente de risco dedicado que bloqueia transações suspeitas antes mesmo da análise estratégica. |
 
-**Arquivos:** `utils/volatilityMonitor.ts`, `utils/agentOrchestrator.ts`, `docs/SCALPER_STRATEGY_OPTIMIZATION.md`.
+**Arquivos:** `.agents/orchestrator/`, `.agents/agents/`, `dashboard/server.ts`, `.agents/skills/custom/`.
+
+---
+
+## 🔵 Previous Changes (Mar 6, 2026)
 
 ---
 
@@ -238,6 +242,7 @@ priority: 10
 | **Trailing Stop Loss** | Stop rises with price (20% trailing from peak), locking in profits automatically |
 | **Whale Dump Fast-Exit** | Emergency exit when price crashes >30% from peak in one check |
 | **Enriched LLM Prompt** | Token age, buy/sell ratio, top 10 holder concentration, deployer history |
+| **Simulation Learning Mode**| Applies relaxed pre-filters in `SIMULATION` mode to increase learning opportunities, while remaining hyper-strict in `LIVE` mode (`AGENT_MODE` variable)|
 
 **See:** [AI_AGENT.md](docs/AI_AGENT.md) for full technical documentation.
 

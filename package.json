@@ -6,8 +6,9 @@
   "scripts": {
     "prepare": "husky",
     "start": "NODE_OPTIONS='--max-old-space-size=8192' npx ts-node index.ts",
-    "start:dashboard": "cd dashboard && npx ts-node server.ts",
-    "start:all": "concurrently -n \"BOT,DASHBOARD\" -c \"blue,green\" \"npm start\" \"npm run start:dashboard\"",
+    "start:dashboard-api": "cd dashboard && npx ts-node server.ts",
+    "start:dashboard-ui": "cd dashboard-new && npm run dev",
+    "start:all": "concurrently -n \"BOT,API,UI\" -c \"blue,green,magenta\" \"npm start\" \"npm run start:dashboard-api\" \"npm run start:dashboard-ui\"",
     "build": "npx tsc",
     "health": "npx ts-node healthCheck.ts",
     "typecheck": "npx tsc --noEmit",

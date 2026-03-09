@@ -20,5 +20,13 @@
 		"resolveJsonModule": true,
 		"esModuleInterop": true
 	},
-	"exclude": ["exemplo", "node_modules", "dist", "test", "tools", "website"]
+	"exclude": [
+		"exemplo",
+		"node_modules",
+		"dist",
+		"test",
+		"tools",
+		"website",
+		"dashboard-new"
+	]
 }

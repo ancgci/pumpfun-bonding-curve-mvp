@@ -187,6 +187,31 @@ TRADE_TYPE_FILTER=BUY    # Apenas compras
 TRADE_TYPE_FILTER=SELL   # Apenas vendas
 TRADE_TYPE_FILTER=BOTH   # Ambos
 ```
+---
+
+## Modos do Agente (Simulation vs Live)
+
+### `AGENT_MODE`
+Define se o agente orquestrador vai apenas simular operações ou executar trades reais na blockchain.
+
+**Padrão:** `SIMULATION`
+
+```bash
+AGENT_MODE=SIMULATION # Executa análise plena e simula trades (Aprendizado)
+AGENT_MODE=LIVE       # Executa análise e envia transação real na Solana
+```
+
+> [!NOTE] 
+> **Filtros Flexíveis no modo SIMULATION:** 
+> Para maximizar o aprendizado da Inteligência Artificial, o modo `SIMULATION` aplica **regras de pré-filtro mais brandas** do que o modo `LIVE`. 
+> 
+> No modo simulado:
+> - A confiança exigida (`AGENT_MIN_CONFIDENCE`) é reduzida em até 20 pontos (mantendo um piso de 50%).
+> - O pré-filtro de "Micro-Dump" tolera quedas mais bruscas (-15% em vez de -8% em 10s).
+> - A detecção de "Falling Knife" aceita velas vermelhas maiores, permitindo testar reversões.
+> - A exigência mínima de *holders* (baseada no progresso da bonding curve) é reduzida em 50%.
+>
+> Quando você altera o `.env` para `AGENT_MODE=LIVE`, todos os filtros rígidos de segurança e proteção de capital são ativados incondicionalmente para evitar perdas (rug pulls, snipers, etc).
 
 ---
 
@@ -369,6 +394,25 @@ Ativa análise de hype específica para tokens Pump.fun (`true`/`false`).
 
 ### `MORALIS_API_KEY`
 Chave de API da Moralis Solana para análise profunda de holders e risco.
+
+---
+
+---
+
+## Multi-Agent Architecture
+
+O bot utiliza uma estrutura de múltiplos agentes especializados localizados em `.agents/agents/`.
+
+### Estrutura de Diretórios
+- `.agents/agents/ScalperAgent/`: Estratégias de HFT/Scalping.
+- `.agents/agents/RiskAgent/`: Verificações de segurança e anti-rug.
+- `.agents/agents/SentimentAgent/`: Análise de hype e social.
+- `.agents/orchestrator/`: Cérebro central que coordena a equipe.
+
+### Comandos de Ativação (via Dashboard/Chat)
+- `/agent:scalper`: Ativa apenas o modo scalper 5s.
+- `/agent:risk`: Foca exclusivamente em proteção.
+- `/agent:all`: Ativa a orquestração multi-agente completa (padrão).
 
 ---
 

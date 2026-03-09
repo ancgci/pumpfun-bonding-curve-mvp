@@ -336,6 +336,35 @@ async function recalculateSimulationMetrics(trades: SimulatedTrade[]): Promise<v
 }
 
 /**
+ * Rebuild simulation metrics from ALL existing trades on startup.
+ * This ensures the dashboard counter is always accurate, even after restarts.
+ */
+export async function rebuildMetricsFromFile(): Promise<void> {
+  ensureSimulationDir();
+
+  try {
+    if (!fs.existsSync(SIMULATION_TRADES_FILE)) {
+      return; // No trades yet, nothing to rebuild
+    }
+
+    const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+    const trades: SimulatedTrade[] = JSON.parse(data);
+
+    const closedTrades = trades.filter((t) => t.status !== "OPEN");
+    if (closedTrades.length === 0) {
+      logger.info("📊 [SIMULATION] No closed trades found to rebuild metrics.");
+      return;
+    }
+
+    logger.info(`📊 [SIMULATION] Rebuilding metrics from ${closedTrades.length} closed trades...`);
+    await recalculateSimulationMetrics(trades);
+    logger.info(`📊 [SIMULATION] ✅ Metrics rebuilt. Counter: ${closedTrades.length}/50`);
+  } catch (error) {
+    logger.error(`Error rebuilding simulation metrics:`, error);
+  }
+}
+
+/**
  * Get current simulation metrics
  */
 export function getSimulationMetrics(): SimulationMetrics | null {

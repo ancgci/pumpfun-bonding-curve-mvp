@@ -4,28 +4,29 @@ Complete reference for the AI-powered trading agent integrated into the PumpFun 
 
 ---
 
-## Architecture Overview
+## Architecture Overview (Multi-Agent 2026)
 
 ```mermaid
 graph TD
     A[gRPC Token Stream] --> B{Pre-Filter}
     B -->|REJECT| Z[Skip]
-    B -->|PASS| C[LLM Analysis]
-    C --> D{Decision}
-    D -->|SKIP| Z
-    D -->|BUY| E[Position Sizing]
-    E --> F{Mode}
-    F -->|SIMULATION| G[Record Trade]
-    F -->|LIVE| H[Execute on Blockchain]
-    G --> I[Monitor Exit]
-    I --> J{Check Every 10s}
-    J -->|TP Hit| K[Close TP]
-    J -->|Trailing SL Hit| L[Close SL]
-    J -->|Whale Dump -30%| M[Emergency Exit]
-    J -->|1h Timeout| N[Expire]
-    K & L & M & N --> O[LearnerAgent]
-    O --> P[patterns.json]
-    P --> C
+    B -->|PASS| C[MainOrchestrator]
+    
+    subgraph Agent Team
+      C --> D[RiskAgent]
+      D -->|BLOCK| Z
+      D -->|PASS| E[ScalperAgent 5s]
+      D -->|PASS| F[SentimentAgent]
+      D -->|PASS| G[WhaleTrackerAgent]
+    end
+    
+    E & F & G --> H[CopyTradingAgent / Decision]
+    
+    H -->|SKIP| Z
+    H -->|BUY| I[Position Sizing]
+    I --> J{Mode}
+    J -->|SIMULATION| K[Record Trade]
+    J -->|LIVE| L[Execute on Blockchain]
 ```
 
 ---

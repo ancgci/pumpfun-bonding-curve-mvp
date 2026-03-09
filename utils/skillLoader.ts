@@ -16,7 +16,7 @@ import logger from "./logger";
  *   - Just-in-time content loading (only reads full body when needed)
  */
 
-const SKILLS_DIR = path.join(__dirname, "../.agents/skills");
+const SKILLS_DIR = path.join(process.cwd(), ".agents/skills/custom");
 
 // ── Types ────────────────────────────────────────────────────────────
 

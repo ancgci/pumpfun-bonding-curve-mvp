@@ -198,19 +198,79 @@ app.get("/api/agent/logs", (req, res) => {
 });
 
 /**
- * GET /api/agent/patterns - Padrões aprendidos pelo agente
+ * GET /api/agent/patterns - Padrões estatísticos calculados dos trades simulados
  */
 app.get("/api/agent/patterns", (req, res) => {
     try {
-        const patterns = loadLearnedPatterns();
+        const SIM_TRADES_FILE = path.join(__dirname, "../data/simulation/trades.json");
+        if (!fs.existsSync(SIM_TRADES_FILE)) {
+            return res.json([]);
+        }
 
-        res.json(patterns.map(pattern => ({
-            name: pattern.name || "Pattern",
-            accuracy: pattern.accuracy || 0,
-            count: pattern.count || 0,
-            avgProfit: pattern.avgProfit || 0,
-            confidence: pattern.confidence || 0,
-        })));
+        const rawTrades: any[] = JSON.parse(fs.readFileSync(SIM_TRADES_FILE, "utf-8"));
+        const closed = rawTrades.filter((t: any) => t.status && t.status !== "OPEN");
+
+        if (closed.length < 5) {
+            return res.json([]); // Not enough data for patterns
+        }
+
+        // ── Pattern 1: Confidence Buckets ──────────────────────────
+        const buckets: Record<string, any[]> = {};
+        for (const t of closed) {
+            const conf = Math.floor((t.confidence || 80) / 10) * 10;
+            const key = `Confidence ${conf}–${conf + 9}%`;
+            if (!buckets[key]) buckets[key] = [];
+            buckets[key].push(t);
+        }
+
+        const patterns = Object.entries(buckets)
+            .filter(([, trades]) => trades.length >= 2)
+            .map(([name, trades]) => {
+                const wins = trades.filter((t: any) => t.pnl > 0);
+                const avgProfit = trades.reduce((s: number, t: any) => s + (t.pnlPercent || 0), 0) / trades.length / 100;
+                return {
+                    name,
+                    accuracy: wins.length / trades.length,
+                    count: trades.length,
+                    avgProfit,
+                    confidence: wins.length / trades.length,
+                };
+            });
+
+        // ── Pattern 2: Status breakdown ────────────────────────────
+        const statusGroups: Record<string, any[]> = {};
+        for (const t of closed) {
+            const key = t.status as string;
+            if (!statusGroups[key]) statusGroups[key] = [];
+            statusGroups[key].push(t);
+        }
+
+        for (const [status, trades] of Object.entries(statusGroups)) {
+            if (trades.length < 2) continue;
+            const wins = trades.filter((t: any) => t.pnl > 0);
+            const avgProfit = trades.reduce((s: number, t: any) => s + (t.pnlPercent || 0), 0) / trades.length / 100;
+            patterns.push({
+                name: `Status: ${status}`,
+                accuracy: wins.length / trades.length,
+                count: trades.length,
+                avgProfit,
+                confidence: wins.length / trades.length,
+            });
+        }
+
+        res.json(patterns.sort((a, b) => b.count - a.count));
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/agent/learned-rules - Regras aprendidas pelo LearnerAgent (LLM)
+ */
+app.get("/api/agent/learned-rules", (req, res) => {
+    try {
+        const rules = loadLearnedPatterns();
+        res.json(rules);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -865,7 +925,7 @@ export function broadcastDashboardUpdate() {
     const plHistory = getPnLHistory(30);
 
     // Recent simulation trades
-    const simTrades = db.prepare(`SELECT * FROM simulated_trades ORDER BY entry_time DESC LIMIT 10`).all();
+    const simTrades = db.prepare(`SELECT * FROM simulated_trades ORDER BY entry_time DESC LIMIT 20`).all();
 
     io.emit("dashboardUpdate", {
         stats,
