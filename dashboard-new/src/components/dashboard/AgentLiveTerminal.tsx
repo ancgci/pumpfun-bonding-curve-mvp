@@ -6,26 +6,32 @@ import { Terminal } from "lucide-react";
 
 function formatLogTime(time: any): string {
   if (!time) return "--:--:--";
+  // The API returns an ISO string, e.g. "2024-03-09T12:00:00.000Z"
   const d = new Date(time);
   if (!isNaN(d.getTime())) {
-    return d.toLocaleTimeString([], { hour12: false });
+    // Return HH:mm:ss in local time
+    return d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
-  // Try parsing as string timestamp
+  // Try parsing as string timestamp if it's somehow different
   const str = String(time);
-  // Extract HH:MM:SS pattern from string
   const match = str.match(/(\d{2}:\d{2}:\d{2})/);
   if (match) return match[1];
   return str.slice(0, 8);
 }
 
-// Helper to add HTML color spans to log messages
+// Helper to add HTML color spans and CLICKABLE LINKS to log messages
 function colorizeLogMessage(message: string): string {
   if (!message) return "";
 
   let html = message
     // Escape HTML first to prevent XSS and malformed tags
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+  // Replace base58 addresses with clickable links. 
+  // We use a heuristic: if the message contains "Whale" or "Wallet", treat addressing as wallet. Else, Token.
+  const isWalletContext = /whale|wallet/i.test(message);
+
+  html = html
     // Colorize [ModuleTags] -> Cyan
     .replace(/\[([^\]]+)\]/g, '<span class="text-cyan-400 font-semibold">[$1]</span>')
 
@@ -41,8 +47,16 @@ function colorizeLogMessage(message: string): string {
     // Colorize SOL amounts (e.g., 0.5 SOL) -> Yellow
     .replace(/(\d+(?:\.\d+)?\s*SOL)/gi, '<span class="text-yellow-400 font-mono">$1</span>')
 
-    // Colorize Token Addresses (heuristic: base58-like, 32-44 chars) -> Orange
-    .replace(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g, '<span class="text-orange-300 font-mono text-[10px]">$1</span>');
+    // Make Token/Wallet Addresses CLICKABLE
+    .replace(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g, (match, p1) => {
+      // If it's a known non-address word that happens to match base58 regex, ignore (rare but possible). 
+      // For wallets:
+      if (isWalletContext) {
+        return `<a href="https://trojan.com/wallet?address=${p1}&period=1d" target="_blank" rel="noopener noreferrer" class="text-orange-300 font-mono hover:text-orange-100 underline decoration-dotted transition-colors">${p1}</a>`;
+      }
+      // For tokens by default:
+      return `<a href="https://trojan.com/terminal?token=${p1}&ref=juniocarlosbr" target="_blank" rel="noopener noreferrer" class="text-orange-300 font-mono hover:text-orange-100 underline decoration-dotted transition-colors">${p1}</a>`;
+    });
 
   return html;
 }
@@ -84,10 +98,10 @@ export function AgentLiveTerminal() {
                 <div
                   key={i}
                   className={`flex gap-3 leading-relaxed border-b border-white/5 pb-1 mb-1 ${log.type === "error"
-                      ? "text-red-300"
-                      : log.type === "warn"
-                        ? "text-yellow-200"
-                        : "text-slate-300" // neutral base color
+                    ? "text-red-300"
+                    : log.type === "warn"
+                      ? "text-yellow-200"
+                      : "text-slate-300" // neutral base color
                     }`}
                 >
                   <span className="text-slate-500 shrink-0 w-20 text-right opacity-70">
