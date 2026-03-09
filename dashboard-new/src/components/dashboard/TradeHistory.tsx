@@ -4,7 +4,8 @@ import { useDashboardData } from "@/hooks/useDashboardData";
 import { History, ExternalLink } from "lucide-react";
 
 function getTrojanLink(mint: string): string {
-  return `https://t.me/paris_trojanbot?start=sniper_${mint}`;
+  // Using the web terminal interface as requested
+  return `https://trojan.com/terminal?token=${mint}&ref=juniocarlosbr`;
 }
 
 function getStatusColor(status: string, pnl: number): string {
