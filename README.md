@@ -109,6 +109,7 @@ O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
 | **4 Test Suites** | Unit (Jest), API (Supertest), E2E (Playwright), Regression (Playwright). |
 | **npm Scripts** | `qa:unit`, `qa:api`, `qa:e2e`, `qa:regression`, `qa:full`. |
 | **Auto Regression** | Suite completa valida layout, interações, API health e zero errors. |
+| **Rich Reports** | Gera relatórios HTML visuais em `playwright-report/` para os testes de UI/Regressão. |
 
 **Arquivos:** `dashboard-new/`, `.agents/agents/QAgent/`, `package.json`
 

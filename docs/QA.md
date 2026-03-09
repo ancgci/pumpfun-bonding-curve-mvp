@@ -77,6 +77,21 @@ npm run qa:regression   # Suite de regressão completa
 
 ---
 
+## 📊 Relatórios de Teste (Reports)
+
+Após a execução, o QAgent gera relatórios detalhados dependendo da suite utilizada:
+
+### 1. Testes de Frontend (Playwright)
+Ao rodar `qa:e2e`, `qa:regression` ou `qa:full`, o sistema gera um site de relatório visual contendo a árvore de componentes testada, tempo de execução e, em caso de erro, a linha exata de código que falhou.
+- **Localização:** Os relatórios são salvos na pasta `/playwright-report/` na raiz do projeto.
+- **Acesso:** Abra o arquivo `index.html` desta pasta diretamente no seu navegador.
+
+### 2. Testes de Backend (Jest)
+Ao rodar `qa:unit`, `qa:api` ou `qa:full`, o sistema exibe o resultado compilado diretamente no seu terminal, listando os sucessos e falhas em tempo real.
+- **Coverage:** Pode ser configurado futuramente para injetar uma pasta `/coverage/` detalhando a porcentagem do seu código que os testes cobriram.
+
+---
+
 ## 🛠️ Pré-requisitos
 
 ```bash
