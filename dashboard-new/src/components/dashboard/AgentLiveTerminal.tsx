@@ -94,18 +94,18 @@ export function AgentLiveTerminal() {
                 ⏳ Waiting for terminal logs...
               </div>
             ) : (
-              logs.map((log, i) => (
+              logs.map((log: any, i) => (
                 <div
                   key={i}
-                  className={`flex gap-3 leading-relaxed border-b border-white/5 pb-1 mb-1 ${log.type === "error"
+                  className={`flex gap-3 leading-relaxed border-b border-white/5 pb-1 mb-1 ${(log.type || log.level) === "error"
                     ? "text-red-300"
-                    : log.type === "warn"
+                    : (log.type || log.level) === "warn"
                       ? "text-yellow-200"
                       : "text-slate-300" // neutral base color
                     }`}
                 >
                   <span className="text-slate-500 shrink-0 w-20 text-right opacity-70">
-                    [{formatLogTime(log.time)}]
+                    [{formatLogTime(log.time || log.timestamp)}]
                   </span>
                   <span
                     className="break-words"
