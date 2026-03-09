@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,7 +33,9 @@ function colorizeLogMessage(message: string): string {
 
   html = html
     // Colorize [ModuleTags] -> Cyan
-    .replace(/\[([^\]]+)\]/g, '<span class="text-cyan-400 font-semibold">[$1]</span>')
+    .replace(/\[(Agent|RiskEngine|Risk|Sim|Trading)\]/g, '<span class="text-cyan-400 font-semibold">[$1]</span>')
+    // Colorize [WHALE ALERT] -> Orange/Yellow
+    .replace(/\[WHALE ALERT\]/g, '<span class="text-orange-400 font-bold">[WHALE ALERT]</span>')
 
     // Colorize BUY/SELL/ALLOW/BLOCK keywords
     .replace(/\b(BUY|BOUGHT)\b/g, '<span class="text-green-400 font-bold">$1</span>')
@@ -48,7 +50,7 @@ function colorizeLogMessage(message: string): string {
     .replace(/(\d+(?:\.\d+)?\s*SOL)/gi, '<span class="text-yellow-400 font-mono">$1</span>')
 
     // Make Token/Wallet Addresses CLICKABLE
-    .replace(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g, (match, p1) => {
+    .replace(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g, (_match, p1) => {
       // If it's a known non-address word that happens to match base58 regex, ignore (rare but possible). 
       // For wallets:
       if (isWalletContext) {

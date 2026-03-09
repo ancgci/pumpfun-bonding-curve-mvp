@@ -622,7 +622,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       const emoji = isBigBuy ? "💰" : "🚨";
       const headerEmoji = isBigBuy ? "🐳 <b>WHALE BUY DETECTED!</b> 🐳" : "💀 <b>WHALE SELL / DUMP!</b> 💀";
 
-      logger.warn(`🐳 [WHALE ALERT] Movimentação massiva (${typeText}) detectada no token ${tOutput.mint}: ${tOutput.solAmount} SOL!`);
+      logger.warn(`🐳 [WHALE ALERT] Movimentação massiva (${typeText}) detectada no token ${tOutput.mint} por ${tOutput.user}: ${tOutput.solAmount} SOL!`);
 
       const timestamp = new Date().toLocaleTimeString('pt-BR');
       const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
@@ -688,8 +688,10 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         }
         riskSection = formatRiskForTelegram(riskAnalysis);
       } catch (riskError: any) {
-        logger.warn(`⚠️ [RiskEngine] Análise falhou: ${riskError.message}`);
-        riskSection = "\n⚠️ Risk: análise indisponível";
+        // [SAFETY GATE] Se a análise de risco falhou por erro técnico (API limit/Timeout), 
+        // abortamos o trade para não entrar às cegas.
+        logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
+        return;
       }
     }
 
@@ -778,6 +780,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
         `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
         `Symbol: <b>${tokenSymbol}</b>\n` +
+        `Fonte: 💊 <b>Pumpfun</b>\n` +
         `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
         riskSection + `\n` +
         `Market Cap: <b>${marketCap}</b>\n` +
@@ -988,6 +991,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       sendMessage(
         `🚨 <b>ALERTA METEORA DBC - ${METEORA_DBC_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
+        `Fonte: ☄️ <b>Meteora DBC</b>\n` +
         `Type: <b>${tOutput.type}</b>\n` +
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
@@ -1169,6 +1173,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
       sendMessage(
         `🚨 <b>ALERTA BONK.FUN - ${BONK_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
+        `Fonte: 🐕 <b>Bonk.fun</b>\n` +
         `Type: <b>${tOutput.type}</b>\n` +
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
@@ -1351,6 +1356,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
       sendMessage(
         `🚨 <b>ALERTA MOONSHOT - ${MOONSHOT_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
+        `Fonte: 🚀 <b>Moonshot</b>\n` +
         `Type: <b>${tOutput.type}</b>\n` +
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
@@ -1532,6 +1538,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
       sendMessage(
         `🚨 <b>ALERTA ANONCOIN.IT - ${ANONCOIN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
+        `Fonte: 🎭 <b>Anoncoin.it</b>\n` +
         `Type: <b>${tOutput.type}</b>\n` +
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
@@ -1726,6 +1733,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
       sendMessage(
         `🚨 <b>ALERTA DAOS.FUN - ${DAOS_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
+        `Fonte: 🏦 <b>Daos.fun</b>\n` +
         `Type: <b>${tOutput.type}</b>\n` +
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`

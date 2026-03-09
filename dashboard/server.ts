@@ -170,7 +170,7 @@ app.get("/api/agent/logs", (req, res) => {
     try {
         const logsDir = path.join(__dirname, "../logs");
         // Escapa e executa grep seguro; não falha por pipe com maxBuffer alto.
-        const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]" $(ls -tr ${logsDir}/combined*.log 2>/dev/null) | tail -n 60`;
+        const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]|\\[WHALE ALERT\\]" $(ls -tr ${logsDir}/combined*.log 2>/dev/null) | tail -n 60`;
         exec(cmd, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
             if (error) {
                 // error code 1 in grep means no lines matched, which is fine = empty.
