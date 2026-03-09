@@ -1,3 +1,4 @@
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import {
@@ -25,6 +26,36 @@ export function StatsOverview() {
   const losses = Number(stats?.losses ?? 0);
   const totalInvested = Number(stats?.totalInvested ?? 0);
 
+  const [timeFilter, setTimeFilter] = useState("all");
+
+  const filteredChartData = useMemo(() => {
+    if (!plChartData || plChartData.length === 0) return [];
+    if (timeFilter === "all") return plChartData;
+
+    const now = Date.now();
+    let durationMs = 0;
+    switch (timeFilter) {
+      case "1d": durationMs = 24 * 60 * 60 * 1000; break;
+      case "3d": durationMs = 3 * 24 * 60 * 60 * 1000; break;
+      case "7d": durationMs = 7 * 24 * 60 * 60 * 1000; break;
+      case "1m": durationMs = 30 * 24 * 60 * 60 * 1000; break;
+      case "1y": durationMs = 365 * 24 * 60 * 60 * 1000; break;
+    }
+
+    // We want to keep points that are within the duration. 
+    // To ensure the chart line connects from the previous point, we might technically need the last point *before* the cutoff,
+    // but a simple filter is usually fine if we have frequent data.
+    const cutoff = now - durationMs;
+    const filtered = plChartData.filter((d: any) => d.timestamp >= cutoff);
+
+    // If no points fall within the timeframe, maybe there's just one old point. 
+    // We can just return the filtered array. Recharts handles empty arrays.
+    return filtered.length > 0 ? filtered : [
+      { timestamp: cutoff, pnl: 0 },
+      { timestamp: now, pnl: 0 },
+    ];
+  }, [plChartData, timeFilter]);
+
   return (
     <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
       {/* PnL Chart taking up 2 columns */}
@@ -45,12 +76,26 @@ export function StatsOverview() {
           </CardHeader>
           <CardContent>
             <TabsContent value="simulation" className="mt-0 focus-visible:outline-none focus-visible:ring-0">
-              <div className="h-[250px] w-full mt-4">
+              <div className="flex justify-end mb-2 gap-1">
+                {["1d", "3d", "7d", "1m", "1y", "all"].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTimeFilter(t)}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${timeFilter === t
+                        ? "bg-purple-500/20 text-purple-400"
+                        : "text-muted-foreground hover:bg-white/5 hover:text-white"
+                      }`}
+                  >
+                    {t.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div className="h-[250px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
                     data={
-                      plChartData.length > 0
-                        ? plChartData
+                      filteredChartData.length > 0
+                        ? filteredChartData
                         : [
                           { timestamp: Date.now() - 60000, pnl: 0 },
                           { timestamp: Date.now(), pnl: 0 },
