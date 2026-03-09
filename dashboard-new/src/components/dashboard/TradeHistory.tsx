@@ -40,6 +40,7 @@ export function TradeHistory() {
     exitTime: t.exitTime,
     exitReason: t.exitReason || t.reason || null,
     pnl: Number(t.pnl || 0),
+    buyAmountSol: Number(t.buyAmountSol || t.entryAmount || t.invested || 0.1),
   }));
 
   return (
@@ -65,8 +66,9 @@ export function TradeHistory() {
                   <th className="px-4 py-3">Date</th>
                   <th className="px-4 py-3">Entry Time</th>
                   <th className="px-4 py-3">Exit Time</th>
-                  <th className="px-4 py-3 text-right">Reason</th>
                   <th className="px-4 py-3 text-right">P&L</th>
+                  <th className="px-4 py-3 text-right">P&L %</th>
+                  <th className="px-4 py-3 text-right w-1/4">Reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -153,19 +155,33 @@ export function TradeHistory() {
                           })()
                           : "--"}
                       </td>
-                      {/* Reason */}
-                      <td className="px-4 py-3 text-right text-xs">
-                        <span className="bg-black/40 px-2 py-1 rounded border border-white/10">
-                          {trade.exitReason ||
-                            (trade.status === "OPEN" ? "HOLDING" : trade.status)}
-                        </span>
-                      </td>
-                      {/* PnL */}
-                      <td
-                        className={`px-4 py-3 text-right font-mono font-bold ${pnlClass}`}
-                      >
+                      {/* P&L Amount */}
+                      <td className={`px-4 py-3 text-right font-medium font-mono whitespace-nowrap ${pnlClass}`}>
                         {trade.pnl > 0 ? "+" : ""}
                         {trade.pnl.toFixed(4)} SOL
+                      </td>
+                      {/* P&L Percentage */}
+                      <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${pnlClass}`}>
+                        {(() => {
+                          const pnl = Number(trade.pnl) || 0;
+                          // Use buyAmountSol if available to calculate accurate %, otherwise fallback to a static visual or just show N/A
+                          const invest = Number(trade.buyAmountSol || trade.entryAmount || 0.1);
+                          if (invest === 0) return "--";
+                          const percent = (pnl / invest) * 100;
+                          return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
+                        })()}
+                      </td>
+                      {/* Reason (Moved to end) */}
+                      <td className="px-4 py-3 text-right text-muted-foreground text-xs whitespace-normal min-w-[120px]">
+                        {trade.exitReason === "TAKE_PROFIT" ? (
+                          <span className="text-green-400">Target Hit</span>
+                        ) : trade.exitReason === "STOP_LOSS" ? (
+                          <span className="text-red-400">Stop Triggered</span>
+                        ) : trade.exitReason === "EXPIRED" ? (
+                          <span className="text-yellow-400">Timeout</span>
+                        ) : (
+                          trade.exitReason || trade.status
+                        )}
                       </td>
                     </tr>
                   );
