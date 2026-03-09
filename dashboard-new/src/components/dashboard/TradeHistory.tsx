@@ -61,6 +61,7 @@ export function TradeHistory() {
                   <th className="px-4 py-3">Token</th>
                   <th className="px-4 py-3">Mode</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Date</th>
                   <th className="px-4 py-3">Entry Time</th>
                   <th className="px-4 py-3">Exit Time</th>
                   <th className="px-4 py-3 text-right">Reason</th>
@@ -115,7 +116,17 @@ export function TradeHistory() {
                       <td className="px-4 py-3">
                         {getStatusBadge(trade.status, trade.pnl)}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">
+                      {/* Date */}
+                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                        {(() => {
+                          const d = new Date(trade.entryTime);
+                          return isNaN(d.getTime())
+                            ? "--"
+                            : d.toLocaleDateString();
+                        })()}
+                      </td>
+                      {/* Entry Time */}
+                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                         {(() => {
                           const d = new Date(trade.entryTime);
                           return isNaN(d.getTime())
