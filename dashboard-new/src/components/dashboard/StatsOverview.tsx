@@ -45,8 +45,8 @@ export function StatsOverview() {
                   plChartData.length > 0
                     ? plChartData
                     : [
-                      { time: "0", val: 0 },
-                      { time: "1", val: 0 },
+                      { timestamp: Date.now() - 60000, pnl: 0 },
+                      { timestamp: Date.now(), pnl: 0 },
                     ]
                 }
               >
