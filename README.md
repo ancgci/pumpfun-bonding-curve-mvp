@@ -14,8 +14,9 @@ All project documentation is in the `/docs` folder:
 - **[AI_AGENT](docs/AI_AGENT.md)** - AI Agent architecture, learning loop, and precision trading
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system: create, import, and manage agent skills
 - **[API](docs/API.md)** - Dashboard API documentation
-- **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard UI guide
+- **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
 - **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - High-res Technical Analysis scalping guide
+- **[QA](docs/QA.md)** - QAgent testing infrastructure
 - **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
 
 ## 🚀 Quick Start
@@ -34,7 +35,9 @@ cp .env.example .env
 npm run start:all
 ```
 
-**Result:** Bot and Dashboard start together. Access: http://localhost:3001
+**Result:** Bot and Dashboard start together.
+- Legacy Dashboard: http://localhost:3001
+- React Dashboard V2: http://localhost:5174 (run `cd dashboard-new && npm run dev`)
 
 ---
 
@@ -86,7 +89,32 @@ npm run start:all
 ```
 
 
-## 🆕 Latest Changes (Mar 8, 2026)
+## 🆕 Latest Changes (Mar 9, 2026)
+
+### 🎨 Dashboard V2 — React/Vite Overhaul
+O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
+
+| Feature | Description |
+|---------|-------------|
+| **React 19 + Vite** | Migração completa do HTML/JS para stack moderna com HMR. |
+| **3-Tab Navigation** | Overview, Trading, Logs & History — organização em abas. |
+| **Live Protocol Toggles** | Protocolos clicáveis que atualizam via API em tempo real. |
+| **PnL Chart** | Gráfico cumulative de P&L gerado do histórico de simulação. |
+| **Trojan Token Links** | Tokens na tabela linkam para trojan.com para trading rápido. |
+| **Status Colors** | Linhas verde (profit), vermelho (loss), azul (open) na tabela de trades. |
+
+### 🧪 QAgent (QA Senior)
+| Feature | Description |
+|---------|-------------|
+| **4 Test Suites** | Unit (Jest), API (Supertest), E2E (Playwright), Regression (Playwright). |
+| **npm Scripts** | `qa:unit`, `qa:api`, `qa:e2e`, `qa:regression`, `qa:full`. |
+| **Auto Regression** | Suite completa valida layout, interações, API health e zero errors. |
+
+**Arquivos:** `dashboard-new/`, `.agents/agents/QAgent/`, `package.json`
+
+---
+
+## 🔵 Previous Changes (Mar 8, 2026)
 
 ### 🤖 Multi-Agent Architecture & Real-Time UX
 O bot agora opera com uma equipe de especialistas trabalhando em paralelo e um dashboard 100% real-time.
@@ -401,6 +429,11 @@ RPC_URL_FALLBACK_4=https://public.api.rpc.solana
 - ✅ **RPC Pool Pro** - 10+ endpoints with automatic latency-based failover
 - ✅ **Multi-Source Sentiment** - Social listening via Santiment, HuggingFace, and SenseAI
 - ✅ **Moralis Integration** - Advanced holder and token analytics via Moralis.com
+- ✅ **Dashboard V2 (React)** - Modern React + Vite + Tailwind with tabbed navigation
+- ✅ **QAgent** - Senior QA testing infrastructure (Unit, API, E2E, Regression)
+- ✅ **Live Protocol Toggles** - Enable/disable protocols directly from dashboard
+- ✅ **Trojan Token Links** - Click tokens to trade via Trojan Terminal
+- ✅ **Cumulative PnL Chart** - Auto-generated from simulation trade history
 
 ## 📊 Impact
 

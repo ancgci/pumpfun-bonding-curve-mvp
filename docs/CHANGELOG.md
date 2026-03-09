@@ -4,6 +4,55 @@ History of all improvements implemented in the project.
 
 ---
 
+## [Sprint 11] - 2026-03-09
+
+### 🎨 Dashboard V2 — React/Vite Migration + Full Overhaul
+- **Complete React Rewrite** (`dashboard-new/`)
+  - Migrated from vanilla HTML/JS to **React 19 + Vite + TypeScript**.
+  - **Tailwind CSS v4** with glassmorphism design system.
+  - **shadcn/ui** component library (Card, Badge, Progress, ScrollArea).
+  - **Recharts** for interactive PnL charts.
+  - **Socket.io-client** for real-time WebSocket updates.
+
+- **Tabbed Navigation** (`App.tsx`)
+  - 3-tab layout: **Overview** | **Trading** | **Logs & History**.
+  - Groups related components for reduced visual clutter.
+
+- **6 Bug Fixes Applied:**
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 1 | Active Protocols static | Clickable toggle switches via `POST /api/protocol-config` |
+| 2 | Circuit Breaker "UNKNOWN" | Mapped API fields (`isTripped` → OK/HALTED) |
+| 3 | Red slider dots | Custom CSS range slider with purple accent |
+| 4 | Terminal static + Invalid Date | 600px height, auto-scroll, robust timestamp parser |
+| 5 | Unknown tokens + HOLDING reason | Trojan.com token links, green/red/blue row colors, API field mapping |
+| 6 | Empty PnL chart | Built cumulative PnL from simulation trade history |
+
+### 🧪 QAgent — Senior QA Testing Infrastructure
+- **New Agent**: `.agents/agents/QAgent/` with full test suites.
+- **4 Test Suites**:
+
+| Suite | File | Framework |
+|-------|------|-----------|
+| Unit | `tests/unit/simulationEngine.test.ts` | Jest |
+| API | `tests/api/statsEndpoint.test.ts` | Supertest |
+| E2E | `tests/e2e/dashboardLoad.test.ts` | Playwright |
+| Regression | `tests/regression/fullRegressionSuite.test.ts` | Playwright |
+
+- **npm Scripts**: `qa:unit`, `qa:api`, `qa:e2e`, `qa:regression`, `qa:full`.
+
+### 📁 New Files
+- `dashboard-new/` — Complete React dashboard project (Vite, Tailwind v4, Recharts).
+- `.agents/agents/QAgent/` — QA testing agent with prompt and 4 test suites.
+
+### 📁 Files Modified
+- `package.json` — Added QA scripts, excluded `dashboard-new` from lint-staged.
+- `tsconfig.json` — Excluded `dashboard-new` to prevent backend TS errors.
+- `playwright.config.ts` — Added HTML reporter and trace support.
+
+---
+
 ## [Sprint 10] - 2026-03-08
 
 ### 🤖 Multi-Agent Architecture (PRO Level)
