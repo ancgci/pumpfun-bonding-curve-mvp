@@ -18,6 +18,35 @@ function formatLogTime(time: any): string {
   return str.slice(0, 8);
 }
 
+// Helper to add HTML color spans to log messages
+function colorizeLogMessage(message: string): string {
+  if (!message) return "";
+
+  let html = message
+    // Escape HTML first to prevent XSS and malformed tags
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+    // Colorize [ModuleTags] -> Cyan
+    .replace(/\[([^\]]+)\]/g, '<span class="text-cyan-400 font-semibold">[$1]</span>')
+
+    // Colorize BUY/SELL/ALLOW/BLOCK keywords
+    .replace(/\b(BUY|BOUGHT)\b/g, '<span class="text-green-400 font-bold">$1</span>')
+    .replace(/\b(SELL|SOLD|TAKE PROFIT|STOP LOSS)\b/g, '<span class="text-red-400 font-bold">$1</span>')
+    .replace(/\b(BLOCK|REJECT)\b/g, '<span class="text-red-500 font-bold">$1</span>')
+    .replace(/\b(ALLOW|PASS)\b/g, '<span class="text-green-400 font-bold">$1</span>')
+
+    // Colorize percentages (e.g., 85%, -10.5%) -> Purple/Pink
+    .replace(/([+-]?\d+(?:\.\d+)?%)/g, '<span class="text-fuchsia-400 font-mono">$1</span>')
+
+    // Colorize SOL amounts (e.g., 0.5 SOL) -> Yellow
+    .replace(/(\d+(?:\.\d+)?\s*SOL)/gi, '<span class="text-yellow-400 font-mono">$1</span>')
+
+    // Colorize Token Addresses (heuristic: base58-like, 32-44 chars) -> Orange
+    .replace(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g, '<span class="text-orange-300 font-mono text-[10px]">$1</span>');
+
+  return html;
+}
+
 export function AgentLiveTerminal() {
   const { logs } = useDashboardData();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -44,7 +73,7 @@ export function AgentLiveTerminal() {
         </div>
       </div>
       <CardContent className="flex-1 p-0 relative">
-        <ScrollArea className="h-full w-full bg-black/60 font-mono text-xs" style={{ height: "540px" }}>
+        <ScrollArea className="h-full w-full bg-black/80 font-mono text-xs" style={{ height: "540px" }}>
           <div className="p-4 space-y-1">
             {logs.length === 0 ? (
               <div className="text-muted-foreground animate-pulse py-8 text-center">
@@ -54,17 +83,20 @@ export function AgentLiveTerminal() {
               logs.map((log, i) => (
                 <div
                   key={i}
-                  className={`flex gap-2 leading-relaxed ${log.type === "error"
-                    ? "text-red-400"
-                    : log.type === "warn"
-                      ? "text-yellow-400"
-                      : "text-green-300"
+                  className={`flex gap-3 leading-relaxed border-b border-white/5 pb-1 mb-1 ${log.type === "error"
+                      ? "text-red-300"
+                      : log.type === "warn"
+                        ? "text-yellow-200"
+                        : "text-slate-300" // neutral base color
                     }`}
                 >
-                  <span className="text-muted-foreground shrink-0 w-20 text-right">
+                  <span className="text-slate-500 shrink-0 w-20 text-right opacity-70">
                     [{formatLogTime(log.time)}]
                   </span>
-                  <span className="break-words">{log.message}</span>
+                  <span
+                    className="break-words"
+                    dangerouslySetInnerHTML={{ __html: colorizeLogMessage(log.message) }}
+                  />
                 </div>
               ))
             )}
