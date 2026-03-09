@@ -12,6 +12,7 @@ export interface DashboardData {
   isAgentActive: boolean;
   plChartData: any[];
   positions: any[];
+  agentStats: any;
   agentStatus: any;
   tradeHistory: any[];
   simStatus: any;
@@ -232,6 +233,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         plChartData,
         positions,
         agentStatus,
+        agentStats: agentStatus,
         tradeHistory,
         simStatus,
         patterns,
