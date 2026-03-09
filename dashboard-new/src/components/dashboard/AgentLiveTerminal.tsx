@@ -22,10 +22,10 @@ export function AgentLiveTerminal() {
   const { logs } = useDashboardData();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new logs arrive
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+  // Auto-scroll disabled per user request
+  // useEffect(() => {
+  //   bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  // }, [logs]);
 
   return (
     <Card className="glass flex flex-col pt-4 overflow-hidden border-orange-500/20" style={{ minHeight: "600px" }}>
@@ -55,10 +55,10 @@ export function AgentLiveTerminal() {
                 <div
                   key={i}
                   className={`flex gap-2 leading-relaxed ${log.type === "error"
-                      ? "text-red-400"
-                      : log.type === "warn"
-                        ? "text-yellow-400"
-                        : "text-green-300"
+                    ? "text-red-400"
+                    : log.type === "warn"
+                      ? "text-yellow-400"
+                      : "text-green-300"
                     }`}
                 >
                   <span className="text-muted-foreground shrink-0 w-20 text-right">
