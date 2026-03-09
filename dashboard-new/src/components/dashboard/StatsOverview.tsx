@@ -16,7 +16,7 @@ import {
 } from "recharts";
 
 export function StatsOverview() {
-  const { stats, plChartData, simStatus } = useDashboardData();
+  const { stats, plChartData, simStatus, agentStats } = useDashboardData();
 
   // Prefer actual stats but fallback to simStatus if not returned by root payload
   const winRate = Number(stats?.winRate ?? simStatus?.winRate ?? 0);
@@ -31,9 +31,9 @@ export function StatsOverview() {
         <CardHeader className="pb-2">
           <CardTitle className="text-lg flex items-center justify-between">
             <span>Performance Overview</span>
-            <span className="text-xs font-mono px-2 py-1 rounded bg-green-500/20 text-green-400 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-              LIVE
+            <span className={`text-xs font-mono px-2 py-1 rounded flex items-center gap-2 ${agentStats?.mode === "SIMULATION" ? "bg-purple-500/20 text-purple-400" : "bg-green-500/20 text-green-400"}`}>
+              <span className={`w-2 h-2 rounded-full animate-pulse ${agentStats?.mode === "SIMULATION" ? "bg-purple-500" : "bg-green-500"}`}></span>
+              {agentStats?.mode || "SIMULATION"}
             </span>
           </CardTitle>
         </CardHeader>
