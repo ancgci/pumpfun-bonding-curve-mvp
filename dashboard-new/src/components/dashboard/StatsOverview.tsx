@@ -20,13 +20,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 export function StatsOverview() {
   const { stats, plChartData, simStatus } = useDashboardData();
 
-  // Prefer actual stats but fallback to simStatus if not returned by root payload
-  const winRate = Number(stats?.winRate ?? simStatus?.winRate ?? 0);
-  const wins = Number(stats?.wins ?? 0);
-  const losses = Number(stats?.losses ?? 0);
-  const totalInvested = Number(stats?.totalInvested ?? 0);
-
+  const [viewMode, setViewMode] = useState("simulation");
   const [timeFilter, setTimeFilter] = useState("all");
+
+  const isSim = viewMode === "simulation";
+
+  // Dynamic Metrics Selection
+  const winRate = Number(isSim ? (simStatus?.metrics?.winRate ?? 0) : (stats?.winRate ?? 0));
+  const wins = Number(isSim ? (simStatus?.metrics?.winTrades ?? 0) : (stats?.wins ?? 0));
+  const losses = Number(isSim ? (simStatus?.metrics?.lossTrades ?? 0) : (stats?.losses ?? 0));
+  const totalInvested = Number(isSim ? 0 : (stats?.totalInvested ?? 0));
+  const totalPnL = Number(isSim ? (simStatus?.metrics?.totalPnL ?? 0) : (stats?.totalPnL ?? 0));
+  const maxDrawdown = Number(isSim ? (simStatus?.metrics?.maxDrawdown ?? 0) : 0);
 
   const filteredChartData = useMemo(() => {
     if (!plChartData || plChartData.length === 0) return [];
@@ -60,7 +65,7 @@ export function StatsOverview() {
     <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
       {/* PnL Chart taking up 2 columns */}
       <Card className="glass md:col-span-2">
-        <Tabs defaultValue="simulation" className="w-full">
+        <Tabs value={viewMode} onValueChange={setViewMode} className="w-full">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg">Performance Overview</CardTitle>
@@ -82,8 +87,8 @@ export function StatsOverview() {
                     key={t}
                     onClick={() => setTimeFilter(t)}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${timeFilter === t
-                        ? "bg-purple-500/20 text-purple-400"
-                        : "text-muted-foreground hover:bg-white/5 hover:text-white"
+                      ? "bg-purple-500/20 text-purple-400"
+                      : "text-muted-foreground hover:bg-white/5 hover:text-white"
                       }`}
                   >
                     {t.toUpperCase()}
@@ -158,11 +163,26 @@ export function StatsOverview() {
       </Card>
 
       {/* Basic Metrics Grid */}
-      <div className="grid grid-cols-2 gap-4 md:col-span-2">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:col-span-2">
+        <Card className={`glass transition-all duration-300 ${isSim ? 'border-purple-500/30 bg-purple-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full relative overflow-hidden">
+            {/* Badge to indicate mode */}
+            <div className={`absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight ${isSim ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400'}`}>
+              {isSim ? 'Simulation' : 'Live'}
+            </div>
+
+            <TrendingUp className={`w-6 h-6 mb-2 ${isSim ? 'text-purple-400' : 'text-green-400'}`} />
+            <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Total Profit</p>
+            <p className={`text-2xl font-bold font-mono ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {totalPnL > 0 ? '+' : ''}{totalPnL.toFixed(4)} SOL
+            </p>
+          </CardContent>
+        </Card>
+
         <Card className="glass">
           <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
-            <Wallet className="w-6 h-6 text-yellow-400 mb-2" />
-            <p className="text-sm text-muted-foreground">Total Invested</p>
+            <Wallet className="w-6 h-6 text-yellow-500 mb-2" />
+            <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">{isSim ? 'Sim Balance' : 'Live Invested'}</p>
             <p className="text-2xl font-bold font-mono">
               {totalInvested.toFixed(3)} SOL
             </p>
@@ -171,8 +191,8 @@ export function StatsOverview() {
 
         <Card className="glass">
           <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
-            <TrendingUp className="w-6 h-6 text-purple-400 mb-2" />
-            <p className="text-sm text-muted-foreground">Win Rate</p>
+            <TrendingUp className="w-6 h-6 text-blue-400 mb-2" />
+            <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">{isSim ? 'Test' : 'Live'} Win Rate</p>
             <p className="text-2xl font-bold">{winRate.toFixed(1)}%</p>
           </CardContent>
         </Card>
@@ -180,7 +200,7 @@ export function StatsOverview() {
         <Card className="glass">
           <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
             <CheckCircle className="w-6 h-6 text-green-400 mb-2" />
-            <p className="text-sm text-muted-foreground">Wins</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">{isSim ? 'SIM' : 'LIVE'} Wins</p>
             <p className="text-2xl font-bold font-mono text-green-400">
               {wins}
             </p>
@@ -190,9 +210,19 @@ export function StatsOverview() {
         <Card className="glass">
           <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
             <XCircle className="w-6 h-6 text-red-400 mb-2" />
-            <p className="text-sm text-muted-foreground">Losses</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">{isSim ? 'SIM' : 'LIVE'} Losses</p>
             <p className="text-2xl font-bold font-mono text-red-400">
               {losses}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="glass">
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
+            <TrendingUp className="w-6 h-6 text-orange-400 mb-2 rotate-180" />
+            <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Max Drawdown</p>
+            <p className="text-2xl font-bold font-mono text-orange-400">
+              {maxDrawdown.toFixed(4)} SOL
             </p>
           </CardContent>
         </Card>

@@ -167,18 +167,24 @@ export function checkExitConditions(
   };
 
   // 1. Whale Dump Check (sudden drop from peak)
+  // [DISABLING WHALE DUMP FOR TODAY'S TEST AS REQUESTED]
+  /*
   if (whaleDumpPercent > 0 && highWaterMark > 0) {
     const dropFromPeak = ((highWaterMark - currentPrice) / highWaterMark) * 100;
     if (dropFromPeak >= whaleDumpPercent) {
       return { ...status, shouldExit: true, reason: `Whale Dump Detected (-${dropFromPeak.toFixed(1)}% from peak)` };
     }
   }
+  */
 
   // 2. Trailing Stop Update
+  // [DISABLING TRAILING STOP FOR TODAY'S TEST]
+  /*
   if (trailingStopPercent > 0 && status.newHighWaterMark > 0) {
     const trailingSl = status.newHighWaterMark * (1 - trailingStopPercent / 100);
     status.newStopLossPrice = Math.max(status.newStopLossPrice, trailingSl);
   }
+  */
 
   // 3. Take Profit
   let finalTpPercent = takeProfitPercent;
@@ -194,6 +200,8 @@ export function checkExitConditions(
   }
 
   // 4. Stop Loss (Traditional, Trailing, or Volatility-Adjusted)
+  // [DISABLING STOP LOSS FOR TODAY'S TEST]
+  /*
   let finalSlPrice = status.newStopLossPrice;
   if (atr && atrMultiplierSl > 0) {
     const atrSlPrice = entryPrice - (atr * atrMultiplierSl);
@@ -210,6 +218,7 @@ export function checkExitConditions(
     }
     return { ...status, shouldExit: true, reason: slReason };
   }
+  */
 
   return status;
 }

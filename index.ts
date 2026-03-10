@@ -38,6 +38,7 @@ import { recordTransaction, recordCacheHit, recordCacheMiss, recordApiCall, reco
 import { analyzeToken, formatRiskForTelegram } from "./utils/riskEngine";
 import { RISK_CONFIG } from "./utils/riskConfig";
 import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
+import { dipMonitor } from "./utils/dipMonitor";
 import { circuitBreaker } from "./utils/circuitBreaker";
 import logger from "./utils/logger";
 
@@ -147,6 +148,25 @@ if (telegramEnabled) {
 
 // Rebuild simulation metrics from existing trades history on startup
 rebuildMetricsFromFile().catch(err => logger.warn(`⚠️ Could not rebuild simulation metrics: ${err.message}`));
+
+// Initialize the Dip Waitlist Monitor
+dipMonitor.initialize(async (mint: string) => {
+  logger.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint}`);
+  const tokenData: TokenData = {
+    mint,
+    bondingCurve: "", // Will be resolved by hybridExecutor if needed, or skipped if not critical
+    curvePercent: 0,
+    isLaunched: false,
+    mode: "CURVE"
+  };
+
+  // We execute defensively. Since it passed LLM analysis earlier, we force it.
+  try {
+    await executeHybridTrade(tokenData, "BUY", true);
+  } catch (err: any) {
+    logger.error(`❌ Dip Sniper failed to execute trade: ${err.message}`);
+  }
+});
 
 // Create a Set to track sent addresses
 let sentAddresses = new Set();

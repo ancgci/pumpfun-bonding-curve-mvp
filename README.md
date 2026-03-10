@@ -11,7 +11,10 @@ All project documentation is in the `/docs` folder:
 - **[USAGE](docs/USAGE.md)** - Complete usage guide
 - **[CONFIGURATION](docs/CONFIGURATION.md)** - Environment variables reference
 - **[RISK_ENGINE](docs/RISK_ENGINE.md)** - Anti-rug filters, risk score and tuning
+- **[DIP_SNIPER](docs/DIP_SNIPER.md)** - Technical logic for RSI & EMA Sniper crossovers
+- **[DEVELOPMENT_PROTOCOL](docs/DEVELOPMENT_PROTOCOL.md)** - Mandatory steps for bot maintenance
 - **[AI_AGENT](docs/AI_AGENT.md)** - AI Agent architecture, learning loop, and precision trading
+- **[DIP_SNIPER](docs/DIP_SNIPER.md)** - Pre-Execution Guard and RSI Pullback trading
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system: create, import, and manage agent skills
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
@@ -112,6 +115,22 @@ O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
 | **Rich Reports** | Gera relatórios HTML visuais em `playwright-report/` para os testes de UI/Regressão. |
 
 **Arquivos:** `dashboard-new/`, `.agents/agents/QAgent/`, `package.json`
+
+### 🎯 Dip Sniper & Pre-Execution Validation
+| Feature | Description |
+|---------|-------------|
+| **Pre-Execution Guard** | Impede comprar tokens no "topo" avaliando o gráfico instantaneamente após a resposta lenta da IA (Latência). |
+| **Dip Waitlist** | Coloca excelentes tokens que subiram rápido demais numa fila de espera. |
+| **Oversold Sniper** | Monitora (2s) e atira na compra brutal instantânea quando o **RSI (< 45) cruza com preço acima da EMA-9**, confirmando reversão de tendência. |
+
+**Arquivo Doc:** [docs/DIP_SNIPER.md](docs/DIP_SNIPER.md)
+
+### 🛠️ Protocolo de Desenvolvimento (SOP)
+| Regra | Ação Obrigatória |
+|-------|------------------|
+| **Documentação** | Toda nova feature exige atualização imediata no `/docs` e no `README.md`. |
+| **Memória do Agente** | Consensos sobre oportunidades ou novas heurísticas devem ser injetados em `data/agent/patterns.json`. |
+| **Workflow** | Consultar `.agent/workflows/standard_procedure.md` para o passo a passo completo. |
 
 ---
 

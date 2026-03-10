@@ -21,6 +21,8 @@ import { getRektShieldAnalysis } from "./riskEngine/rektShield";
 import { getGoPlusAnalysis } from "./riskEngine/goPlusLabs";
 import { getOnChainAnalysis } from "./riskEngine/onChainCheck";
 import { orchestrator } from "../.agents/orchestrator/main-orchestrator";
+import { validateTradeExecution } from "./tradeExecutionValidator";
+import { dipMonitor } from "./dipMonitor";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -209,7 +211,7 @@ function persistAgentStatus(status: { rateLimited: boolean; reason?: string; at?
  */
 
 export interface AgentDecision {
-  action: "BUY" | "SELL" | "SKIP";
+  action: "BUY" | "SELL" | "SKIP" | "WAITING_DIP";
   confidence: number; // 0-100
   reasoning: string;
   entryPrice?: number;
@@ -367,11 +369,11 @@ export async function getAgentDecision(
       const curve = tokenAnalysis.bondingCurvePercent;
       const h = tokenAnalysis.holders;
 
-      let minRequired = 10;
-      if (curve > 90) minRequired = 50;
-      else if (curve > 80) minRequired = 30;
-      else if (curve > 50) minRequired = 20; // Increased from 15
-      else minRequired = 15; // Increased from 10 for very early tokens
+      let minRequired = 5;
+      if (curve > 90) minRequired = 20;
+      else if (curve > 80) minRequired = 15;
+      else if (curve > 50) minRequired = 10;
+      else minRequired = 5;
 
       if (agentMode === "SIMULATION") {
         minRequired = Math.max(5, Math.floor(minRequired / 2)); // Soften by 50% for simulation
@@ -520,6 +522,25 @@ export async function executeAgentTrade(
   logger.info(`   Reasoning: ${decision.reasoning}`);
 
   // ══════════════════════════════════════════════════
+  // PRE-EXECUTION VALIDATION AND DIP ROUTING
+  // ══════════════════════════════════════════════════
+  if (decision.action === "WAITING_DIP") {
+    dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+    return;
+  }
+
+  if (decision.action === "BUY") {
+    // Catch price spikes that happened during LLM evaluation latency
+    const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, 10.0);
+    if (!validation.isValid) {
+      logger.warn(`♻️ [Orchestrator] Trade aborted due to Pre-Execution validation. Moving ${tokenAnalysis.symbol} to Dip Waitlist.`);
+      decision.action = "WAITING_DIP";
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      return; // Stop execution here
+    }
+  }
+
+  // ══════════════════════════════════════════════════
   // DYNAMIC POSITION SIZING based on confidence
   // Higher confidence = larger position, lower = smaller
   // ══════════════════════════════════════════════════
@@ -630,7 +651,9 @@ export function scheduleSimulationExit(
 
       // ══════════════════════════════════════════════════
       // TRAILING STOP: Update stop loss as price rises
+      // [DISABLED FOR TODAY'S TEST]
       // ══════════════════════════════════════════════════
+      /*
       if (currentPrice > highWaterMark) {
         highWaterMark = currentPrice;
         const newTrailingSl = highWaterMark * (1 - trailingPct);
@@ -642,11 +665,13 @@ export function scheduleSimulationExit(
           );
         }
       }
+      */
 
       // ══════════════════════════════════════════════════
       // WHALE DUMP DETECTION: Fast exit on sudden crash
-      // If price drops > 25% from high water mark fast, exit immediately
+      // [DISABLED FOR TODAY'S TEST]
       // ══════════════════════════════════════════════════
+      /*
       const dropFromPeak = (highWaterMark - currentPrice) / highWaterMark;
       if (dropFromPeak > 0.25) {
         clearInterval(exitCheckInterval);
@@ -656,6 +681,7 @@ export function scheduleSimulationExit(
         await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", "Whale dump emergency exit");
         return;
       }
+      */
 
       // Check TP
       if (currentPrice >= tp) {
@@ -668,6 +694,8 @@ export function scheduleSimulationExit(
       }
 
       // Check SL (now uses trailing stop)
+      // [DISABLED FOR TODAY'S TEST]
+      /*
       if (currentPrice <= sl) {
         clearInterval(exitCheckInterval);
         const reason = sl > (decision.stopLoss || 0) ? "Trailing Stop hit" : "Stop Loss hit";
@@ -677,6 +705,7 @@ export function scheduleSimulationExit(
         await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", reason);
         return;
       }
+      */
 
       // Timeout
       if (elapsedCount >= maxElapsed) {
