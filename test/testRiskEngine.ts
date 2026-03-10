@@ -107,8 +107,8 @@ function testScoreComposition() {
         `Mint authority weight = ${mintScore} (expected: 40)`
     );
     assert(
-        mintDecision === "ALLOW_ALERT",
-        `Score ${mintScore} → ${mintDecision} (expected: ALLOW_ALERT)`
+        mintDecision === "ALLOW_TRADE",
+        `Score ${mintScore} → ${mintDecision} (expected: ALLOW_TRADE)`
     );
 
     // Mint + Freeze = 80 → BLOCK
@@ -241,8 +241,8 @@ function testConfigDefaults() {
     console.log("\n📋 Test: Configuration defaults");
 
     assert(RISK_CONFIG.enabled === true, "Risk engine enabled by default");
-    assert(RISK_CONFIG.thresholds.low === 30, "Low threshold = 30");
-    assert(RISK_CONFIG.thresholds.med === 60, "Med threshold = 60");
+    assert(RISK_CONFIG.thresholds.low === 40, "Low threshold = 40");
+    assert(RISK_CONFIG.thresholds.med === 70, "Med threshold = 70");
     assert(RISK_CONFIG.detection.minLiquiditySol === 5, "Min liquidity = 5 SOL");
     assert(RISK_CONFIG.detection.top10MaxPercent === 50, "Top10 max = 50%");
     assert(RISK_CONFIG.monitor.intervalMs === 30000, "Monitor interval = 30s");

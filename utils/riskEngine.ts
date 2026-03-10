@@ -19,6 +19,7 @@ import { checkTradingSanity } from "./riskEngine/tradingSanity";
 import { fetchCombinedMetadata, TokenMetadata } from "./fetchTokenMetadata";
 import { getCachedTokenMetadata } from "./metadataCache";
 import { getMoralisTokenStats, getMoralisWalletHistory } from "./riskEngine/moralisClient";
+import { getTASnapshot, TASnapshot } from "./volatilityMonitor";
 
 /**
  * Risk Engine — Main Orchestrator
@@ -30,8 +31,9 @@ import { getMoralisTokenStats, getMoralisWalletHistory } from "./riskEngine/mora
  *   const analysis = await analyzeToken("TokenMintAddress123...");
  *   if (analysis.decision === "BLOCK") { ... }
  */
-export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMetadata | null): Promise<RiskAnalysis> {
+export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMetadata | null, curveProgress?: number): Promise<RiskAnalysis> {
     const startTime = Date.now();
+    const isPumpFunPreGraduation = curveProgress !== undefined && curveProgress < 100;
     const flags: RiskFlags = getDefaultFlags();
     const metrics: RiskMetrics = getDefaultMetrics();
     const reasons: RiskReason[] = [];
@@ -105,7 +107,7 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
     // PHASE 2: Parallel fetch of Analysis (Liquidity, Holders, Metadata Quality)
     // ═══════════════════════════════════════════════════════
     const [liqRes, holderRes, metaQualRes, moralisRes] = await Promise.allSettled([
-        analyzeLiquidity(tokenAddr, tokenMetadata),
+        analyzeLiquidity(tokenAddr, tokenMetadata, isPumpFunPreGraduation),
         analyzeHolders(tokenAddr, tokenMetadata?.creator),
         checkMetadataQuality(tokenMetadata),
         getMoralisTokenStats(tokenAddr)
@@ -181,9 +183,50 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
     }
 
     // ═══════════════════════════════════════════════════════
+    // PHASE 4: Technical Analysis Momentum Discount
+    // ═══════════════════════════════════════════════════════
+    let taDiscount = 0;
+    const taReasons: RiskReason[] = [];
+
+    try {
+        const taSnapshot = getTASnapshot(tokenAddr);
+        if (taSnapshot) {
+            // Check healthy RSI (not oversold, not overbought)
+            if (taSnapshot.rsi1m !== null && taSnapshot.rsi1m >= 30 && taSnapshot.rsi1m <= 70) {
+                taDiscount += RISK_CONFIG.taWeights.rsiHealthy;
+                taReasons.push({ filter: "TA_RSI_HEALTHY", impact: -RISK_CONFIG.taWeights.rsiHealthy, detail: `RSI Saudável (${taSnapshot.rsi1m.toFixed(1)})` });
+            }
+
+            // Reversal / Bullish RSI
+            if (taSnapshot.rsi5s !== null && taSnapshot.rsi5s < 30 && taSnapshot.trend && !taSnapshot.trend.isRed) {
+                taDiscount += RISK_CONFIG.taWeights.rsiOversoldBullish;
+                taReasons.push({ filter: "TA_RSI_BULLISH", impact: -RISK_CONFIG.taWeights.rsiOversoldBullish, detail: "RSI Oversold + Vela Verde" });
+            }
+
+            // MACD Bullish
+            if (taSnapshot.macd5s !== null && (taSnapshot.macd5s.macd > taSnapshot.macd5s.signal || taSnapshot.macd5s.histogram > 0)) {
+                taDiscount += RISK_CONFIG.taWeights.macdBullish;
+                taReasons.push({ filter: "TA_MACD_BULLISH", impact: -RISK_CONFIG.taWeights.macdBullish, detail: "MACD Altista" });
+            }
+
+            // EMA Alignment
+            if (taSnapshot.currentPrice !== null && taSnapshot.ema9 !== null && taSnapshot.ema21 !== null) {
+                if (taSnapshot.currentPrice > taSnapshot.ema9 && taSnapshot.ema9 > taSnapshot.ema21) {
+                    taDiscount += RISK_CONFIG.taWeights.emaBullish;
+                    taReasons.push({ filter: "TA_EMA_BULLISH", impact: -RISK_CONFIG.taWeights.emaBullish, detail: "Preço > EMA9 > EMA21" });
+                }
+            }
+            logger.debug(`[RiskEngine] TA check: discount-${taDiscount}`);
+        }
+    } catch (e: any) {
+        logger.debug(`[RiskEngine] Erro ao calcular TA Snapshot: ${e.message}`);
+    }
+
+    // ═══════════════════════════════════════════════════════
     // Final: Compute decision
     // ═══════════════════════════════════════════════════════
-    const finalScore = Math.min(totalScore, 100);
+    const cappedDiscount = Math.min(taDiscount, RISK_CONFIG.taWeights.maxDiscount);
+    const finalScore = Math.max(0, Math.min(totalScore - cappedDiscount, 100));
     const decision = scoreToDecision(finalScore, honeypotDetected);
 
     // Sort reasons by impact (descending)
@@ -197,6 +240,8 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
         flags,
         metrics,
         reasons,
+        taDiscount: cappedDiscount,
+        taReasons,
         analyzedAt: Date.now(),
     };
 
@@ -264,6 +309,14 @@ export function formatRiskForTelegram(analysis: RiskAnalysis): string {
     if (reasons.length > 0) {
         const topReasons = reasons.slice(0, 2).map(r => r.detail).join("; ");
         msg += `\n⚡ ${topReasons}`;
+    }
+
+    // TA Discount info
+    if (analysis.taDiscount && analysis.taDiscount > 0) {
+        msg += `\n📉 <b>TA Discount applied: -${analysis.taDiscount} pts</b>`;
+        if (analysis.taReasons && analysis.taReasons.length > 0) {
+            msg += `\n   ↳ ${analysis.taReasons.map(r => r.detail).join(", ")}`;
+        }
     }
 
     return msg;

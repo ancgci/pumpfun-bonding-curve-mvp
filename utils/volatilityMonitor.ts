@@ -277,3 +277,27 @@ export function getLatestPrice(mint: string): number | null {
   if (!arr.length) return null;
   return arr[arr.length - 1].p;
 }
+
+export interface TASnapshot {
+  rsi1m: number | null;
+  rsi5s: number | null;
+  macd5s: { macd: number; signal: number; histogram: number } | null;
+  ema9: number | null;
+  ema21: number | null;
+  currentPrice: number | null;
+  trend: { changePct: number; isRed: boolean; bodySize: number } | null;
+  microTrend: { changePct: number; samples: number } | null;
+}
+
+export function getTASnapshot(mint: string): TASnapshot {
+  return {
+    rsi1m: getRSI(mint, 14),
+    rsi5s: getHighResRSI(mint, 14),
+    macd5s: getHighResMACD(mint),
+    ema9: getMovingAverage(mint, 9, "5s"),
+    ema21: getMovingAverage(mint, 21, "5s"),
+    currentPrice: getLatestPrice(mint),
+    trend: getPreviousCandleTrend(mint),
+    microTrend: getMicroTrend(mint, 10000)
+  };
+}

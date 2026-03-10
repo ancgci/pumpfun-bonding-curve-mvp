@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
+import api from "@/lib/axios";
 
 const API_BASE = "http://localhost:3001/api";
 const SOCKET_URL = "http://localhost:3000";
@@ -57,12 +58,23 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   >([]);
 
   const apiFetch = async (url: string, opts: any = {}) => {
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || res.statusText);
+    const axiosConfig: any = { url, method: opts.method || 'GET' };
+    if (opts.headers) axiosConfig.headers = opts.headers;
+    if (opts.body) {
+      try {
+        axiosConfig.data = typeof opts.body === "string" ? JSON.parse(opts.body) : opts.body;
+      } catch {
+        // fallback
+        axiosConfig.data = opts.body;
+      }
     }
-    return res.json();
+
+    try {
+      const res = await api(axiosConfig);
+      return res.data;
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || "API Request Failed");
+    }
   };
 
   // Build cumulative PnL chart from simulation trades

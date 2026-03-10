@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { GoogleOAuthProvider } from "@react-oauth/google";
 import { DashboardProvider } from "./hooks/useDashboardData";
 import { Header } from "./components/dashboard/Header";
 import { StatsOverview } from "./components/dashboard/StatsOverview";
@@ -13,37 +15,29 @@ import { PositionsList } from "./components/dashboard/PositionsList";
 import { TradeHistory } from "./components/dashboard/TradeHistory";
 import { CircuitBreakerStatus } from "./components/dashboard/CircuitBreakerStatus";
 import { AgentLiveTerminal } from "./components/dashboard/AgentLiveTerminal";
-import {
-  BarChart3,
-  Settings2,
-  ScrollText,
-} from "lucide-react";
+import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+import { LoginPage } from "./pages/LoginPage";
+import { useAuthStore } from "./stores/authStore";
+import { BarChart3, Settings2, ScrollText } from "lucide-react";
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+const API_BASE = "http://localhost:3001/api";
 
 type Tab = "overview" | "trading" | "logs";
-
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <BarChart3 className="w-4 h-4" /> },
   { key: "trading", label: "Trading", icon: <Settings2 className="w-4 h-4" /> },
   { key: "logs", label: "Logs & History", icon: <ScrollText className="w-4 h-4" /> },
 ];
 
-function TabNavigation({
-  activeTab,
-  onChange,
-}: {
-  activeTab: Tab;
-  onChange: (tab: Tab) => void;
-}) {
+function TabNavigation({ activeTab, onChange }: { activeTab: Tab; onChange: (tab: Tab) => void }) {
   return (
     <nav className="flex gap-1 border-b border-white/10 mb-6">
       {TABS.map((tab) => (
         <button
           key={tab.key}
           onClick={() => onChange(tab.key)}
-          className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all ${activeTab === tab.key
-              ? "tab-active font-semibold"
-              : "tab-inactive"
-            }`}
+          className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all ${activeTab === tab.key ? "tab-active font-semibold" : "tab-inactive"}`}
         >
           {tab.icon}
           {tab.label}
@@ -98,14 +92,12 @@ function LogsTab() {
   );
 }
 
-export function AppContent() {
+function DashboardContent() {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
-
   return (
     <div className="min-h-screen bg-background text-foreground p-4 md:p-6 max-w-[1600px] mx-auto space-y-4 font-sans">
       <Header />
       <TabNavigation activeTab={activeTab} onChange={setActiveTab} />
-
       {activeTab === "overview" && <OverviewTab />}
       {activeTab === "trading" && <TradingTab />}
       {activeTab === "logs" && <LogsTab />}
@@ -113,10 +105,48 @@ export function AppContent() {
   );
 }
 
+function AppWithAuth() {
+  const { login } = useAuthStore();
+
+  // On mount: try to restore session from httpOnly refresh cookie
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          login(data.accessToken, data.user);
+        }
+      } catch {
+        // No active session
+      }
+    })();
+  }, [login]);
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route
+            path="/"
+            element={
+              <DashboardProvider>
+                <DashboardContent />
+              </DashboardProvider>
+            }
+          />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
 export default function App() {
   return (
-    <DashboardProvider>
-      <AppContent />
-    </DashboardProvider>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      <AppWithAuth />
+    </GoogleOAuthProvider>
   );
 }

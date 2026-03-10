@@ -1,4 +1,7 @@
-import express from "express";
+import dotenv from "dotenv";
+dotenv.config({ path: require("path").resolve(__dirname, "../.env") });
+
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
@@ -8,19 +11,153 @@ import { CONFIG } from "../utils/config";
 import http from "http";
 import { Server } from "socket.io";
 import db from "../utils/db";
+import cookieParser from "cookie-parser";
+import { OAuth2Client } from "google-auth-library";
+import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
+
+// ── Auth Config ──────────────────────────────────────────────
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
+const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "sr.antoniocarlos@gmail.com";
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5174";
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+function signAccessToken(payload: object) {
+    return jwt.sign(payload, JWT_SECRET, { expiresIn: "15m" });
+}
+function signRefreshToken(payload: object) {
+    return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+}
+
+// ── Auth Middleware ───────────────────────────────────────────
+export function authMiddleware(req: Request, res: Response, next: NextFunction) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+        const token = authHeader.slice(7);
+        const decoded = jwt.verify(token, JWT_SECRET);
+        (req as any).user = decoded;
+        next();
+    } catch {
+        return res.status(401).json({ error: "Token expired or invalid" });
+    }
+}
 
 export const app = express();
 const httpServer = http.createServer(app);
 const PORT = 3001;
 
 const io = new Server(httpServer, {
-    cors: { origin: "*" }
+    cors: { origin: FRONTEND_ORIGIN, credentials: true }
 });
 
-// Middleware
-app.use(cors());
+// ── Custom CORS Middleware ────────────────────────────────────
+app.use((req: Request, res: Response, next: NextFunction) => {
+    const origin = req.headers.origin;
+    if (origin === "http://localhost:5174" || origin === "http://127.0.0.1:5174" || origin === "http://localhost:3000") {
+        res.header("Access-Control-Allow-Origin", origin);
+    } else {
+        res.header("Access-Control-Allow-Origin", FRONTEND_ORIGIN);
+    }
+
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+
+    // Preflight request
+    if (req.method === "OPTIONS") {
+        return res.status(204).end();
+    }
+    next();
+});
+
+// ── Middleware ────────────────────────────────────────────────
 app.use(express.json());
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
+
+// ── Rate limit on auth routes ─────────────────────────────────
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 min
+    max: 20,
+    message: { error: "Too many login attempts. Try again later." },
+});
+
+// ── Auth Routes ───────────────────────────────────────────────
+
+// POST /api/auth/google — validate Google ID token, return JWT + set refresh cookie
+app.post("/api/auth/google", authLimiter, async (req: Request, res: Response) => {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: "Missing credential" });
+    try {
+        const ticket = await googleClient.verifyIdToken({
+            idToken: credential,
+            audience: GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+        if (!payload?.email) return res.status(401).json({ error: "Invalid token" });
+        if (payload.email !== ALLOWED_EMAIL) {
+            return res.status(403).json({ error: `Email not authorized: ${payload.email}` });
+        }
+        const user = { email: payload.email, name: payload.name, picture: payload.picture };
+        const accessToken = signAccessToken(user);
+        const refreshToken = signRefreshToken(user);
+        res.cookie("refreshToken", refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            path: "/",
+        });
+        return res.json({ accessToken, user });
+    } catch (err: any) {
+        return res.status(401).json({ error: err.message || "Authentication failed" });
+    }
+});
+
+// POST /api/auth/refresh — issue new access token from httpOnly cookie
+app.post("/api/auth/refresh", (req: Request, res: Response) => {
+    const token = req.cookies?.refreshToken;
+    if (!token) return res.status(401).json({ error: "No refresh token" });
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        const user = { email: decoded.email, name: decoded.name, picture: decoded.picture };
+        const accessToken = signAccessToken(user);
+        return res.json({ accessToken });
+    } catch {
+        return res.status(401).json({ error: "Refresh token expired" });
+    }
+});
+
+// GET /api/auth/me — restore session (used on app mount)
+app.get("/api/auth/me", (req: Request, res: Response) => {
+    const token = req.cookies?.refreshToken;
+    if (!token) return res.status(401).json({ error: "No session" });
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        const user = { email: decoded.email, name: decoded.name, picture: decoded.picture };
+        const accessToken = signAccessToken(user);
+        return res.json({ accessToken, user });
+    } catch {
+        return res.status(401).json({ error: "Session expired" });
+    }
+});
+
+// POST /api/auth/logout — clear refresh cookie
+app.post("/api/auth/logout", (req: Request, res: Response) => {
+    res.clearCookie("refreshToken", { path: "/" });
+    return res.json({ ok: true });
+});
+
+// ── Protect all other API routes ──────────────────────────────
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+    // Skip protection for auth routes and public assets if any under /api
+    if (req.path.startsWith("/auth")) return next();
+    return authMiddleware(req, res, next);
+});
 
 // Paths dos arquivos de dados
 const POSITIONS_FILE = path.join(__dirname, "../data/positions.json");

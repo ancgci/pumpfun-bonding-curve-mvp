@@ -13,25 +13,25 @@ export const RISK_CONFIG = {
     weights: {
         mintAuth: parseInt(process.env.RISK_WEIGHT_MINT_AUTH || "40"),
         freezeAuth: parseInt(process.env.RISK_WEIGHT_FREEZE_AUTH || "40"),
-        noLpLock: parseInt(process.env.RISK_WEIGHT_NO_LP_LOCK || "20"),
+        noLpLock: parseInt(process.env.RISK_WEIGHT_NO_LP_LOCK || "10"),
         top10Concentration: parseInt(process.env.RISK_WEIGHT_TOP10_CONCENTRATION || "15"),
         clustering: parseInt(process.env.RISK_WEIGHT_CLUSTERING || "15"),
-        lowLiquidity: parseInt(process.env.RISK_WEIGHT_LOW_LIQUIDITY || "10"),
+        lowLiquidity: parseInt(process.env.RISK_WEIGHT_LOW_LIQUIDITY || "5"),
         honeypot: parseInt(process.env.RISK_WEIGHT_HONEYPOT || "100"),
         volumeFake: parseInt(process.env.RISK_WEIGHT_VOLUME_FAKE || "10"),
         buySellImbalance: parseInt(process.env.RISK_WEIGHT_BUY_SELL_IMBALANCE || "10"),
         devWalletHigh: parseInt(process.env.RISK_WEIGHT_DEV_WALLET_HIGH || "10"),
-        veryNewToken: parseInt(process.env.RISK_WEIGHT_VERY_NEW_TOKEN || "10"),
-        poorMetadata: parseInt(process.env.RISK_WEIGHT_POOR_METADATA || "10"),
-        noSocials: parseInt(process.env.RISK_WEIGHT_NO_SOCIALS || "10"),
-        noImage: parseInt(process.env.RISK_WEIGHT_NO_IMAGE || "5"),
+        veryNewToken: parseInt(process.env.RISK_WEIGHT_VERY_NEW_TOKEN || "0"),
+        poorMetadata: parseInt(process.env.RISK_WEIGHT_POOR_METADATA || "0"),
+        noSocials: parseInt(process.env.RISK_WEIGHT_NO_SOCIALS || "0"),
+        noImage: parseInt(process.env.RISK_WEIGHT_NO_IMAGE || "0"),
     },
 
     // ── Thresholds de decisão ──
     thresholds: {
-        low: parseInt(process.env.RISK_THRESHOLD_LOW || "30"),   // 0–30: ALLOW_TRADE
-        med: parseInt(process.env.RISK_THRESHOLD_MED || "60"),   // 31–60: ALLOW_ALERT (trade reduzido)
-        // 61–100: BLOCK
+        low: parseInt(process.env.RISK_THRESHOLD_LOW || "40"),   // 0–40: ALLOW_TRADE
+        med: parseInt(process.env.RISK_THRESHOLD_MED || "70"),   // 41–70: ALLOW_ALERT (trade reduzido)
+        // 71–100: BLOCK
     },
 
     // ── Limiares de detecção ──
@@ -68,6 +68,15 @@ export const RISK_CONFIG = {
     // ── Trading adjustments ──
     trading: {
         tradeSizeReductionMed: parseInt(process.env.RISK_TRADE_SIZE_REDUCTION_MED || "50"), // % reduction
+    },
+
+    // ── TA Discount Weights (subtração) ──
+    taWeights: {
+        rsiHealthy: parseInt(process.env.RISK_TA_RSI_HEALTHY || "5"),        // RSI entre 30-70
+        rsiOversoldBullish: parseInt(process.env.RISK_TA_RSI_BULLISH || "10"), // RSI < 30 e subindo
+        macdBullish: parseInt(process.env.RISK_TA_MACD_BULLISH || "10"),     // MACD > Signal ou histograma positivo
+        emaBullish: parseInt(process.env.RISK_TA_EMA_BULLISH || "10"),       // Preço > EMA9 > EMA21
+        maxDiscount: parseInt(process.env.RISK_TA_MAX_DISCOUNT || "30"),     // Máximo de desconto permitido
     },
 };
 
@@ -121,6 +130,8 @@ export interface RiskAnalysis {
     flags: RiskFlags;
     metrics: RiskMetrics;
     reasons: RiskReason[];
+    taDiscount?: number;
+    taReasons?: RiskReason[];
     analyzedAt: number;
 }
 

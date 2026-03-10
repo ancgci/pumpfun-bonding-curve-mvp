@@ -678,7 +678,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     let riskSection = "";
     if (RISK_CONFIG.enabled) {
       try {
-        riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata);
+        riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata, Number(progress));
 
         // Bloqueio de risco apenas para discovery (Mirror confia na wallet?)
         if (isDiscovery && RISK_CONFIG.detection.blockUnlockedLP &&
