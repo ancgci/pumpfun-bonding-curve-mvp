@@ -41,13 +41,30 @@ const web3_js_1 = require("@solana/web3.js");
 const solana_transaction_parser_1 = require("@shyft-to/solana-transaction-parser");
 const transaction_formatter_1 = require("./utils/transaction-formatter");
 const pump_0_1_0_json_1 = __importDefault(require("./idls/pump_0.1.0.json"));
+const meteora_dbc_json_1 = __importDefault(require("./idls/meteora_dbc.json"));
+const moonshot_json_1 = __importDefault(require("./idls/moonshot.json"));
+const bonk_fun_json_1 = __importDefault(require("./idls/bonk_fun.json"));
+const daos_fun_json_1 = __importDefault(require("./idls/daos_fun.json"));
+const telegramBot_1 = require("./utils/telegramBot");
 const event_parser_1 = require("./utils/event-parser");
 const bn_layout_formatter_1 = require("./utils/bn-layout-formatter");
 const transactionOutput_1 = require("./utils/transactionOutput");
 const getBonding_1 = require("./utils/getBonding");
 const curveConstants_1 = require("./utils/curveConstants");
 const alertQueue_1 = require("./utils/alertQueue");
+const agentOrchestrator_1 = require("./utils/agentOrchestrator");
+const simulationEngine_1 = require("./utils/simulationEngine");
+const copyTradingEngine_1 = require("./utils/copyTradingEngine");
+const volatilityMonitor_1 = require("./utils/volatilityMonitor");
+const learnerAgent_1 = require("./utils/learnerAgent");
 const config_1 = require("./utils/config");
+const positionManager_1 = require("./utils/positionManager");
+const hybridExecutor_1 = require("./utils/hybridExecutor");
+const metadataCache_1 = require("./utils/metadataCache");
+const performanceMonitor_1 = require("./utils/performanceMonitor");
+const riskEngine_1 = require("./utils/riskEngine");
+const riskConfig_1 = require("./utils/riskConfig");
+const dipMonitor_1 = require("./utils/dipMonitor");
 const logger_1 = __importDefault(require("./utils/logger"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
@@ -66,30 +83,68 @@ if (validation.warnings && validation.warnings.length > 0) {
     validation.warnings.forEach(warn => logger_1.default.warn(`  - ${warn}`));
 }
 const { SHYFT_GRPC, GRPC_URL, GRPC_TOKEN, TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: chatId, ALERT_THRESHOLD, MONITORING_PROTOCOL, METEORA_DBC_MONITORING_ENABLED, METEORA_DBC_ALERT_THRESHOLD, METEORA_DBC_PROGRAM_ID, BONK_FUN_MONITORING_ENABLED, BONK_FUN_ALERT_THRESHOLD, BONK_FUN_PROGRAM_ID, DAOS_FUN_MONITORING_ENABLED, DAOS_FUN_ALERT_THRESHOLD, DAOS_FUN_PROGRAM_ID, MOONSHOT_MONITORING_ENABLED, MOONSHOT_ALERT_THRESHOLD, MOONSHOT_PROGRAM_ID, ANONCOIN_MONITORING_ENABLED, ANONCOIN_ALERT_THRESHOLD, ANONCOIN_PROGRAM_ID, HTTPS_PROXY, HTTP_PROXY, TOKEN_VIEWER_URL, MIN_MESSAGE_INTERVAL } = config_1.CONFIG;
-const bot = new node_telegram_bot_api_1.default(token, {
-    polling: true,
-    request: {
-        proxy: HTTPS_PROXY || HTTP_PROXY,
-        url: '',
-        agentOptions: {
-            keepAlive: true,
-            keepAliveMsecs: 10000,
-            timeout: 30000
-        }
-    },
-    retry: 10,
-    retryTimeout: 15000,
-    pollingTimeout: 120000,
-    onlyFirstMatch: true,
-    baseApiUrl: 'https://api.telegram.org'
-});
-alertQueue_1.alertQueue.setSendCallback(async (message) => {
-    await bot.sendMessage(chatId, message, {
-        parse_mode: "HTML",
-        disable_web_page_preview: true
+let ACTIVE_CONFIG = (0, config_1.getRuntimeConfig)();
+setInterval(() => {
+    try {
+        ACTIVE_CONFIG = (0, config_1.getRuntimeConfig)();
+    }
+    catch (err) {
+    }
+}, 2000);
+const telegramEnabled = Boolean(token && chatId);
+let telegramActive = false;
+let bot = null;
+if (telegramEnabled) {
+    bot = new node_telegram_bot_api_1.default(token, {
+        polling: true,
+        request: {
+            proxy: HTTPS_PROXY || HTTP_PROXY,
+            url: "",
+            agentOptions: {
+                keepAlive: true,
+                keepAliveMsecs: 10000,
+                timeout: 30000,
+            },
+        },
     });
+    telegramActive = true;
+    alertQueue_1.alertQueue.setSendCallback(async (message) => {
+        if (!telegramActive || !bot) {
+            logger_1.default.warn("Telegram desativado, alerta não enviado.");
+            return;
+        }
+        await bot.sendMessage(chatId, message, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+        });
+    });
+    (0, telegramBot_1.initTelegramCommands)(bot);
+}
+else {
+    logger_1.default.warn("Telegram desabilitado (sem token/chat id); alertas não serão enviados.");
+    alertQueue_1.alertQueue.setSendCallback(async (message) => {
+        logger_1.default.info(`(TELEGRAM OFF) ${message}`);
+    });
+}
+(0, simulationEngine_1.rebuildMetricsFromFile)().catch(err => logger_1.default.warn(`⚠️ Could not rebuild simulation metrics: ${err.message}`));
+dipMonitor_1.dipMonitor.initialize(async (mint) => {
+    logger_1.default.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint}`);
+    const tokenData = {
+        mint,
+        bondingCurve: "",
+        curvePercent: 0,
+        isLaunched: false,
+        mode: "CURVE"
+    };
+    try {
+        await (0, hybridExecutor_1.executeHybridTrade)(tokenData, "BUY", true);
+    }
+    catch (err) {
+        logger_1.default.error(`❌ Dip Sniper failed to execute trade: ${err.message}`);
+    }
 });
 let sentAddresses = new Set();
+const creatorWatchlist = new Map();
 const SENT_ADDRESSES_FILE = path_1.default.join(__dirname, 'sent_addresses.json');
 function saveSentAddresses() {
     try {
@@ -225,29 +280,33 @@ let METEORA_DBC_IX_PARSER = null;
 let METEORA_DBC_EVENT_PARSER = null;
 if (METEORA_DBC_MONITORING_ENABLED && METEORA_DBC_PROGRAM_ID_OBJ) {
     METEORA_DBC_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    METEORA_DBC_IX_PARSER.addParserFromIdl(METEORA_DBC_PROGRAM_ID_OBJ.toBase58(), meteora_dbc_json_1.default);
     METEORA_DBC_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
-    logger_1.default.warn("⚠️  Meteora DBC parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+    METEORA_DBC_EVENT_PARSER.addParserFromIdl(METEORA_DBC_PROGRAM_ID_OBJ.toBase58(), meteora_dbc_json_1.default);
 }
 let BONK_FUN_IX_PARSER = null;
 let BONK_FUN_EVENT_PARSER = null;
 if (BONK_FUN_MONITORING_ENABLED && BONK_FUN_PROGRAM_ID_OBJ) {
     BONK_FUN_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    BONK_FUN_IX_PARSER.addParserFromIdl(BONK_FUN_PROGRAM_ID_OBJ.toBase58(), bonk_fun_json_1.default);
     BONK_FUN_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
-    logger_1.default.warn("⚠️  Bonk.fun parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+    BONK_FUN_EVENT_PARSER.addParserFromIdl(BONK_FUN_PROGRAM_ID_OBJ.toBase58(), bonk_fun_json_1.default);
 }
 let DAOS_FUN_IX_PARSER = null;
 let DAOS_FUN_EVENT_PARSER = null;
 if (DAOS_FUN_MONITORING_ENABLED && DAOS_FUN_PROGRAM_ID_OBJ) {
     DAOS_FUN_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    DAOS_FUN_IX_PARSER.addParserFromIdl(DAOS_FUN_PROGRAM_ID_OBJ.toBase58(), daos_fun_json_1.default);
     DAOS_FUN_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
-    logger_1.default.warn("⚠️  daos.fun parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+    DAOS_FUN_EVENT_PARSER.addParserFromIdl(DAOS_FUN_PROGRAM_ID_OBJ.toBase58(), daos_fun_json_1.default);
 }
 let MOONSHOT_IX_PARSER = null;
 let MOONSHOT_EVENT_PARSER = null;
 if (MOONSHOT_MONITORING_ENABLED && MOONSHOT_PROGRAM_ID_OBJ) {
     MOONSHOT_IX_PARSER = new solana_transaction_parser_1.SolanaParser([]);
+    MOONSHOT_IX_PARSER.addParserFromIdl(MOONSHOT_PROGRAM_ID_OBJ.toBase58(), moonshot_json_1.default);
     MOONSHOT_EVENT_PARSER = new event_parser_1.SolanaEventParser([], console);
-    logger_1.default.warn("⚠️  Moonshot parser criado mas requer IDL para funcionar. Transacoes nao serao parseadas corretamente.");
+    MOONSHOT_EVENT_PARSER.addParserFromIdl(MOONSHOT_PROGRAM_ID_OBJ.toBase58(), moonshot_json_1.default);
 }
 let ANONCOIN_IX_PARSER = null;
 let ANONCOIN_EVENT_PARSER = null;
@@ -285,34 +344,35 @@ async function handleStream(client, args) {
         try {
             if (data?.transaction) {
                 const txn = TXN_FORMATTER.formTransactionFromJson(data.transaction, Date.now());
-                if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+                const pumpFunEnabled = ACTIVE_CONFIG.PUMPFUN_ENABLED !== false;
+                if (pumpFunEnabled && (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH")) {
                     const parsedPumpFunTxn = decodePumpFunTxn(txn);
                     if (parsedPumpFunTxn) {
                         await processPumpFunTransaction(txn, parsedPumpFunTxn);
                     }
                 }
-                if (METEORA_DBC_MONITORING_ENABLED &&
+                if (ACTIVE_CONFIG.METEORA_DBC_MONITORING_ENABLED &&
                     (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
                     const parsedMeteoraDBCTxn = decodeMeteoraDBCTxn(txn);
                     if (parsedMeteoraDBCTxn) {
                         await processMeteoraDBCTransaction(txn, parsedMeteoraDBCTxn);
                     }
                 }
-                if (BONK_FUN_MONITORING_ENABLED &&
+                if (ACTIVE_CONFIG.BONK_FUN_MONITORING_ENABLED &&
                     (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
                     const parsedBonkFunTxn = decodeBonkFunTxn(txn);
                     if (parsedBonkFunTxn) {
                         await processBonkFunTransaction(txn, parsedBonkFunTxn);
                     }
                 }
-                if (DAOS_FUN_MONITORING_ENABLED &&
+                if (ACTIVE_CONFIG.DAOS_FUN_MONITORING_ENABLED &&
                     (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
                     const parsedDaosFunTxn = decodeDaosFunTxn(txn);
                     if (parsedDaosFunTxn) {
                         await processDaosFunTransaction(txn, parsedDaosFunTxn);
                     }
                 }
-                if (MOONSHOT_MONITORING_ENABLED &&
+                if (ACTIVE_CONFIG.MOONSHOT_MONITORING_ENABLED &&
                     (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
                     const parsedMoonshotTxn = decodeMoonshotTxn(txn);
                     if (parsedMoonshotTxn) {
@@ -368,7 +428,16 @@ async function processPumpFunTransaction(txn, parsedTxn) {
                   ${Number(progress).toFixed(2)}% to completion
     SIGNATURE : ${txn.transaction.signatures[0]}
     `);
+    let creator = tOutput.user;
+    if (!creatorWatchlist.has(tOutput.mint)) {
+        creatorWatchlist.set(tOutput.mint, creator);
+        logger_1.default.debug(`🕵️  Criador detectado para ${tOutput.mint}: ${creator}`);
+    }
+    else {
+        creator = creatorWatchlist.get(tOutput.mint);
+    }
     let tokenMetadata = null;
+    let riskAnalysis = null;
     if (tOutput.mint) {
         try {
             tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tOutput.mint);
@@ -377,88 +446,188 @@ async function processPumpFunTransaction(txn, parsedTxn) {
             logger_1.default.debug(`❌ Erro ao buscar metadados para token ${tOutput.mint}:`, metadataError.message);
         }
     }
-    if (Number(progress) >= ALERT_THRESHOLD &&
-        Number(progress) <= 100 &&
-        !sentAddresses.has(tOutput.mint)) {
-        (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
-        sentAddresses.add(tOutput.mint);
+    const currentAlertThreshold = ACTIVE_CONFIG.ALERT_THRESHOLD || ALERT_THRESHOLD;
+    const isInteresting = Number(progress) >= currentAlertThreshold || (0, copyTradingEngine_1.isFollowedWallet)(tOutput.user);
+    if ((tOutput.type === "SELL" || tOutput.type === "BUY") && tOutput.user.toLowerCase() === creator.toLowerCase()) {
+        const position = positionManager_1.positionManager.getPosition(tOutput.mint);
+        const isHolding = position && position.isActive;
+        if (isInteresting || isHolding) {
+            const actionText = tOutput.type === "SELL" ? "VENDENDO (SELL)" : "COMPRANDO (BUY)";
+            const emojiHeader = tOutput.type === "SELL" ? "🚨 <b>DEV DUMP DETECTED!</b> 🚨" : "💎 <b>DEV BUY DETECTED!</b> 💎";
+            logger_1.default.warn(`⚠️  [DEV ALERT] O Criador do token ${tOutput.mint} está ${tOutput.type === "SELL" ? "VENDENDO" : "COMPRANDO"}!`);
+            const timestamp = new Date().toLocaleTimeString('pt-BR');
+            const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+            const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+            const alertMsg = `${emojiHeader} [${timestamp}]\n\n` +
+                `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
+                `Symbol: <b>${tokenSymbol}</b>\n` +
+                `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
+                `Action: <b>${actionText}</b>\n` +
+                `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n` +
+                (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
+            sendMessage(alertMsg);
+            if (isHolding && ACTIVE_CONFIG.AUTO_SELL_ON_CREATOR_EXIT && tOutput.type === "SELL") {
+                logger_1.default.warn(`🛑 [Auto-Sell] Criador saiu, fechando posição por segurança.`);
+                const tokenData = {
+                    mint: tOutput.mint,
+                    bondingCurve: tOutput.bondingCurve,
+                    curvePercent: progress,
+                    isLaunched: Number(progress) >= 100,
+                    mode: Number(progress) >= 100 ? "DEX" : "CURVE",
+                    creatorWallet: creator
+                };
+                await (0, hybridExecutor_1.executeHybridTrade)(tokenData, "SELL", true);
+            }
+        }
+    }
+    if (ACTIVE_CONFIG.WHALE_WATCHER_ENABLED && Number(tOutput.solAmount) >= ACTIVE_CONFIG.WHALE_ALERT_THRESHOLD_SOL) {
+        const isBigBuy = tOutput.type === "BUY";
+        const isBigSell = tOutput.type === "SELL";
+        if (isBigBuy || isBigSell) {
+            const typeText = isBigBuy ? "BUY" : "SELL";
+            const emoji = isBigBuy ? "💰" : "🚨";
+            const headerEmoji = isBigBuy ? "🐳 <b>WHALE BUY DETECTED!</b> 🐳" : "💀 <b>WHALE SELL / DUMP!</b> 💀";
+            logger_1.default.warn(`🐳 [WHALE ALERT] Movimentação massiva (${typeText}) detectada no token ${tOutput.mint} por ${tOutput.user}: ${tOutput.solAmount} SOL!`);
+            const timestamp = new Date().toLocaleTimeString('pt-BR');
+            const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+            const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+            const whaleAlertMsg = `${headerEmoji} [${timestamp}]\n\n` +
+                `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
+                `Symbol: <b>${tokenSymbol}</b>\n` +
+                `Amount: <b>${Number(tOutput.solAmount).toFixed(2)} SOL</b> ${emoji}\n` +
+                `Whale Wallet: <a href="https://trojan.com/wallet?address=${tOutput.user}&period=1d">${tOutput.user}</a>\n` +
+                `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n`;
+            sendMessage(whaleAlertMsg);
+        }
+    }
+    if (ACTIVE_CONFIG.EMERGENCY_STOP_ACTIVE) {
+        logger_1.default.warn(`🛑 EMERGENCY STOP ATIVO! Ignorando transação para ${tOutput.mint}`);
+        return;
+    }
+    const followedWallet = (0, copyTradingEngine_1.isFollowedWallet)(tOutput.user);
+    const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
+    const isDiscovery = withinAlertBand && !sentAddresses.has(tOutput.mint);
+    if (followedWallet || isDiscovery) {
+        if (isDiscovery) {
+            (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
+            sentAddresses.add(tOutput.mint);
+        }
         const solBalance = Number(balance);
-        const tokenAmount = tOutput.tokenAmount || 0;
-        const currentPrice = solBalance > 0 && tokenAmount > 0 ?
-            (solBalance * 1000000000) / tokenAmount : 0;
+        const solAmount = Number(tOutput.solAmount) || 0;
+        const tokenAmount = Number(tOutput.tokenAmount) || 0;
+        let currentPrice = 0;
+        if (solAmount > 0 && tokenAmount > 0) {
+            currentPrice = solAmount / (tokenAmount / 1_000_000);
+        }
+        else if (tokenMetadata?.price) {
+            currentPrice = tokenMetadata.price;
+        }
+        else {
+            currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance / (tokenAmount / 1_000_000)) : 0;
+        }
+        (0, volatilityMonitor_1.recordPriceSample)(tOutput.mint, currentPrice);
         let riskSection = "";
         if (riskConfig_1.RISK_CONFIG.enabled) {
             try {
-                const riskAnalysis = await (0, riskEngine_1.analyzeToken)(tOutput.mint, tokenMetadata);
-                if (riskConfig_1.RISK_CONFIG.detection.blockUnlockedLP &&
-                    !riskAnalysis.flags.LP_LOCKED &&
-                    !riskAnalysis.flags.LP_BURNED) {
-                    logger_1.default.warn(`🚫 [RiskEngine] Token ${tOutput.mint} IGNORADO: LP não lockado/burnado. (RISK_BLOCK_UNLOCKED_LP=true)`);
+                riskAnalysis = await (0, riskEngine_1.analyzeToken)(tOutput.mint, tokenMetadata, Number(progress));
+                if (isDiscovery && riskConfig_1.RISK_CONFIG.detection.blockUnlockedLP &&
+                    !riskAnalysis.flags.LP_LOCKED && !riskAnalysis.flags.LP_BURNED) {
+                    logger_1.default.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
                     return;
                 }
                 riskSection = (0, riskEngine_1.formatRiskForTelegram)(riskAnalysis);
-                if (riskAnalysis.decision === "ALLOW_TRADE" || riskAnalysis.decision === "ALLOW_ALERT") {
-                    postCurveMonitor_1.postCurveMonitor.startMonitoring(tOutput.mint, riskAnalysis.metrics.liquiditySol, tokenMetadata);
-                }
-                if (riskAnalysis.flags.HONEYPOT_OP) {
-                    circuitBreaker_1.circuitBreaker.recordHoneypot(tOutput.mint);
-                }
             }
             catch (riskError) {
-                logger_1.default.warn(`⚠️  [RiskEngine] Falha na análise para alerta: ${riskError.message}`);
-                riskSection = "\n⚠️ Risk: análise indisponível";
+                logger_1.default.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
+                return;
             }
         }
         const tokenData = {
             mint: tOutput.mint,
             bondingCurve: tOutput.bondingCurve,
+            creatorWallet: creator,
             curvePercent: Number(progress),
             isLaunched: Number(progress) >= 100,
             mode: Number(progress) >= 100 ? "DEX" : "CURVE"
         };
-        const executeTradeWithRetry = async () => {
+        const executeTradeWithRetry = async (force = false) => {
             const maxRetries = 3;
-            const baseDelay = 1000;
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
-                    await (0, hybridExecutor_1.executeHybridTrade)(tokenData, tOutput.type);
-                    logger_1.default.info(`✅ Trade executado com sucesso para token ${tOutput.mint}`);
+                    await (0, hybridExecutor_1.executeHybridTrade)(tokenData, tOutput.type, force);
+                    logger_1.default.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
                     return;
                 }
                 catch (error) {
-                    logger_1.default.warn(`⚠️ Tentativa ${attempt}/${maxRetries} falhou para ${tOutput.mint}: ${error.message}`);
-                    if (attempt < maxRetries) {
-                        const delay = baseDelay * Math.pow(2, attempt - 1);
-                        await new Promise(resolve => setTimeout(resolve, delay));
+                    if (attempt === maxRetries) {
+                        logger_1.default.error(`❌ Trade falhou após retries: ${error.message}`);
+                        (0, performanceMonitor_1.recordError)();
                     }
                     else {
-                        logger_1.default.error(`❌ Todas as tentativas falharam para token ${tOutput.mint}`);
-                        (0, performanceMonitor_1.recordError)();
-                        sendMessage(`❌ <b>FALHA NO TRADE</b>\n\n` +
-                            `Token: ${tOutput.mint}\n` +
-                            `Tipo: ${tOutput.type}\n` +
-                            `Erro: ${error.message}`).catch(err => logger_1.default.error("Erro ao enviar notificação de falha:", err));
+                        await new Promise(r => setTimeout(r, 1000 * attempt));
                     }
                 }
             }
         };
-        executeTradeWithRetry();
-        let tokenName = tokenMetadata?.name || "Unknown";
-        let tokenSymbol = tokenMetadata?.symbol || "UNK";
-        tokenName = tokenName.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        tokenSymbol = tokenSymbol.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : "N/A";
-        const priceSol = tokenMetadata?.price ? tokenMetadata.price.toFixed(9) : currentPrice.toFixed(9);
-        sendMessage(`🚨 <b>ALERTA PUMPFUN - ${ALERT_THRESHOLD}%+</b> 🚨\n\n` +
-            `Token: <a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tokenName}</a>\n` +
-            `Symbol: <b>${tokenSymbol}</b>\n` +
-            `Source: <b>🚀 PumpFun</b>` +
-            riskSection + `\n` +
-            `Market Cap: <b>${marketCap}</b>\n` +
-            `Current Price: <b>${priceSol} SOL</b>\n` +
-            `Type: <b>${tOutput.type}</b>\n` +
-            `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
-            `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 8)}...</a>`);
+        const agentEnabled = process.env.AGENT_ENABLED === "true";
+        const tokenAnalysis = {
+            mint: tOutput.mint,
+            symbol: tokenMetadata?.symbol || "UNK",
+            price: currentPrice,
+            bondingCurvePercent: Number(progress),
+            riskScore: riskAnalysis?.score ?? 0,
+            honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
+            isCopyTrade: !!followedWallet,
+            holders: riskAnalysis?.metrics?.totalHolders ?? 0,
+            volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
+            liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+            top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
+        };
+        try {
+            let decision = null;
+            if (followedWallet) {
+                decision = (0, copyTradingEngine_1.getCopyTradeDecision)({
+                    mint: tOutput.mint,
+                    user: tOutput.user,
+                    type: tOutput.type,
+                    solAmount: Number(tOutput.solAmount),
+                    tokenAmount: Number(tOutput.tokenAmount),
+                    signature: txn.transaction.signatures[0]
+                });
+                if (decision)
+                    decision.force = true;
+            }
+            if (!decision && agentEnabled && isDiscovery) {
+                decision = await (0, agentOrchestrator_1.getAgentDecision)(tokenAnalysis);
+            }
+            if (decision) {
+                await (0, agentOrchestrator_1.executeAgentTrade)(tokenAnalysis, decision, async (force) => {
+                    await executeTradeWithRetry(force || decision.force);
+                });
+            }
+            else if (isDiscovery && !agentEnabled) {
+                await executeTradeWithRetry(false);
+            }
+        }
+        catch (agentErr) {
+            logger_1.default.error(`❌ [Decisão] Erro: ${agentErr.message}`);
+        }
+        if (isDiscovery) {
+            const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+            const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+            const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
+            const timestamp = new Date().toLocaleTimeString('pt-BR');
+            sendMessage(`🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
+                `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
+                `Symbol: <b>${tokenSymbol}</b>\n` +
+                `Fonte: 💊 <b>Pumpfun</b>\n` +
+                `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
+                riskSection + `\n` +
+                `Market Cap: <b>${marketCap}</b>\n` +
+                `Type: <b>${tOutput.type}</b>\n` +
+                `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
+                `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`);
+        }
     }
 }
 async function processMeteoraDBCTransaction(txn, parsedTxn) {
@@ -551,7 +720,10 @@ async function processMeteoraDBCTransaction(txn, parsedTxn) {
       CURVE PROGRESS : ${Number(progress).toFixed(2)}%
       SIGNATURE : ${txn.transaction.signatures[0]}
       `);
-        if (Number(progress) >= METEORA_DBC_ALERT_THRESHOLD &&
+        if (ACTIVE_CONFIG.EMERGENCY_STOP_ACTIVE)
+            return;
+        const currentMeteoraThreshold = ACTIVE_CONFIG.METEORA_DBC_ALERT_THRESHOLD || METEORA_DBC_ALERT_THRESHOLD;
+        if (Number(progress) >= currentMeteoraThreshold &&
             Number(progress) <= 100 &&
             !sentAddresses.has(tOutput.mint)) {
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
@@ -613,6 +785,7 @@ async function processMeteoraDBCTransaction(txn, parsedTxn) {
             }
             sendMessage(`🚨 <b>ALERTA METEORA DBC - ${METEORA_DBC_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
                 tokenInfo +
+                `Fonte: ☄️ <b>Meteora DBC</b>\n` +
                 `Type: <b>${tOutput.type}</b>\n` +
                 `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
                 `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
@@ -687,7 +860,10 @@ async function processBonkFunTransaction(txn, parsedTxn) {
       CURVE PROGRESS : ${Number(progress).toFixed(2)}%
       SIGNATURE : ${txn.transaction.signatures[0]}
       `);
-        if (Number(progress) >= BONK_FUN_ALERT_THRESHOLD &&
+        if (ACTIVE_CONFIG.EMERGENCY_STOP_ACTIVE)
+            return;
+        const currentBonkThreshold = ACTIVE_CONFIG.BONK_FUN_ALERT_THRESHOLD || BONK_FUN_ALERT_THRESHOLD;
+        if (Number(progress) >= currentBonkThreshold &&
             Number(progress) <= 100 &&
             !sentAddresses.has(tOutput.mint)) {
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
@@ -749,6 +925,7 @@ async function processBonkFunTransaction(txn, parsedTxn) {
             }
             sendMessage(`🚨 <b>ALERTA BONK.FUN - ${BONK_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
                 tokenInfo +
+                `Fonte: 🐕 <b>Bonk.fun</b>\n` +
                 `Type: <b>${tOutput.type}</b>\n` +
                 `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
                 `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
@@ -823,7 +1000,10 @@ async function processMoonshotTransaction(txn, parsedTxn) {
       CURVE PROGRESS : ${Number(progress).toFixed(2)}%
       SIGNATURE : ${txn.transaction.signatures[0]}
       `);
-        if (Number(progress) >= MOONSHOT_ALERT_THRESHOLD &&
+        if (ACTIVE_CONFIG.EMERGENCY_STOP_ACTIVE)
+            return;
+        const currentMoonshotThreshold = ACTIVE_CONFIG.MOONSHOT_ALERT_THRESHOLD || MOONSHOT_ALERT_THRESHOLD;
+        if (Number(progress) >= currentMoonshotThreshold &&
             Number(progress) <= 100 &&
             !sentAddresses.has(tOutput.mint)) {
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
@@ -885,6 +1065,7 @@ async function processMoonshotTransaction(txn, parsedTxn) {
             }
             sendMessage(`🚨 <b>ALERTA MOONSHOT - ${MOONSHOT_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
                 tokenInfo +
+                `Fonte: 🚀 <b>Moonshot</b>\n` +
                 `Type: <b>${tOutput.type}</b>\n` +
                 `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
                 `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
@@ -959,7 +1140,10 @@ async function processAnoncoinTransaction(txn, parsedTxn) {
       CURVE PROGRESS : ${Number(progress).toFixed(2)}%
       SIGNATURE : ${txn.transaction.signatures[0]}
       `);
-        if (Number(progress) >= ANONCOIN_ALERT_THRESHOLD &&
+        if (ACTIVE_CONFIG.EMERGENCY_STOP_ACTIVE)
+            return;
+        const currentAnonThreshold = ACTIVE_CONFIG.ANONCOIN_ALERT_THRESHOLD || ANONCOIN_ALERT_THRESHOLD;
+        if (Number(progress) >= currentAnonThreshold &&
             Number(progress) <= 100 &&
             !sentAddresses.has(tOutput.mint)) {
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
@@ -1021,6 +1205,7 @@ async function processAnoncoinTransaction(txn, parsedTxn) {
             }
             sendMessage(`🚨 <b>ALERTA ANONCOIN.IT - ${ANONCOIN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
                 tokenInfo +
+                `Fonte: 🎭 <b>Anoncoin.it</b>\n` +
                 `Type: <b>${tOutput.type}</b>\n` +
                 `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
                 `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
@@ -1104,7 +1289,10 @@ async function processDaosFunTransaction(txn, parsedTxn) {
       CURVE PROGRESS : ${Number(progress).toFixed(2)}%
       SIGNATURE : ${txn.transaction.signatures[0]}
       `);
-        if (Number(progress) >= DAOS_FUN_ALERT_THRESHOLD &&
+        if (ACTIVE_CONFIG.EMERGENCY_STOP_ACTIVE)
+            return;
+        const currentDaosThreshold = ACTIVE_CONFIG.DAOS_FUN_ALERT_THRESHOLD || DAOS_FUN_ALERT_THRESHOLD;
+        if (Number(progress) >= currentDaosThreshold &&
             Number(progress) <= 100 &&
             !sentAddresses.has(tOutput.mint)) {
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
@@ -1166,6 +1354,7 @@ async function processDaosFunTransaction(txn, parsedTxn) {
             }
             sendMessage(`🚨 <b>ALERTA DAOS.FUN - ${DAOS_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
                 tokenInfo +
+                `Fonte: 🏦 <b>Daos.fun</b>\n` +
                 `Type: <b>${tOutput.type}</b>\n` +
                 `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
                 `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`);
@@ -1200,9 +1389,22 @@ async function subscribeCommand(client, args) {
         }
     }
 }
+(0, agentOrchestrator_1.resumeSimulationMonitoring)().catch(err => logger_1.default.error(`Error resuming simulation: ${err.message}`));
+const shyftParser = new solana_transaction_parser_1.SolanaParser([
+    {
+        programId: "6EF17G986kg5Za1iM9Cc6L6U97vT57c2Pq4p4G6i9Lp",
+        idl: pump_0_1_0_json_1.default,
+    },
+]);
 const GRPC_ENDPOINT = GRPC_URL || SHYFT_GRPC;
 const GRPC_AUTH_TOKEN = GRPC_TOKEN || process.env.SHYFT_GRPC_TOKEN || "";
-const client = new yellowstone_grpc_1.default(GRPC_ENDPOINT, GRPC_AUTH_TOKEN, undefined);
+let client = null;
+if (GRPC_ENDPOINT) {
+    client = new yellowstone_grpc_1.default(GRPC_ENDPOINT, GRPC_AUTH_TOKEN, undefined);
+}
+else {
+    logger_1.default.warn("⚠️ Nenhum endpoint gRPC configurado. Streaming desabilitado; apenas componentes HTTP funcionarão.");
+}
 const req = {
     accounts: {},
     slots: {},
@@ -1220,7 +1422,7 @@ if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
         vote: false,
         failed: false,
         signature: undefined,
-        accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+        accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58(), ...config_1.CONFIG.FOLLOW_WALLETS],
         accountExclude: [],
         accountRequired: [],
     };
@@ -1292,13 +1494,18 @@ if (Object.keys(req.transactions).length === 0) {
         vote: false,
         failed: false,
         signature: undefined,
-        accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58()],
+        accountInclude: [PUMP_FUN_PROGRAM_ID.toBase58(), ...config_1.CONFIG.FOLLOW_WALLETS],
         accountExclude: [],
         accountRequired: [],
     };
     logger_1.default.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
 }
-subscribeCommand(client, req);
+if (client) {
+    subscribeCommand(client, req);
+}
+else {
+    logger_1.default.warn("⚠️ gRPC não iniciado. Configure GRPC_URL ou SHYFT_GRPC para monitorar em tempo real.");
+}
 async function reconnectWithBackoff(maxRetries = 5) {
     const baseDelay = 2000;
     for (let i = 0; i < maxRetries; i++) {
@@ -1343,6 +1550,22 @@ setInterval(async () => {
         logger_1.default.error("❌ Erro ao enviar relatório de status:", error.message);
     }
 }, 3600000);
+setInterval(async () => {
+    try {
+        await (0, learnerAgent_1.runLearningCycle)();
+    }
+    catch (error) {
+        logger_1.default.error(`❌ [LearnerAgent] Cycle error: ${error.message}`);
+    }
+}, 3600000);
+setTimeout(async () => {
+    try {
+        await (0, learnerAgent_1.runLearningCycle)();
+    }
+    catch (error) {
+        logger_1.default.error(`❌ [LearnerAgent] Initial cycle error: ${error.message}`);
+    }
+}, 30000);
 setTimeout(async () => {
     try {
         logger_1.default.info("🔍 Verificando conexão com o Telegram...");
@@ -1369,19 +1592,25 @@ setTimeout(async () => {
         updateBotHealth(false, error.message);
     }
 }, 5000);
-bot.on('polling_error', async (error) => {
+bot?.on('polling_error', async (error) => {
     logger_1.default.error('❌ Erro de polling:', error.message);
-    if (error.message && error.message.includes('301')) {
-        logger_1.default.warn("⚠️  Redirecionamento 301 detectado. Atualizando baseApiUrl...");
-        bot.options.baseApiUrl = 'https://api.telegram.org';
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        return;
-    }
     botHealth.errorCount++;
     botHealth.lastError = error.message;
-    if (botHealth.errorCount > 10) {
-        logger_1.default.warn("⚠️  Muitos erros consecutivos. Aguardando 60 segundos antes de tentar reconectar...");
-        await new Promise(resolve => setTimeout(resolve, 60000));
+    if (botHealth.errorCount >= 5) {
+        logger_1.default.warn("⚠️ Desabilitando Telegram após falhas consecutivas.");
+        telegramActive = false;
+        try {
+            await bot?.stopPolling();
+        }
+        catch (e) {
+            logger_1.default.debug(`Erro ao parar polling: ${e?.message}`);
+        }
+        return;
+    }
+    if (error.message && error.message.includes('301')) {
+        logger_1.default.warn("⚠️  Redirecionamento 301 detectado. Aguardando antes de tentar...");
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        return;
     }
     if (error.code === 'EFATAL' || error.name === 'AggregateError' ||
         error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
@@ -1389,33 +1618,7 @@ bot.on('polling_error', async (error) => {
         logger_1.default.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
         logger_1.default.info("📝 Chat ID:", chatId);
         try {
-            await reconnectWithBackoff(5);
-            logger_1.default.info("🔄 Recriando instância do bot após reconexão...");
-            const newBot = new node_telegram_bot_api_1.default(token, {
-                polling: true,
-                request: {
-                    proxy: HTTPS_PROXY || HTTP_PROXY,
-                    url: '',
-                    agentOptions: {
-                        keepAlive: true,
-                        keepAliveMsecs: 10000,
-                        timeout: 30000
-                    }
-                },
-                retry: 5,
-                retryTimeout: 10000,
-                pollingTimeout: 60000,
-                baseApiUrl: 'https://api.telegram.org'
-            });
-            const listeners = bot.eventNames();
-            listeners.forEach(event => {
-                const callbacks = bot.listeners(event);
-                callbacks.forEach(callback => {
-                    newBot.on(event, callback);
-                });
-            });
-            Object.assign(bot, newBot);
-            logger_1.default.info("✅ Bot recriado com sucesso após reconexão");
+            await reconnectWithBackoff(3);
             botHealth.errorCount = 0;
             botHealth.lastError = null;
         }
@@ -1528,11 +1731,4 @@ function decodeAnoncoinTxn(tx) {
     (0, bn_layout_formatter_1.bnLayoutFormatter)(result);
     return result;
 }
-const hybridExecutor_1 = require("./utils/hybridExecutor");
-const metadataCache_1 = require("./utils/metadataCache");
-const performanceMonitor_1 = require("./utils/performanceMonitor");
-const riskEngine_1 = require("./utils/riskEngine");
-const riskConfig_1 = require("./utils/riskConfig");
-const postCurveMonitor_1 = require("./utils/riskEngine/postCurveMonitor");
-const circuitBreaker_1 = require("./utils/circuitBreaker");
 //# sourceMappingURL=index.js.map

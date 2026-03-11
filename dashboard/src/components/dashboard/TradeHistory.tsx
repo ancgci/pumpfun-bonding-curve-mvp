@@ -165,7 +165,7 @@ export function TradeHistory() {
                         {(() => {
                           const pnl = Number(trade.pnl) || 0;
                           // Use buyAmountSol if available to calculate accurate %, otherwise fallback to a static visual or just show N/A
-                          const invest = Number(trade.buyAmountSol || trade.entryAmount || 0.1);
+                          const invest = Number(trade.buyAmountSol || 0.1);
                           if (invest === 0) return "--";
                           const percent = (pnl / invest) * 100;
                           return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;

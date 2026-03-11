@@ -12,7 +12,14 @@ import {
   getOpenTradeForToken,
   getOpenTradesFromDb,
 } from "./simulationEngine";
-import { recordPriceSample, getVolatility, getPreviousCandleTrend, getRSI, getMACD, getMicroTrend, getHighResRSI, getHighResMACD, getMovingAverage } from "./volatilityMonitor";
+import { recordPriceSample, getVolatility, getTASnapshotV2, TASnapshotV2 } from "./volatilityMonitor";
+import { getTAConfig } from "./technicalConfig";
+import { calculateConfluenceScore, formatScoreLog } from "./technicalScore";
+import { checkEntryBlocks, hasHardBlock, formatBlocksLog, registerPriceForLegDetection, checkOrganicityHardBlocks } from "./entryBlocker";
+import { getOrganicityWindowData, getCurveHistory } from "./organicityMonitor";
+import { calculateOrganicityScore, formatOrganicityLog } from "./organicityScore";
+import { SHADOW_MODE, recordShadowEvent } from "./organicityShadowLogger";
+import { getMicroConfirmRunner } from "./microConfirmation";
 import { getTokenSentiment } from "./sentimentAnalysis";
 import { getSolSnifferAnalysis } from "./riskEngine/solSniffer";
 import { analyzeDevHistory } from "./riskEngine/devHistory";
@@ -89,12 +96,14 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `Honeypot: ${tokenAnalysis.honeypotRisk}`,
-    tokenAnalysis.rsi ? `RSI(1m): ${tokenAnalysis.rsi.toFixed(1)}` : null,
-    tokenAnalysis.rsi5s ? `RSI(5s): ${tokenAnalysis.rsi5s.toFixed(1)}` : null,
-    tokenAnalysis.macd ? `MACD(1m): H:${tokenAnalysis.macd.histogram.toFixed(8)}` : null,
-    tokenAnalysis.macd5s ? `MACD(5s): L:${tokenAnalysis.macd5s.macd.toFixed(8)} S:${tokenAnalysis.macd5s.signal.toFixed(8)} H:${tokenAnalysis.macd5s.histogram.toFixed(8)}` : null,
-    tokenAnalysis.ema9 ? `EMA9: ${tokenAnalysis.ema9.toFixed(8)}` : null,
-    tokenAnalysis.ema21 ? `EMA21: ${tokenAnalysis.ema21.toFixed(8)}` : null,
+    tokenAnalysis.rsi ? `RSI(7,1s): ${tokenAnalysis.rsi.toFixed(1)}` : null,
+    tokenAnalysis.macd5s ? `MACD(4,9,3): L:${tokenAnalysis.macd5s.macd.toFixed(8)} S:${tokenAnalysis.macd5s.signal.toFixed(8)} H:${tokenAnalysis.macd5s.histogram.toFixed(8)}` : null,
+    tokenAnalysis.ema9 ? `EMA5: ${tokenAnalysis.taSnapshot?.ema5?.toFixed(8) ?? "n/a"} EMA9: ${tokenAnalysis.ema9.toFixed(8)} EMA13: ${tokenAnalysis.ema21?.toFixed(8) ?? "n/a"}` : null,
+    tokenAnalysis.taSnapshot?.vwap ? `VWAP(20): ${tokenAnalysis.taSnapshot.vwap.toFixed(8)} distVWAP: ${tokenAnalysis.taSnapshot.distVWAPPct?.toFixed(2) ?? "n/a"}%` : null,
+    tokenAnalysis.taSnapshot?.donchian ? `Donchian(12): breakoutUp=${tokenAnalysis.taSnapshot.donchian.breakoutUp}` : null,
+    tokenAnalysis.taSnapshot?.volumeRelative ? `VolRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x (burst=${tokenAnalysis.taSnapshot.volumeRelative.isBurst})` : null,
+    tokenAnalysis.taSnapshot?.roc !== null ? `ROC(5): ${tokenAnalysis.taSnapshot?.roc?.toFixed(4) ?? "n/a"}%` : null,
+    tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100 regime=${tokenAnalysis.taSnapshot?.['regime'] ?? "n/a"}` : null,
     tokenAnalysis.trend ? `Trend: ${tokenAnalysis.trend.isRed ? "RED" : "GREEN"} (${tokenAnalysis.trend.bodySize.toFixed(1)}% body)` : null,
     `Volatility: ${volSummary || "n/a"}`,
     // Enriched data for better decisions
@@ -231,17 +240,21 @@ interface TokenAnalysis {
   riskScore: number;
   honeypotRisk: boolean;
   volWindows?: { windowSec: number; pctChange: number | null; stdDev: number | null }[];
-  // Indicators
+  // TA V2 — snapshot completo
+  taSnapshot?: TASnapshotV2;
+  taScore?: number;            // score de confluência (0-100)
+  taScoreBreakdown?: string;   // breakdown formatado
+  // Legacy Indicators (mantidos para compatibilidade com prompt LLM)
   rsi5s?: number;
   macd5s?: { macd: number; signal: number; histogram: number };
   ema9?: number;
   ema21?: number;
   // Enriched fields (optional, populated when available)
-  tokenAgeSec?: number;        // seconds since token creation
-  buyCount?: number;           // recent buy transactions count
-  sellCount?: number;          // recent sell transactions count
-  top10HolderPct?: number;     // % of supply held by top 10 wallets
-  deployerPrevTokens?: number; // how many tokens deployer created before
+  tokenAgeSec?: number;
+  buyCount?: number;
+  sellCount?: number;
+  top10HolderPct?: number;
+  deployerPrevTokens?: number;
   sentiment?: {
     balance: number;
     socialVolume: number;
@@ -296,59 +309,54 @@ export async function getAgentDecision(
     };
   }
 
-  // 🕵️ ENHANCED TA DATA
-  const trend = getPreviousCandleTrend(tokenAnalysis.mint);
-  const rsi = getRSI(tokenAnalysis.mint);
-  const macd = getMACD(tokenAnalysis.mint);
+  // ══════════════════════════════════════════════════════════
+  // TA V2 — Coleta snapshot para enriquecer o contexto LLM  
+  // NÃO bloqueia a LLM. Re-validação completa ocorre         
+  // em executeAgentTrade(), APÓS a aprovação da LLM.         
+  // ══════════════════════════════════════════════════════════
+  const taConfig = getTAConfig();
+  const taSnap = getTASnapshotV2(tokenAnalysis.mint, taConfig);
+  tokenAnalysis.taSnapshot = taSnap;
 
-  tokenAnalysis.trend = trend || undefined;
-  tokenAnalysis.rsi = rsi || undefined;
-  tokenAnalysis.macd = macd || undefined;
-
-  // 🕵️ EXTRA HIGH-RES TA
-  tokenAnalysis.rsi5s = getHighResRSI(tokenAnalysis.mint) || undefined;
-  tokenAnalysis.macd5s = getHighResMACD(tokenAnalysis.mint) || undefined;
-  tokenAnalysis.ema9 = getMovingAverage(tokenAnalysis.mint, 9, "5s") || undefined;
-  tokenAnalysis.ema21 = getMovingAverage(tokenAnalysis.mint, 21, "5s") || undefined;
-
-  // ══════════════════════════════════════════════════
-  // PRE-FILTER: Instant reject without LLM (< 1ms)
-  // Saves API calls and latency on obvious rejects
-  // ══════════════════════════════════════════════════
-
-  // 1. Overbought Filter
-  if (tokenAnalysis.rsi5s && tokenAnalysis.rsi5s > 75) {
-    logger.info(`⏭️  [Agent] Skipping ${tokenAnalysis.symbol}: Overbought (RSI=${tokenAnalysis.rsi5s.toFixed(1)})`);
-    return { action: "SKIP", confidence: 0, reasoning: "Technical: Overbought RSI > 75" };
+  // Registrar preço para detecção de pernas consecutivas
+  if (taSnap.currentPrice) {
+    registerPriceForLegDetection(tokenAnalysis.mint, taSnap.currentPrice);
   }
 
-  // 2. Bearish EMA Filter (Price below short term averages)
-  if (tokenAnalysis.ema9 && tokenAnalysis.price < tokenAnalysis.ema9) {
-    logger.info(`⏭️  [Agent] Skipping ${tokenAnalysis.symbol}: Bearish (Price < EMA9)`);
-    return { action: "SKIP", confidence: 0, reasoning: "Technical: Bearish trend (Price < EMA9)" };
+  // Preencher campos legacy para o prompt LLM
+  tokenAnalysis.trend = taSnap.trend || undefined;
+  tokenAnalysis.rsi = taSnap.rsi || undefined;
+  tokenAnalysis.rsi5s = taSnap.rsi || undefined;
+  tokenAnalysis.ema9 = taSnap.ema9 || undefined;
+  tokenAnalysis.ema21 = taSnap.ema13 || undefined;
+  tokenAnalysis.macd5s = taSnap.macd
+    ? { macd: taSnap.macd.macd, signal: taSnap.macd.signal, histogram: taSnap.macd.histogram }
+    : undefined;
+
+  // Calcular score para informar o LLM (não bloqueia)
+  const scoreResult = calculateConfluenceScore(taSnap, taConfig);
+  tokenAnalysis.taScore = scoreResult.score;
+  tokenAnalysis.taScoreBreakdown = formatScoreLog(scoreResult);
+  logger.info(`📊 [TA V2 Pre-LLM] ${tokenAnalysis.symbol} Score=${scoreResult.score}/100 Regime=${scoreResult.regime}`);
+
+  // ── FILTROS RÁPIDOS PRÉ-LLM (< 1ms, apenas casos óbvios) ──
+  // Bloqueios de gestão de risco: cooldown e stops consecutivos
+  const riskBlocks = checkEntryBlocks(taSnap, taConfig, tokenAnalysis.mint)
+    .filter(b => b.severity === "HARD" && (
+      b.code === "BLOCK_COOLDOWN" ||
+      b.code === "BLOCK_CONSECUTIVE_STOPS"
+    ));
+  if (riskBlocks.length > 0) {
+    logger.info(`🚫 [PreFilter-Risk] ${tokenAnalysis.symbol}: ${riskBlocks[0].reason}`);
+    return { action: "SKIP", confidence: 0, reasoning: riskBlocks[0].code };
   }
 
-  // 3. MACD Bearish Gap
-  if (tokenAnalysis.macd5s && tokenAnalysis.macd5s.histogram < 0) {
-    logger.info(`⏭️  [Agent] Skipping ${tokenAnalysis.symbol}: MACD Bearish Histogram`);
-    return { action: "SKIP", confidence: 0, reasoning: "Technical: MACD Bearish Histogram" };
-  }
-
-  if (trend && trend.isRed) {
-    const threshold = agentMode === "SIMULATION" ? 60 : 40;
-    if (trend.bodySize > threshold) {
-      logger.warn(`⚡ [PreFilter ${agentMode}] ${tokenAnalysis.symbol} REJECTED: Falling knife detected (-${trend.bodySize.toFixed(1)}% candle body)`);
-      return { action: "SKIP", confidence: 0, reasoning: `TrendPreFilter: sharp downward candle (${trend.bodySize.toFixed(1)}%)` };
-    }
-  }
-
-  // [NEW] Micro-Trend Pre-Filter: Fast rejection for "heartbeat" dumps (5-10s window)
-  const microTrend = getMicroTrend(tokenAnalysis.mint, 10000);
-  if (microTrend) {
+  // Micro-dump extremo (dado de latência zero, não espera LLM)
+  if (taSnap.microTrend) {
     const microThreshold = agentMode === "SIMULATION" ? -15 : -8;
-    if (microTrend.changePct < microThreshold) {
-      logger.warn(`⚡ [PreFilter ${agentMode}] ${tokenAnalysis.symbol} REJECTED: Micro-dump detected (${microTrend.changePct.toFixed(1)}% in 10s)`);
-      return { action: "SKIP", confidence: 0, reasoning: `MicroTrend: sharp drop detected (${microTrend.changePct.toFixed(1)}% in 10s)` };
+    if (taSnap.microTrend.changePct < microThreshold) {
+      logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Micro-dump (${taSnap.microTrend.changePct.toFixed(1)}% in 10s)`);
+      return { action: "SKIP", confidence: 0, reasoning: `MicroTrend: sharp drop (${taSnap.microTrend.changePct.toFixed(1)}% in 10s)` };
     }
   }
 
@@ -530,15 +538,146 @@ export async function executeAgentTrade(
   }
 
   if (decision.action === "BUY") {
-    // Catch price spikes that happened during LLM evaluation latency
+    // ══════════════════════════════════════════════════════════
+    // RE-VALIDAÇÃO PÓS-LLM — TA V2 completa
+    //
+    // A LLM pode ter demorado 1-3s para responder.
+    // Nesse tempo o setup técnico pode ter mudado completamente.
+    // Re-validamos AGORA, no momento exato antes de comprar.
+    // Se inválido → token vai para fila de espera (dipMonitor).
+    // ══════════════════════════════════════════════════════════
+    const taConfigExec = getTAConfig();
+    const taSnapNow = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
+
+    // 1. Checar bloqueios HARD no momento atual
+    const execBlocks = checkEntryBlocks(taSnapNow, taConfigExec, tokenAnalysis.mint);
+    if (hasHardBlock(execBlocks)) {
+      const hardBlock = execBlocks.find(b => b.severity === "HARD");
+      logger.warn(
+        `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} HARD BLOCK no momento da execução: ` +
+        `${hardBlock?.code} — Enfileirando no DipMonitor.`
+      );
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      return;
+    }
+
+    // 2. Checar score de confluência no momento atual
+    const execScore = calculateConfluenceScore(taSnapNow, taConfigExec);
+    logger.info(
+      `📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score pós-LLM: ${execScore.score}/100` +
+      (execScore.invalidated ? ` ⚠️ INVÁLIDO: ${execScore.invalidReason}` : "")
+    );
+
+    if (execScore.invalidated || execScore.score < taConfigExec.scoreMinimo) {
+      logger.warn(
+        `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score insuficiente (${execScore.score} < ${taConfigExec.scoreMinimo}) ` +
+        `— Setup mudou durante avaliação LLM. Enfileirando no DipMonitor.`
+      );
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      return;
+    }
+
+    // 2.5. Re-validação de ORGANICIDADE — detecta tokens artificiais
+    // (staircase bots, subida morta, crescimento empurrado)
+    // ─ Se ORGANICITY_SHADOW_MODE=true: apenas observa, NÃO bloqueia ─
+    const orgHistory = getOrganicityWindowData(tokenAnalysis.mint);
+    if (orgHistory) {
+      const prices1sNow = (taSnapNow as any).closes1s as number[] | undefined ?? [];
+      const t0 = performance.now();
+      const orgResult = calculateOrganicityScore(orgHistory, prices1sNow, tokenAnalysis.bondingCurvePercent || 90);
+      const orgBlocks = checkOrganicityHardBlocks(orgHistory, orgResult, prices1sNow);
+      const latencyMs = performance.now() - t0;
+
+      logger.info(formatOrganicityLog(orgResult, tokenAnalysis.mint));
+
+      const hardOrgBlocks = orgBlocks.filter(b => b.severity === "HARD");
+      const softOrgBlocks = orgBlocks.filter(b => b.severity === "SOFT");
+      const wouldBlock = hardOrgBlocks.length > 0;
+
+      // ── SHADOW MODE: observar sem bloquear ──
+      if (SHADOW_MODE) {
+        recordShadowEvent({
+          timestamp: new Date().toISOString(),
+          mint: tokenAnalysis.mint,
+          symbol: tokenAnalysis.symbol,
+          organicMarketScore: orgResult.organicMarketScore,
+          hardBlocksTriggered: hardOrgBlocks.map(b => b.code),
+          softBlocksTriggered: softOrgBlocks.map(b => b.code),
+          wouldHaveBlocked: wouldBlock,
+          scoreBreakdown: orgResult.breakdown as unknown as Record<string, number>,
+          tradeDensity_20s: orgHistory.trades_20s.length,
+          uniqueBuyers_30s: orgHistory.buyerSet_30s.size,
+          uniqueWallets_total: orgHistory.totalUniqueWalletsSet.size,
+          alternationRatio: orgResult.breakdown.buySellAlternationScore / 100,
+          top1WalletSharePct: orgResult.breakdown.top1WalletSharePct,
+          priceLinearityR2: orgResult.breakdown.priceLinearityScore
+            ? (1 - orgResult.breakdown.priceLinearityScore / 100)
+            : 0,
+          bondingCurvePercent: tokenAnalysis.bondingCurvePercent || 90,
+          llmDecision: decision.action,
+        }, latencyMs);
+
+        if (wouldBlock) {
+          const hardOrgBlock = hardOrgBlocks[0];
+          logger.warn(
+            `🔬 [SHADOW] ${tokenAnalysis.symbol} TERIA SIDO BLOQUEADO por organicidade: ` +
+            `${hardOrgBlock.code} — ${hardOrgBlock.reason} (latência: ${latencyMs.toFixed(2)}ms)`
+          );
+        } else {
+          logger.debug(`🔬 [SHADOW] ${tokenAnalysis.symbol} PASSARIA na camada de organicidade (score=${orgResult.organicMarketScore}, ${latencyMs.toFixed(2)}ms)`);
+        }
+        // Em shadow mode: não bloquear, apenas observar → continua execução
+      } else {
+        // ── MODO NORMAL: bloqueia se detectar token artificial ──
+        if (wouldBlock) {
+          const hardOrgBlock = hardOrgBlocks[0];
+          logger.warn(
+            `🧪 [Organicity Post-LLM] ${tokenAnalysis.symbol} BLOQUEADO: ` +
+            `${hardOrgBlock.code} — ${hardOrgBlock.reason}. Enfileirando no DipMonitor.`
+          );
+          dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+          return;
+        }
+
+        if (softOrgBlocks.length > 0) {
+          logger.debug(`⚠️ [Organicity] ${tokenAnalysis.symbol} Soft signals: ${softOrgBlocks.map(b => b.code).join(", ")}`);
+        }
+      }
+    }
+
+    // 2.7. micro-confirmação (Sprint 2)
+    // Janela assíncrona de 3-8s observando a saúde do token no momento da execução.
+    const runMicroConfirm = getMicroConfirmRunner();
+    const prices1sExec = (taSnapNow as any).closes1s as number[] | undefined ?? [];
+    const mcResult = await runMicroConfirm(
+      tokenAnalysis.mint,
+      tokenAnalysis.symbol,
+      tokenAnalysis.bondingCurvePercent || 90,
+      prices1sExec
+    );
+
+    if (!mcResult.passed) {
+      // Se falhou (e não estamos em shadow mode), aborta.
+      // O runner shadow retorna passed: true mesmo se os critérios falharem internamente.
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      return;
+    }
+
+    // 3. Checar spike de preço durante avaliação LLM
     const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, 10.0);
     if (!validation.isValid) {
-      logger.warn(`♻️ [Orchestrator] Trade aborted due to Pre-Execution validation. Moving ${tokenAnalysis.symbol} to Dip Waitlist.`);
-      decision.action = "WAITING_DIP";
+      logger.warn(
+        `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike. ` +
+        `Moving ${tokenAnalysis.symbol} to Dip Waitlist.`
+      );
       dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
-      return; // Stop execution here
+      return;
     }
+
+    // ✅ Setup ainda válido após LLM + Organicidade — pode executar!
+    logger.info(`✅ [Post-LLM Full] ${tokenAnalysis.symbol} TA=${execScore.score} ORGANIC=✅ APROVADO — executando compra.`);
   }
+
 
   // ══════════════════════════════════════════════════
   // DYNAMIC POSITION SIZING based on confidence

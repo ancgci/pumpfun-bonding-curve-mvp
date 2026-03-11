@@ -19,9 +19,9 @@ import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { LoginPage } from "./pages/LoginPage";
 import { useAuthStore } from "./stores/authStore";
 import { BarChart3, Settings2, ScrollText } from "lucide-react";
+import { API_BASE } from "./lib/axios";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
-const API_BASE = "http://localhost:3001/api";
 
 type Tab = "overview" | "trading" | "logs";
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [

@@ -9,4 +9,4 @@ export interface LiquidityAnalysisResult {
     score: number;
     reasons: RiskReason[];
 }
-export declare function analyzeLiquidity(tokenAddr: string, existingMetadata?: any): Promise<LiquidityAnalysisResult>;
+export declare function analyzeLiquidity(tokenAddr: string, existingMetadata?: any, isPumpFunPreGraduation?: boolean): Promise<LiquidityAnalysisResult>;

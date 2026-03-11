@@ -51,14 +51,27 @@ const httpServer = http.createServer(app);
 const PORT = 3001;
 
 const io = new Server(httpServer, {
-    cors: { origin: FRONTEND_ORIGIN, credentials: true }
+    cors: { origin: [FRONTEND_ORIGIN, "http://YOUR_VPS_IP:3001", "http://YOUR_VPS_IP", "http://localhost:5174", "http://localhost:3001"], credentials: true }
 });
 
 // ── Custom CORS Middleware ────────────────────────────────────
+const ALLOWED_ORIGINS = [
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://YOUR_VPS_IP:3001",
+    "http://YOUR_VPS_IP",
+    FRONTEND_ORIGIN,
+];
+
 app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin;
-    if (origin === "http://localhost:5174" || origin === "http://127.0.0.1:5174" || origin === "http://localhost:3000") {
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
         res.header("Access-Control-Allow-Origin", origin);
+    } else if (!origin) {
+        // Same-origin requests (served from the same server) have no origin header
+        res.header("Access-Control-Allow-Origin", "*");
     } else {
         res.header("Access-Control-Allow-Origin", FRONTEND_ORIGIN);
     }
@@ -77,7 +90,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // ── Middleware ────────────────────────────────────────────────
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, "public")));
+// ── Serve dashboard-new built files (React SPA) ──────────────
+const DASHBOARD_DIST = path.join(__dirname, "../dashboard/dist");
+app.use(express.static(DASHBOARD_DIST));
 
 // ── Rate limit on auth routes ─────────────────────────────────
 const authLimiter = rateLimit({
@@ -1160,10 +1175,20 @@ if (require.main === module) {
     }, 24 * 60 * 60 * 1000);
 }
 
+// ── SPA Fallback: serve index.html for all non-API routes ────
+app.get('/{*path}', (req: Request, res: Response) => {
+    const indexPath = path.join(DASHBOARD_DIST, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+    }
+    res.status(404).send('Dashboard not built. Run: cd dashboard-new && npm run build');
+});
+
 // Iniciar servidor apenas se o script for executado diretamente
 if (require.main === module) {
-    httpServer.listen(PORT, () => {
-        console.log(`✅ Dashboard + WebSocket + SQLite rodando em http://localhost:${PORT}`);
+    httpServer.listen(PORT, '0.0.0.0', () => {
+        console.log(`✅ Dashboard + WebSocket + SQLite rodando em http://0.0.0.0:${PORT}`);
         console.log(`✅ SQLite P&L History inicializado`);
+        console.log(`✅ Serving frontend from: ${DASHBOARD_DIST}`);
     });
 }

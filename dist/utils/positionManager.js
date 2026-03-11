@@ -7,6 +7,7 @@ exports.positionManager = void 0;
 const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
 const logger_1 = __importDefault(require("./logger"));
+const broadcastOptimizer_1 = require("./broadcastOptimizer");
 const POSITIONS_FILE = path_1.default.join(__dirname, "../data/positions.json");
 const DATA_DIR = path_1.default.join(__dirname, "../data");
 class PositionManager {
@@ -77,6 +78,7 @@ class PositionManager {
         try {
             const data = JSON.stringify(Array.from(this.positions.values()), null, 2);
             await promises_1.default.writeFile(POSITIONS_FILE, data, "utf-8");
+            (0, broadcastOptimizer_1.notifyDashboardUpdate)();
         }
         catch (error) {
             logger_1.default.error(`❌ Erro ao persistir posições no disco:`, error.message);

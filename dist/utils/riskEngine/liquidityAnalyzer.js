@@ -7,7 +7,7 @@ exports.analyzeLiquidity = analyzeLiquidity;
 const logger_1 = __importDefault(require("../logger"));
 const riskConfig_1 = require("../riskConfig");
 const fetchTokenMetadata_1 = require("../fetchTokenMetadata");
-async function analyzeLiquidity(tokenAddr, existingMetadata) {
+async function analyzeLiquidity(tokenAddr, existingMetadata, isPumpFunPreGraduation = false) {
     const result = {
         liquiditySol: 0,
         liquidityUsd: 0,
@@ -49,27 +49,33 @@ async function analyzeLiquidity(tokenAddr, existingMetadata) {
                 detail: `Liquidez baixa: ${result.liquiditySol.toFixed(2)} SOL (mín: ${riskConfig_1.RISK_CONFIG.detection.minLiquiditySol} SOL)`,
             });
         }
-        try {
-            const lpStatus = await checkLPLockStatus(tokenAddr);
-            result.lpLocked = lpStatus.locked;
-            result.lpBurned = lpStatus.burned;
-            if (!lpStatus.locked && !lpStatus.burned) {
-                result.score += riskConfig_1.RISK_CONFIG.weights.noLpLock;
+        if (isPumpFunPreGraduation) {
+            result.lpLocked = true;
+            result.lpBurned = false;
+        }
+        else {
+            try {
+                const lpStatus = await checkLPLockStatus(tokenAddr);
+                result.lpLocked = lpStatus.locked;
+                result.lpBurned = lpStatus.burned;
+                if (!lpStatus.locked && !lpStatus.burned) {
+                    result.score += riskConfig_1.RISK_CONFIG.weights.noLpLock;
+                    result.reasons.push({
+                        filter: "NO_LP_LOCK",
+                        impact: riskConfig_1.RISK_CONFIG.weights.noLpLock,
+                        detail: "LP não está lockado nem burnado — risco de rug pull via remoção de liquidez",
+                    });
+                }
+            }
+            catch (lpError) {
+                logger_1.default.debug(`⚠️  [RiskEngine/Liquidity] Erro ao verificar LP lock: ${lpError.message}`);
+                result.score += Math.floor(riskConfig_1.RISK_CONFIG.weights.noLpLock / 2);
                 result.reasons.push({
-                    filter: "NO_LP_LOCK",
-                    impact: riskConfig_1.RISK_CONFIG.weights.noLpLock,
-                    detail: "LP não está lockado nem burnado — risco de rug pull via remoção de liquidez",
+                    filter: "LP_LOCK_UNKNOWN",
+                    impact: Math.floor(riskConfig_1.RISK_CONFIG.weights.noLpLock / 2),
+                    detail: "Status de LP lock/burn não verificável",
                 });
             }
-        }
-        catch (lpError) {
-            logger_1.default.debug(`⚠️  [RiskEngine/Liquidity] Erro ao verificar LP lock: ${lpError.message}`);
-            result.score += Math.floor(riskConfig_1.RISK_CONFIG.weights.noLpLock / 2);
-            result.reasons.push({
-                filter: "LP_LOCK_UNKNOWN",
-                impact: Math.floor(riskConfig_1.RISK_CONFIG.weights.noLpLock / 2),
-                detail: "Status de LP lock/burn não verificável",
-            });
         }
     }
     catch (error) {

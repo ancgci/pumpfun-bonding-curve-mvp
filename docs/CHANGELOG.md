@@ -7,7 +7,7 @@ History of all improvements implemented in the project.
 ## [Sprint 11] - 2026-03-09
 
 ### 🎨 Dashboard V2 — React/Vite Migration + Full Overhaul
-- **Complete React Rewrite** (`dashboard-new/`)
+- **Complete React Rewrite** (`dashboard/`)
   - Migrated from vanilla HTML/JS to **React 19 + Vite + TypeScript**.
   - **Tailwind CSS v4** with glassmorphism design system.
   - **shadcn/ui** component library (Card, Badge, Progress, ScrollArea).
@@ -43,12 +43,12 @@ History of all improvements implemented in the project.
 - **npm Scripts**: `qa:unit`, `qa:api`, `qa:e2e`, `qa:regression`, `qa:full`.
 
 ### 📁 New Files
-- `dashboard-new/` — Complete React dashboard project (Vite, Tailwind v4, Recharts).
+- `dashboard/` — Complete React dashboard project (Vite, Tailwind v4, Recharts).
 - `.agents/agents/QAgent/` — QA testing agent with prompt and 4 test suites.
 
 ### 📁 Files Modified
-- `package.json` — Added QA scripts, excluded `dashboard-new` from lint-staged.
-- `tsconfig.json` — Excluded `dashboard-new` to prevent backend TS errors.
+- `package.json` — Added QA scripts, excluded `dashboard` from lint-staged.
+- `tsconfig.json` — Excluded `dashboard` to prevent backend TS errors.
 - `playwright.config.ts` — Added HTML reporter and trace support.
 
 ---
@@ -67,7 +67,7 @@ History of all improvements implemented in the project.
   - Hierarchical decision making: RiskAgent always validates before trade execution.
 
 ### ⚡ Real-Time WebSocket Dashboard
-- **Socket.io Integration** (`dashboard/server.ts`, `app.js`)
+- **Socket.io Integration** (`dashboard-api/server.ts`, `app.js`)
   - Switched from 5s polling to bi-directional WebSockets.
   - Instant UI updates for stats, P&L history, active positions, and simulation trades.
 - **Custom Skill: DashboardRealTimeWebSocket**
@@ -88,7 +88,7 @@ History of all improvements implemented in the project.
   - New `SIMULATION_TIMEOUT_MIN` variable to control the maximum duration of a simulated trade.
 
 ### 📊 Dashboard & UI Precision
-- **Data Integrity** (`utils/riskEngine/holderAnalyzer.ts`, `dashboard/server.ts`)
+- **Data Integrity** (`utils/riskEngine/holderAnalyzer.ts`, `dashboard-api/server.ts`)
   - **Multi-Provider Holder Analysis**: Robust detection of Helius vs Shyft providers for automatic holder count fetching.
   - Refined API key parsing to handle multiple formats (`api-key`, `api_key`).
 - **UI Enhancements** (`dashboard/public/index.html`, `app.js`)
@@ -236,7 +236,7 @@ History of all improvements implemented in the project.
 - `utils/agentOrchestrator.ts` — Dynamic TP/SL + patterns injection
 - `utils/logger.ts` — Console output always enabled
 - `index.ts` — LearnerAgent import + scheduled intervals
-- `dashboard/server.ts` — Split metrics + logs endpoint
+- `dashboard-api/server.ts` — Split metrics + logs endpoint
 - `dashboard/public/index.html` — Learning boards + toggle controls + logs terminal
 - `dashboard/public/style.css` — Full glassmorphism rewrite
 - `dashboard/public/app.js` — Split data rendering + toggle handlers + logs polling

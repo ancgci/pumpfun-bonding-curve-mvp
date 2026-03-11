@@ -16,8 +16,11 @@ const holderAnalyzer_1 = require("./riskEngine/holderAnalyzer");
 const tradingSanity_1 = require("./riskEngine/tradingSanity");
 const fetchTokenMetadata_1 = require("./fetchTokenMetadata");
 const metadataCache_1 = require("./metadataCache");
-async function analyzeToken(tokenAddr, cachedMetadata) {
+const moralisClient_1 = require("./riskEngine/moralisClient");
+const volatilityMonitor_1 = require("./volatilityMonitor");
+async function analyzeToken(tokenAddr, cachedMetadata, curveProgress) {
     const startTime = Date.now();
+    const isPumpFunPreGraduation = curveProgress !== undefined && curveProgress < 100;
     const flags = (0, riskConfig_1.getDefaultFlags)();
     const metrics = (0, riskConfig_1.getDefaultMetrics)();
     const reasons = [];
@@ -35,86 +38,107 @@ async function analyzeToken(tokenAddr, cachedMetadata) {
         };
     }
     logger_1.default.info(`🔍 [RiskEngine] Analisando token ${tokenAddr}...`);
-    try {
-        const authResult = await (0, tokenAuthorities_1.checkTokenAuthorities)(tokenAddr);
-        totalScore += authResult.score;
-        reasons.push(...authResult.reasons);
-        flags.MINT_AUTH = authResult.mintAuthority ? "ON" : "OFF";
-        flags.FREEZE_AUTH = authResult.freezeAuthority ? "ON" : "OFF";
-        flags.TOKEN_STANDARD = authResult.tokenStandard;
-        flags.EXTENSIONS = authResult.extensions;
-        logger_1.default.debug(`[RiskEngine] Auth check: score+${authResult.score} (mint=${flags.MINT_AUTH}, freeze=${flags.FREEZE_AUTH})`);
+    const [authRes, ageRes, metaRes] = await Promise.allSettled([
+        (0, tokenAuthorities_1.checkTokenAuthorities)(tokenAddr),
+        rpcPool_1.rpcPool.getBestConnection().then(conn => (0, contractAge_1.checkContractAge)(conn, tokenAddr)),
+        (async () => {
+            if (cachedMetadata)
+                return cachedMetadata;
+            const cached = await (0, metadataCache_1.getCachedTokenMetadata)(tokenAddr);
+            if (cached)
+                return cached;
+            return await (0, fetchTokenMetadata_1.fetchCombinedMetadata)(tokenAddr);
+        })()
+    ]);
+    if (authRes.status === "fulfilled") {
+        const auth = authRes.value;
+        totalScore += auth.score;
+        reasons.push(...auth.reasons);
+        flags.MINT_AUTH = auth.mintAuthority ? "ON" : "OFF";
+        flags.FREEZE_AUTH = auth.freezeAuthority ? "ON" : "OFF";
+        flags.TOKEN_STANDARD = auth.tokenStandard;
+        flags.EXTENSIONS = auth.extensions;
+        logger_1.default.debug(`[RiskEngine] Auth check: score+${auth.score}`);
     }
-    catch (error) {
-        logger_1.default.error(`[RiskEngine] Auth check falhou: ${error.message}`);
+    else {
+        logger_1.default.error(`[RiskEngine] Auth check falhou: ${authRes.reason.message}`);
     }
-    try {
-        const connection = await rpcPool_1.rpcPool.getBestConnection();
-        const ageResult = await (0, contractAge_1.checkContractAge)(connection, tokenAddr);
-        totalScore += ageResult.score;
-        reasons.push(...ageResult.reasons);
-        metrics.tokenAgeHours = ageResult.ageHours;
-        flags.VERY_NEW_TOKEN = ageResult.isVeryNew;
-        logger_1.default.debug(`[RiskEngine] Age check: score+${ageResult.score} (age=${ageResult.ageHours.toFixed(2)}h)`);
+    if (ageRes.status === "fulfilled") {
+        const age = ageRes.value;
+        totalScore += age.score;
+        reasons.push(...age.reasons);
+        metrics.tokenAgeHours = age.ageHours;
+        flags.VERY_NEW_TOKEN = age.isVeryNew;
+        logger_1.default.debug(`[RiskEngine] Age check: score+${age.score} (${age.ageHours.toFixed(2)}h)`);
     }
-    catch (error) {
-        logger_1.default.error(`[RiskEngine] Age check falhou: ${error.message}`);
+    else {
+        logger_1.default.error(`[RiskEngine] Age check falhou: ${ageRes.reason.message}`);
     }
-    let tokenMetadata = cachedMetadata || null;
-    if (!tokenMetadata) {
-        try {
-            tokenMetadata = await (0, metadataCache_1.getCachedTokenMetadata)(tokenAddr);
-            if (!tokenMetadata) {
-                tokenMetadata = await (0, fetchTokenMetadata_1.fetchCombinedMetadata)(tokenAddr);
-            }
+    let tokenMetadata = null;
+    if (metaRes.status === "fulfilled") {
+        tokenMetadata = metaRes.value;
+        if (tokenMetadata?.creator) {
+            metrics.creatorAddr = tokenMetadata.creator;
         }
-        catch (error) {
-            logger_1.default.debug(`[RiskEngine] Metadata fetch falhou: ${error.message}`);
-        }
     }
-    try {
-        const metaResult = await (0, metadataCheck_1.checkMetadataQuality)(tokenMetadata);
-        totalScore += metaResult.score;
-        reasons.push(...metaResult.reasons);
-        flags.POOR_METADATA = metaResult.isPoorQuality;
+    else {
+        logger_1.default.debug(`[RiskEngine] Metadata fetch falhou: ${metaRes.reason.message}`);
+    }
+    const [liqRes, holderRes, metaQualRes, moralisRes] = await Promise.allSettled([
+        (0, liquidityAnalyzer_1.analyzeLiquidity)(tokenAddr, tokenMetadata, isPumpFunPreGraduation),
+        (0, holderAnalyzer_1.analyzeHolders)(tokenAddr, tokenMetadata?.creator),
+        (0, metadataCheck_1.checkMetadataQuality)(tokenMetadata),
+        (0, moralisClient_1.getMoralisTokenStats)(tokenAddr)
+    ]);
+    if (liqRes.status === "fulfilled") {
+        const liq = liqRes.value;
+        totalScore += liq.score;
+        reasons.push(...liq.reasons);
+        metrics.liquiditySol = liq.liquiditySol;
+        metrics.liquidityUsd = liq.liquidityUsd;
+        metrics.liquidityToMcap = liq.liquidityToMcap;
+        flags.LP_LOCKED = liq.lpLocked;
+        flags.LP_BURNED = liq.lpBurned;
+        flags.LOW_LIQUIDITY = liq.liquiditySol < riskConfig_1.RISK_CONFIG.detection.minLiquiditySol;
+        logger_1.default.debug(`[RiskEngine] Liquidity check: score+${liq.score} (${liq.liquiditySol.toFixed(2)} SOL)`);
+    }
+    else {
+        logger_1.default.error(`[RiskEngine] Liquidity check falhou: ${liqRes.reason.message}`);
+    }
+    if (holderRes.status === "fulfilled") {
+        const holder = holderRes.value;
+        totalScore += holder.score;
+        reasons.push(...holder.reasons);
+        metrics.totalHolders = holder.totalHolders;
+        metrics.top10Percent = holder.top10Percent;
+        metrics.devWalletPercent = holder.devWalletPercent;
+        flags.TOP_HOLDERS_HIGH = holder.top10Percent > riskConfig_1.RISK_CONFIG.detection.top10MaxPercent;
+        flags.DEV_WALLET_HIGH = holder.devWalletPercent > riskConfig_1.RISK_CONFIG.detection.devMaxPercent;
+        flags.CLUSTERING = holder.clustering;
+        logger_1.default.debug(`[RiskEngine] Holder check: score+${holder.score} (holders=${holder.totalHolders})`);
+    }
+    else {
+        logger_1.default.error(`[RiskEngine] Holder check falhou: ${holderRes.reason.message}`);
+    }
+    if (metaQualRes.status === "fulfilled") {
+        const metaQual = metaQualRes.value;
+        totalScore += metaQual.score;
+        reasons.push(...metaQual.reasons);
+        flags.POOR_METADATA = metaQual.isPoorQuality;
         if (tokenMetadata && !tokenMetadata.twitter && !tokenMetadata.telegram && !tokenMetadata.website)
             flags.NO_SOCIALS = true;
         if (tokenMetadata && (!tokenMetadata.image || tokenMetadata.image.includes("placeholder")))
             flags.NO_IMAGE = true;
-        logger_1.default.debug(`[RiskEngine] Metadata check: score+${metaResult.score}`);
+        logger_1.default.debug(`[RiskEngine] Metadata check: score+${metaQual.score}`);
     }
-    catch (error) {
-        logger_1.default.error(`[RiskEngine] Metadata check falhou: ${error.message}`);
+    else {
+        logger_1.default.error(`[RiskEngine] Metadata check falhou: ${metaQualRes.reason.message}`);
     }
-    try {
-        const liqResult = await (0, liquidityAnalyzer_1.analyzeLiquidity)(tokenAddr, tokenMetadata);
-        totalScore += liqResult.score;
-        reasons.push(...liqResult.reasons);
-        metrics.liquiditySol = liqResult.liquiditySol;
-        metrics.liquidityUsd = liqResult.liquidityUsd;
-        metrics.liquidityToMcap = liqResult.liquidityToMcap;
-        flags.LP_LOCKED = liqResult.lpLocked;
-        flags.LP_BURNED = liqResult.lpBurned;
-        flags.LOW_LIQUIDITY = liqResult.liquiditySol < riskConfig_1.RISK_CONFIG.detection.minLiquiditySol;
-        logger_1.default.debug(`[RiskEngine] Liquidity check: score+${liqResult.score} (${liqResult.liquiditySol.toFixed(2)} SOL)`);
-    }
-    catch (error) {
-        logger_1.default.error(`[RiskEngine] Liquidity check falhou: ${error.message}`);
-    }
-    try {
-        const holderResult = await (0, holderAnalyzer_1.analyzeHolders)(tokenAddr, tokenMetadata?.creator);
-        totalScore += holderResult.score;
-        reasons.push(...holderResult.reasons);
-        metrics.totalHolders = holderResult.totalHolders;
-        metrics.top10Percent = holderResult.top10Percent;
-        metrics.devWalletPercent = holderResult.devWalletPercent;
-        flags.TOP_HOLDERS_HIGH = holderResult.top10Percent > riskConfig_1.RISK_CONFIG.detection.top10MaxPercent;
-        flags.DEV_WALLET_HIGH = holderResult.devWalletPercent > riskConfig_1.RISK_CONFIG.detection.devMaxPercent;
-        flags.CLUSTERING = holderResult.clustering;
-        logger_1.default.debug(`[RiskEngine] Holder check: score+${holderResult.score} (holders=${holderResult.totalHolders}, top10=${holderResult.top10Percent.toFixed(1)}%, cluster=${holderResult.clustering})`);
-    }
-    catch (error) {
-        logger_1.default.error(`[RiskEngine] Holder check falhou: ${error.message}`);
+    if (moralisRes.status === "fulfilled" && moralisRes.value) {
+        const moralis = moralisRes.value;
+        metrics.totalHolders = metrics.totalHolders || moralis.totalHolders;
+        metrics.priceUsd = moralis.priceUsd;
+        logger_1.default.debug(`[RiskEngine] Moralis check: holders=${moralis.totalHolders}, price=${moralis.priceUsd}`);
     }
     try {
         const tradingResult = await (0, tradingSanity_1.checkTradingSanity)(tokenAddr, metrics.totalHolders, tokenMetadata);
@@ -127,12 +151,42 @@ async function analyzeToken(tokenAddr, cachedMetadata) {
             (tradingResult.buySellRatio > 0 && tradingResult.buySellRatio < 1 / riskConfig_1.RISK_CONFIG.detection.buySellImbalanceThreshold);
         flags.HONEYPOT_OP = tradingResult.honeypotDetected;
         honeypotDetected = tradingResult.honeypotDetected;
-        logger_1.default.debug(`[RiskEngine] Trading check: score+${tradingResult.score} (B/S=${tradingResult.buySellRatio.toFixed(2)}, honeypot=${tradingResult.honeypotDetected})`);
+        logger_1.default.debug(`[RiskEngine] Trading check: score+${tradingResult.score} (honeypot=${tradingResult.honeypotDetected})`);
     }
     catch (error) {
         logger_1.default.error(`[RiskEngine] Trading sanity check falhou: ${error.message}`);
     }
-    const finalScore = Math.min(totalScore, 100);
+    let taDiscount = 0;
+    const taReasons = [];
+    try {
+        const taSnapshot = (0, volatilityMonitor_1.getTASnapshot)(tokenAddr);
+        if (taSnapshot) {
+            if (taSnapshot.rsi1m !== null && taSnapshot.rsi1m >= 30 && taSnapshot.rsi1m <= 70) {
+                taDiscount += riskConfig_1.RISK_CONFIG.taWeights.rsiHealthy;
+                taReasons.push({ filter: "TA_RSI_HEALTHY", impact: -riskConfig_1.RISK_CONFIG.taWeights.rsiHealthy, detail: `RSI Saudável (${taSnapshot.rsi1m.toFixed(1)})` });
+            }
+            if (taSnapshot.rsi5s !== null && taSnapshot.rsi5s < 30 && taSnapshot.trend && !taSnapshot.trend.isRed) {
+                taDiscount += riskConfig_1.RISK_CONFIG.taWeights.rsiOversoldBullish;
+                taReasons.push({ filter: "TA_RSI_BULLISH", impact: -riskConfig_1.RISK_CONFIG.taWeights.rsiOversoldBullish, detail: "RSI Oversold + Vela Verde" });
+            }
+            if (taSnapshot.macd5s !== null && (taSnapshot.macd5s.macd > taSnapshot.macd5s.signal || taSnapshot.macd5s.histogram > 0)) {
+                taDiscount += riskConfig_1.RISK_CONFIG.taWeights.macdBullish;
+                taReasons.push({ filter: "TA_MACD_BULLISH", impact: -riskConfig_1.RISK_CONFIG.taWeights.macdBullish, detail: "MACD Altista" });
+            }
+            if (taSnapshot.currentPrice !== null && taSnapshot.ema9 !== null && taSnapshot.ema21 !== null) {
+                if (taSnapshot.currentPrice > taSnapshot.ema9 && taSnapshot.ema9 > taSnapshot.ema21) {
+                    taDiscount += riskConfig_1.RISK_CONFIG.taWeights.emaBullish;
+                    taReasons.push({ filter: "TA_EMA_BULLISH", impact: -riskConfig_1.RISK_CONFIG.taWeights.emaBullish, detail: "Preço > EMA9 > EMA21" });
+                }
+            }
+            logger_1.default.debug(`[RiskEngine] TA check: discount-${taDiscount}`);
+        }
+    }
+    catch (e) {
+        logger_1.default.debug(`[RiskEngine] Erro ao calcular TA Snapshot: ${e.message}`);
+    }
+    const cappedDiscount = Math.min(taDiscount, riskConfig_1.RISK_CONFIG.taWeights.maxDiscount);
+    const finalScore = Math.max(0, Math.min(totalScore - cappedDiscount, 100));
     const decision = (0, riskConfig_1.scoreToDecision)(finalScore, honeypotDetected);
     reasons.sort((a, b) => b.impact - a.impact);
     const elapsed = Date.now() - startTime;
@@ -142,6 +196,8 @@ async function analyzeToken(tokenAddr, cachedMetadata) {
         flags,
         metrics,
         reasons,
+        taDiscount: cappedDiscount,
+        taReasons,
         analyzedAt: Date.now(),
     };
     const emoji = decision === "ALLOW_TRADE" ? "✅" : decision === "ALLOW_ALERT" ? "⚠️" : "🚫";
@@ -193,10 +249,16 @@ function formatRiskForTelegram(analysis) {
         msg += ` | Dev: ${metrics.devWalletPercent.toFixed(1)}%`;
     }
     msg += `\n`;
-    msg += `📊 B/S: ${metrics.buySellRatio.toFixed(2)} | Cluster: ${flags.CLUSTERING}`;
+    msg += `📊 B/S: ${metrics.buySellRatio.toFixed(2)} | Cluster: ${flags.CLUSTERING === "NO" ? "NO" : "YES"}`;
     if (reasons.length > 0) {
         const topReasons = reasons.slice(0, 2).map(r => r.detail).join("; ");
         msg += `\n⚡ ${topReasons}`;
+    }
+    if (analysis.taDiscount && analysis.taDiscount > 0) {
+        msg += `\n📉 <b>TA Discount applied: -${analysis.taDiscount} pts</b>`;
+        if (analysis.taReasons && analysis.taReasons.length > 0) {
+            msg += `\n   ↳ ${analysis.taReasons.map(r => r.detail).join(", ")}`;
+        }
     }
     return msg;
 }

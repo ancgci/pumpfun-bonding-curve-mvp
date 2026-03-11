@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, createContext, useContext, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
-import api from "@/lib/axios";
+import api, { API_BASE } from "@/lib/axios";
 
-const API_BASE = "http://localhost:3001/api";
-const SOCKET_URL = "http://localhost:3000";
+const SOCKET_URL = window.location.hostname === "localhost"
+  ? "http://localhost:3001"
+  : window.location.origin;
 
 export interface DashboardData {
   stats: any;

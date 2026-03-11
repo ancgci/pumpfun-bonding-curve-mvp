@@ -8,7 +8,9 @@ export interface Position {
     takeProfit: number;
     stopLoss: number;
     isActive: boolean;
+    lastHighPrice?: number;
     lastCheckedAt?: number;
+    creatorWallet?: string;
 }
 declare class PositionManager {
     private positions;

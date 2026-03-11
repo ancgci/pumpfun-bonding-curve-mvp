@@ -101,7 +101,7 @@ Você precisa de **2 terminais separados**:
 
 No **novo terminal**, execute:
 ```bash
-cd dashboard
+cd dashboard-api
 ```
 
 Confirme que está na pasta certa:
@@ -200,7 +200,7 @@ taskkill /PID <numero_pid> /F
 ```
 
 **Solução 2 - Mudar porta:**
-Edite `dashboard/server.ts` linha 7:
+Edite `dashboard-api/server.ts` linha 7:
 ```typescript
 const PORT = 3002; // Trocar para 3002
 ```
@@ -355,7 +355,7 @@ CB_RESET_HOURS=24                 # Reset após 24h
 
 ### Dashboard não carrega
 **Erro:** `ECONNREFUSED localhost:3001`
-- ✅ Verifique se `npx ts-node dashboard/server.ts` está rodando
+- ✅ Verifique se `npx ts-node dashboard-api/server.ts` está rodando
 - ✅ Verifique porta 3001 não está ocupada
 
 ### Circuit Breaker ativado inesperadamente

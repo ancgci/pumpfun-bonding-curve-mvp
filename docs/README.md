@@ -78,7 +78,7 @@ npm start
 
 **Dashboard (Terminal separado):**
 ```bash
-cd dashboard
+cd dashboard-api
 npx ts-node server.ts
 # Acesse: http://localhost:3001
 ```
@@ -113,11 +113,12 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 
 ## 📖 Documentação
 
-- [Arquitetura](docs/ARCHITECTURE.md) - Visão técnica do sistema
-- [Guia de Uso](docs/USAGE.md) - Como usar todas as features
-- [API do Dashboard](docs/API.md) - Endpoints REST
-- [Configuração](docs/CONFIGURATION.md) - Todas as variáveis de ambiente
-- [Changelog](docs/CHANGELOG.md) - Histórico de melhorias
+- [Arquitetura](ARCHITECTURE.md) - Visão técnica do sistema
+- [Guia de Uso](USAGE.md) - Como usar todas as features
+- [VPS & Deploy](VPS_DEPLOYMENT.md) - Gerenciamento, acesso remoto e atualização da VPS
+- [API do Dashboard](API.md) - Endpoints REST
+- [Configuração](CONFIGURATION.md) - Todas as variáveis de ambiente
+- [Changelog](CHANGELOG.md) - Histórico de melhorias
 
 ## 🛡️ Segurança
 

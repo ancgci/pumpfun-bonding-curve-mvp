@@ -4,38 +4,35 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.rpcPool = void 0;
+require("dotenv/config");
 const web3_js_1 = require("@solana/web3.js");
 const logger_1 = __importDefault(require("./logger"));
-const rpcConfigs = [
-    {
-        url: process.env.RPC_URL || "https://mainnet.helius-rpc.com/?api-key=",
-        name: "Helius",
-        priority: 1,
-        latency: 0,
-        isHealthy: true,
-    },
-    {
-        url: process.env.RPC_URL_FALLBACK_1 || "https://api.mainnet-beta.solana.com",
-        name: "Solana Public",
-        priority: 2,
-        latency: 0,
-        isHealthy: true,
-    },
-    {
-        url: process.env.RPC_URL_FALLBACK_2 || "https://api.mainnet-beta.solana.com",
-        name: "Fallback 2",
-        priority: 3,
-        latency: 0,
-        isHealthy: true,
-    },
-];
 class RPCPool {
     rpcs;
     currentConnection = null;
     currentRPC = null;
     constructor() {
-        this.rpcs = rpcConfigs.filter(rpc => rpc.url && rpc.url.length > 0);
+        const fallbacks = (process.env.RPC_FALLBACK_LIST || "").split(",").filter(u => u.length > 10);
+        this.rpcs = [
+            {
+                url: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+                name: "Primary RPC",
+                priority: 1,
+                latency: 0,
+                isHealthy: true,
+            },
+            ...fallbacks.map((url, i) => ({
+                url,
+                name: `Fallback ${i + 1}`,
+                priority: i + 2,
+                latency: 0,
+                isHealthy: true,
+            }))
+        ];
         logger_1.default.info(`🔗 RPC Pool inicializado com ${this.rpcs.length} endpoints`);
+        if (process.env.WS_URL) {
+            logger_1.default.info(`🌐 WebSocket primário configurado: ${process.env.WS_URL.substring(0, 20)}...`);
+        }
     }
     async getBestConnection() {
         if (this.currentConnection && this.currentRPC?.isHealthy) {

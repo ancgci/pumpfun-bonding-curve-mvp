@@ -29,6 +29,7 @@ import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from 
 import { rebuildMetricsFromFile } from "./utils/simulationEngine";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
 import { recordPriceSample } from "./utils/volatilityMonitor";
+import { recordOrganicityTrade, loadOrganicityFromDisk, saveOrganicityToDisk } from "./utils/organicityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
 import { CONFIG, validateConfig, getRuntimeConfig } from "./utils/config";
 import { positionManager } from "./utils/positionManager";
@@ -148,6 +149,14 @@ if (telegramEnabled) {
 
 // Rebuild simulation metrics from existing trades history on startup
 rebuildMetricsFromFile().catch(err => logger.warn(`⚠️ Could not rebuild simulation metrics: ${err.message}`));
+
+// Sprint 3 — Carregar histórico de organicidade
+loadOrganicityFromDisk();
+
+// Intervalo de salvamento (5 min)
+setInterval(() => {
+  saveOrganicityToDisk();
+}, 300_000);
 
 // Initialize the Dip Waitlist Monitor
 dipMonitor.initialize(async (mint: string) => {
@@ -693,6 +702,20 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     }
 
     recordPriceSample(tOutput.mint, currentPrice);
+
+    // ── Camada de Organicidade ─────────────────────────────────
+    // Coleta dados estruturais de CADA trade para detecção de
+    // tokens artificiais (staircase bots, subida morta, etc.)
+    if (tOutput.user && (tOutput.type === "BUY" || tOutput.type === "SELL")) {
+      recordOrganicityTrade(
+        tOutput.mint,
+        tOutput.user,
+        tOutput.type as "BUY" | "SELL",
+        Number(tOutput.solAmount) || 0,
+        currentPrice,
+        Number(progress)
+      );
+    }
 
     // ── Risk Engine Analysis ──
     let riskSection = "";

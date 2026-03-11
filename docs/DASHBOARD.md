@@ -13,7 +13,7 @@ Ele substitui o dashboard legado (HTML/JS) com uma UX premium, componentes reuti
 
 ```bash
 # Na raiz do projeto
-cd dashboard-new
+cd dashboard-api
 npm install
 npm run dev
 ```
@@ -101,7 +101,7 @@ O dashboard consome os seguintes endpoints do backend (`localhost:3001`):
 ## 📁 Estrutura de Arquivos
 
 ```
-dashboard-new/
+dashboard/
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json

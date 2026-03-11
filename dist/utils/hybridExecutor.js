@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.STOP_LOSS_PERCENT = void 0;
+exports.checkExitConditions = checkExitConditions;
+exports.checkTakeProfitStopLoss = checkTakeProfitStopLoss;
 exports.hasActiveTrade = hasActiveTrade;
 exports.isTradeTypeAllowed = isTradeTypeAllowed;
 exports.buyOnPumpFun = buyOnPumpFun;
@@ -16,14 +17,15 @@ const api_1 = require("@jup-ag/api");
 const spl_token_1 = require("@solana/spl-token");
 const logger_1 = __importDefault(require("./logger"));
 const performanceMonitor_1 = require("./performanceMonitor");
+const volatilityMonitor_1 = require("./volatilityMonitor");
 const jitoManager_1 = require("./jitoManager");
 const circuitBreaker_1 = require("./circuitBreaker");
 const rpcPool_1 = require("./rpcPool");
 const gasPriceOracle_1 = require("./gasPriceOracle");
 const slippageCalculator_1 = require("./slippageCalculator");
-const riskEngine_1 = require("./riskEngine");
-const riskConfig_1 = require("./riskConfig");
 const positionManager_1 = require("./positionManager");
+const config_1 = require("./config");
+const broadcastOptimizer_1 = require("./broadcastOptimizer");
 async function getAssociatedTokenAddress(mint, owner, allowOwnerOffCurve = false, programId = spl_token_1.TOKEN_PROGRAM_ID, associatedTokenProgramId = spl_token_1.ASSOCIATED_TOKEN_PROGRAM_ID) {
     const [address] = await web3_js_1.PublicKey.findProgramAddress([owner.toBuffer(), programId.toBuffer(), mint.toBuffer()], associatedTokenProgramId);
     return address;
@@ -32,28 +34,15 @@ logger_1.default.info("Loading environment configuration");
 logger_1.default.info(`SECRET_KEY_JSON present: ${!!process.env.SECRET_KEY_JSON}`);
 logger_1.default.info(`PUMPFUN_PROGRAM_ID: ${process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}`);
 logger_1.default.info(`RPC configured: ${!!process.env.RPC_URL}`);
-const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 const PUMPFUN_PROGRAM_ID = new web3_js_1.PublicKey(process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
-const BUY_AMOUNT_SOL = parseFloat(process.env.BUY_AMOUNT_SOL || "0.1");
-const TAKE_PROFIT_PERCENT = parseFloat(process.env.TAKE_PROFIT_PERCENT || "20");
-const STOP_LOSS_PERCENT = parseFloat(process.env.STOP_LOSS_PERCENT || "25");
-exports.STOP_LOSS_PERCENT = STOP_LOSS_PERCENT;
-const DEFAULT_SLIPPAGE_BPS = parseInt(process.env.SLIPPAGE_BPS || "50");
-const AUTO_BUY_ENABLED = process.env.AUTO_BUY_ENABLED === "true";
-logger_1.default.info(`AUTO_BUY_ENABLED value: ${AUTO_BUY_ENABLED}`);
-const AUTO_SELL_TAKE_PROFIT = process.env.AUTO_SELL_TAKE_PROFIT !== "false";
-const AUTO_SELL_STOP_LOSS = process.env.AUTO_SELL_STOP_LOSS !== "false";
-const SELL_PERCENT_ON_TP = parseInt(process.env.SELL_PERCENT_ON_TP || "100", 10);
-const SINGLE_TRADE_MODE = process.env.SINGLE_TRADE_MODE === "true";
-const TRADE_TYPE_FILTER = process.env.TRADE_TYPE_FILTER || "BOTH";
-const legacyConnection = new web3_js_1.Connection(RPC_URL, "confirmed");
 async function getConnection() {
+    const currentConfig = (0, config_1.getRuntimeConfig)();
     try {
         return await rpcPool_1.rpcPool.getBestConnection();
     }
     catch (error) {
         logger_1.default.warn("⚠️  RPC Pool falhou, usando conexão legada:", error.message);
-        return legacyConnection;
+        return new web3_js_1.Connection(currentConfig.RPC_URL, "confirmed");
     }
 }
 const JUPITER_API_BASE = process.env.JUPITER_API_BASE || "https://quote-api.jup.ag/v6";
@@ -105,11 +94,33 @@ async function getTokenPrice(tokenMint) {
         return null;
     }
 }
+function checkExitConditions(currentPrice, highWaterMark, entryPrice, takeProfitPercent, stopLossPercent, trailingStopPercent = 0, whaleDumpPercent = 0, atr = null, atrMultiplierTp = 3.0, atrMultiplierSl = 1.5) {
+    const profitLossPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+    let status = {
+        shouldExit: false,
+        reason: "",
+        profitLossPercent,
+        newHighWaterMark: Math.max(highWaterMark, currentPrice),
+        newStopLossPrice: entryPrice * (1 - stopLossPercent / 100)
+    };
+    let finalTpPercent = takeProfitPercent;
+    if (atr && atrMultiplierTp > 0) {
+        const atrTpPercent = (atr * atrMultiplierTp / entryPrice) * 100;
+        finalTpPercent = Math.max(takeProfitPercent, atrTpPercent);
+    }
+    if (profitLossPercent >= finalTpPercent) {
+        const isVolAdjusted = finalTpPercent > takeProfitPercent;
+        return { ...status, shouldExit: true, reason: isVolAdjusted ? `Volatility-Adjusted TP Hit (${finalTpPercent.toFixed(1)}%)` : "Take Profit Hit" };
+    }
+    return status;
+}
 function checkTakeProfitStopLoss(currentPrice, buyPrice, takeProfitPercent, stopLossPercent) {
-    const profitLossPercent = ((currentPrice - buyPrice) / buyPrice) * 100;
-    const shouldTakeProfit = profitLossPercent >= takeProfitPercent;
-    const shouldStopLoss = profitLossPercent <= -stopLossPercent;
-    return { shouldTakeProfit, shouldStopLoss, profitLossPercent };
+    const { shouldExit, reason, profitLossPercent: pl } = checkExitConditions(currentPrice, buyPrice, buyPrice, takeProfitPercent, stopLossPercent);
+    return {
+        shouldTakeProfit: shouldExit && reason === "Take Profit Hit",
+        shouldStopLoss: shouldExit && reason !== "Take Profit Hit",
+        profitLossPercent: pl
+    };
 }
 let keypair = null;
 logger_1.default.info(`SECRET_KEY_JSON present: ${!!process.env.SECRET_KEY_JSON}`);
@@ -136,13 +147,16 @@ else {
 }
 let activeTrade = false;
 function hasActiveTrade() {
-    if (!SINGLE_TRADE_MODE) {
+    const currentConfig = (0, config_1.getRuntimeConfig)();
+    if (!currentConfig.SINGLE_TRADE_MODE) {
         return false;
     }
     const activePositions = positionManager_1.positionManager.getActivePositions();
     return activePositions.length > 0;
 }
 function isTradeTypeAllowed(tradeType) {
+    const currentConfig = (0, config_1.getRuntimeConfig)();
+    const TRADE_TYPE_FILTER = currentConfig.TRADE_TYPE_FILTER || "BOTH";
     if (TRADE_TYPE_FILTER === "BOTH") {
         return true;
     }
@@ -162,6 +176,8 @@ async function buyOnPumpFun(tokenMint, amountSol) {
         const bondingCurve = web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mintPublicKey.toBuffer()], PUMPFUN_PROGRAM_ID)[0];
         const associatedBondingCurve = await getAssociatedTokenAddress(mintPublicKey, bondingCurve, true);
         const associatedUser = await getAssociatedTokenAddress(mintPublicKey, keypair.publicKey);
+        const currentConfig = (0, config_1.getRuntimeConfig)();
+        const DEFAULT_SLIPPAGE_BPS = currentConfig.SLIPPAGE_BPS || 50;
         const slippageBps = await (0, slippageCalculator_1.getCachedOptimalSlippage)(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
         const maxSolCost = Math.floor(amountLamports * (1 + slippageBps / 10000));
         const buyInstruction = new web3_js_1.TransactionInstruction({
@@ -227,6 +243,8 @@ async function sellOnPumpFun(tokenMint, amountToken) {
     logger_1.default.info(`📉 Iniciando venda do token ${tokenMint} na PumpFun`);
     try {
         const connection = await getConnection();
+        const currentConfig = (0, config_1.getRuntimeConfig)();
+        const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
         const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
         const amountToSell = Math.floor(amountToken * sellPercentDecimal);
         const amountToKeep = amountToken - amountToSell;
@@ -243,7 +261,7 @@ async function sellOnPumpFun(tokenMint, amountToken) {
         const bondingCurve = web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mintPublicKey.toBuffer()], PUMPFUN_PROGRAM_ID)[0];
         const associatedBondingCurve = await getAssociatedTokenAddress(mintPublicKey, bondingCurve, true);
         const associatedUser = await getAssociatedTokenAddress(mintPublicKey, keypair.publicKey);
-        const slippageBps = await (0, slippageCalculator_1.getCachedOptimalSlippage)(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+        const slippageBps = await (0, slippageCalculator_1.getCachedOptimalSlippage)(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
         const slippageMultiplier = 1 - (slippageBps / 10000);
         const minSolOutput = Math.floor(amount * slippageMultiplier);
         const sellInstruction = new web3_js_1.TransactionInstruction({
@@ -307,6 +325,8 @@ async function sellViaJupiter(tokenMint, amountToken) {
     }
     logger_1.default.info(`🔁 Iniciando venda do token ${tokenMint} via Jupiter`);
     try {
+        const currentConfig = (0, config_1.getRuntimeConfig)();
+        const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
         const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
         const amountToSell = Math.floor(amountToken * sellPercentDecimal);
         const amountToKeep = amountToken - amountToSell;
@@ -320,7 +340,7 @@ async function sellViaJupiter(tokenMint, amountToken) {
         const mintPublicKey = new web3_js_1.PublicKey(tokenMint);
         const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, keypair.publicKey);
         const connection = await getConnection();
-        const slippageBps = await (0, slippageCalculator_1.getCachedOptimalSlippage)(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+        const slippageBps = await (0, slippageCalculator_1.getCachedOptimalSlippage)(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
         const quote = await withRetry(async () => {
             (0, performanceMonitor_1.recordApiCall)();
             return await jupiterApi.quoteGet({
@@ -393,132 +413,92 @@ async function sellViaJupiter(tokenMint, amountToken) {
         throw error;
     }
 }
-async function executeHybridTrade(tokenData, tradeType = "BUY") {
+async function executeHybridTrade(tokenData, tradeType = "BUY", force = false) {
+    const currentConfig = (0, config_1.getRuntimeConfig)();
+    if (currentConfig.EMERGENCY_STOP_ACTIVE) {
+        logger_1.default.warn("🛑 [EXECUTOR] EMERGENCY STOP ATIVO! Bloqueando execução do trade.");
+        return;
+    }
     try {
-        logger_1.default.info(`🔄 Executando trade híbrido para token ${tokenData.mint} (Tipo: ${tradeType})`);
-        if (!AUTO_BUY_ENABLED) {
-            logger_1.default.info(`ℹ️  Compra automática desativada. AUTO_BUY_ENABLED=${process.env.AUTO_BUY_ENABLED}`);
+        logger_1.default.info(`🔄 Executando trade híbrido para token ${tokenData.mint} (Tipo: ${tradeType}, Force: ${force})`);
+        const BUY_AMOUNT_SOL = currentConfig.BUY_AMOUNT_SOL || 0.05;
+        const AUTO_BUY_ENABLED = currentConfig.AUTO_BUY_ENABLED;
+        const SINGLE_TRADE_MODE = currentConfig.SINGLE_TRADE_MODE;
+        const TRADE_TYPE_FILTER = currentConfig.TRADE_TYPE_FILTER || "BOTH";
+        const TAKE_PROFIT_PERCENT = currentConfig.TAKE_PROFIT_PERCENT || 100;
+        const STOP_LOSS_PERCENT = currentConfig.STOP_LOSS_PERCENT || 30;
+        if (!AUTO_BUY_ENABLED && !force) {
+            logger_1.default.info(`ℹ️  Compra automática desativada. AUTO_BUY_ENABLED=${AUTO_BUY_ENABLED}`);
             return;
         }
-        if (!circuitBreaker_1.circuitBreaker.canTrade()) {
+        if (!circuitBreaker_1.circuitBreaker.canTrade() && !force) {
             return;
         }
-        if (!isTradeTypeAllowed(tradeType)) {
-            logger_1.default.info(`⚠️  Tipo de trade ${tradeType} não permitido. Filtro configurado para ${TRADE_TYPE_FILTER}`);
+        if (!isTradeTypeAllowed(tradeType) && !force) {
+            logger_1.default.info(`⚠️  Tipo de trade ${tradeType} não permitido.`);
             return;
         }
-        if (SINGLE_TRADE_MODE && hasActiveTrade()) {
-            logger_1.default.info(`⚠️  Trade único habilitado e já existe uma posição aberta. Ignorando trade para token ${tokenData.mint}`);
-            return;
-        }
-        if (tradeType === "BUY" && tokenData.mode === "CURVE" &&
-            tokenData.curvePercent >= 97.7 &&
-            tokenData.curvePercent < 100) {
-            let tradeSolAmount = BUY_AMOUNT_SOL;
-            if (riskConfig_1.RISK_CONFIG.enabled) {
-                try {
-                    const riskAnalysis = await (0, riskEngine_1.analyzeToken)(tokenData.mint);
-                    if (riskAnalysis.decision === "BLOCK") {
-                        logger_1.default.warn(`🚫 [RiskEngine] BLOQUEADO: ${tokenData.mint} score=${riskAnalysis.score}/100`);
-                        logger_1.default.warn(`   Razões: ${riskAnalysis.reasons.map(r => r.detail).join("; ")}`);
-                        if (riskAnalysis.flags.HONEYPOT_OP) {
-                            circuitBreaker_1.circuitBreaker.recordHoneypot(tokenData.mint);
-                            circuitBreaker_1.circuitBreaker.recordRugSignal();
-                        }
-                        return;
-                    }
-                    if (riskAnalysis.decision === "ALLOW_ALERT") {
-                        const reduction = riskConfig_1.RISK_CONFIG.trading.tradeSizeReductionMed / 100;
-                        tradeSolAmount = BUY_AMOUNT_SOL * (1 - reduction);
-                        logger_1.default.info(`⚠️  [RiskEngine] MED risk (${riskAnalysis.score}/100) — trade reduzido para ${tradeSolAmount} SOL`);
-                    }
-                    else {
-                        logger_1.default.info(`✅ [RiskEngine] LOW risk (${riskAnalysis.score}/100) — trade aprovado`);
-                    }
+        if (tradeType === "BUY") {
+            const isDiscoveryBuy = tokenData.mode === "CURVE" && tokenData.curvePercent >= 97.7;
+            if (isDiscoveryBuy || force) {
+                if (SINGLE_TRADE_MODE && hasActiveTrade() && !force) {
+                    logger_1.default.info(`⚠️  Trade único habilitado e já existe uma posição aberta.`);
+                    return;
                 }
-                catch (riskError) {
-                    logger_1.default.warn(`⚠️  [RiskEngine] Análise falhou, prosseguindo com trade padrão: ${riskError.message}`);
+                let tradeSolAmount = BUY_AMOUNT_SOL;
+                if (force) {
+                    tradeSolAmount = currentConfig.COPY_TRADE_AMOUNT_SOL || tradeSolAmount;
                 }
+                logger_1.default.info(`💰 Comprando token ${tokenData.mint} (Amount: ${tradeSolAmount} SOL, Force: ${force})`);
+                const signature = await buyOnPumpFun(tokenData.mint, tradeSolAmount);
+                const position = {
+                    mint: tokenData.mint,
+                    bondingCurve: tokenData.bondingCurve,
+                    creatorWallet: tokenData.creatorWallet,
+                    buySignature: signature,
+                    buySolAmount: tradeSolAmount,
+                    buyTokenAmount: 0,
+                    buyTimestamp: Date.now(),
+                    takeProfit: TAKE_PROFIT_PERCENT,
+                    stopLoss: STOP_LOSS_PERCENT,
+                    isActive: true
+                };
+                await positionManager_1.positionManager.savePosition(position);
+                circuitBreaker_1.circuitBreaker.recordSuccess(0);
+                (0, broadcastOptimizer_1.notifyDashboardUpdate)();
             }
-            logger_1.default.info(`💰 Comprando token ${tokenData.mint} na curva (${tokenData.curvePercent}%)`);
-            const signature = await buyOnPumpFun(tokenData.mint, tradeSolAmount);
-            const position = {
-                mint: tokenData.mint,
-                bondingCurve: tokenData.bondingCurve,
-                buySignature: signature,
-                buySolAmount: BUY_AMOUNT_SOL,
-                buyTokenAmount: 0,
-                buyTimestamp: Date.now(),
-                takeProfit: TAKE_PROFIT_PERCENT,
-                stopLoss: STOP_LOSS_PERCENT,
-                isActive: true
-            };
-            await positionManager_1.positionManager.savePosition(position);
-            circuitBreaker_1.circuitBreaker.recordSuccess(0);
-            logger_1.default.info(`📊 COMPRA REALIZADA PARA TOKEN ${tokenData.mint}`);
-            logger_1.default.info(`   Valor investido: ${BUY_AMOUNT_SOL} SOL`);
-            logger_1.default.info(`   Take Profit configurado: ${TAKE_PROFIT_PERCENT}%`);
-            logger_1.default.info(`   Stop Loss configurado: -${STOP_LOSS_PERCENT}%`);
-            logger_1.default.info(`   Timestamp da compra: ${new Date(position.buyTimestamp).toISOString()}`);
-            logger_1.default.info(`📌 Posição registrada para token ${tokenData.mint}`);
         }
         if (tradeType === "SELL") {
             const position = positionManager_1.positionManager.getPosition(tokenData.mint);
-            if (position && position.isActive && position.buyTokenAmount > 0) {
+            if (position && position.isActive) {
                 const priceInfo = await getTokenPrice(tokenData.mint);
-                if (!priceInfo) {
-                    logger_1.default.debug(`Nao foi possivel obter preco para ${tokenData.mint}, pulando verificacao TP/SL`);
+                if (!priceInfo && !force) {
+                    logger_1.default.debug(`Não foi possível obter preço para ${tokenData.mint}, pulando verificação`);
                     return;
                 }
-                const currentPrice = priceInfo.pricePerToken;
-                const buyPrice = position.buySolAmount / (position.buyTokenAmount / 1e9);
-                const { shouldTakeProfit, shouldStopLoss, profitLossPercent } = checkTakeProfitStopLoss(currentPrice, buyPrice, position.takeProfit, position.stopLoss);
-                logger_1.default.info(`📊 MONITORAMENTO DE POSICAO PARA TOKEN ${tokenData.mint}`);
-                logger_1.default.info(`   Valor investido: ${position.buySolAmount} SOL`);
-                logger_1.default.info(`   Preco atual: ${currentPrice.toFixed(9)} SOL`);
-                logger_1.default.info(`   Preco de compra: ${buyPrice.toFixed(9)} SOL`);
-                logger_1.default.info(`   Lucro/Prejuizo atual: ${profitLossPercent.toFixed(2)}%`);
-                logger_1.default.info(`   Take Profit configurado: ${position.takeProfit}%`);
-                logger_1.default.info(`   Stop Loss configurado: -${position.stopLoss}%`);
-                if (shouldTakeProfit && AUTO_SELL_TAKE_PROFIT) {
-                    logger_1.default.info(`📈 TAKE PROFIT ACIONADO para token ${tokenData.mint}`);
-                    logger_1.default.info(`   Valor investido: ${position.buySolAmount} SOL`);
-                    logger_1.default.info(`   Lucro esperado: ${position.takeProfit}%`);
+                const currentPrice = priceInfo?.pricePerToken || 0;
+                const buyPrice = position.buySolAmount / ((position.buyTokenAmount || 1) / 1e9);
+                const atr = (0, volatilityMonitor_1.getATR)(tokenData.mint);
+                const exitResult = checkExitConditions(currentPrice || buyPrice, position.highWaterMark || buyPrice, buyPrice, position.takeProfit || TAKE_PROFIT_PERCENT, position.stopLoss || STOP_LOSS_PERCENT, currentConfig.TRAILING_STOP_PERCENT || 0, currentConfig.WHALE_DUMP_PERCENT || 30, currentConfig.VOLATILITY_ADJUSTED_TP_SL ? atr : null, currentConfig.ATR_MULTIPLIER_TP || 3.0, currentConfig.ATR_MULTIPLIER_SL || 1.5);
+                if (exitResult.shouldExit || force) {
+                    const sellReason = force ? "Forced (Mirror Sell)" : exitResult.reason;
+                    logger_1.default.info(`🚨 [EXECUTOR] Executing SELL for ${tokenData.mint}. Reason: ${sellReason}`);
+                    let signature;
                     if (tokenData.mode === "CURVE") {
-                        logger_1.default.info(`💰 Take Profit atingido para token ${tokenData.mint} (CURVE)`);
-                        const signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
-                        position.isActive = false;
-                        logger_1.default.info(`✅ Posição fechada via PumpFun: ${signature}`);
+                        signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
                     }
-                    else if (tokenData.mode === "DEX") {
-                        logger_1.default.info(`💰 Take Profit atingido para token ${tokenData.mint} (DEX)`);
-                        const signature = await sellViaJupiter(tokenData.mint, position.buyTokenAmount);
-                        position.isActive = false;
-                        logger_1.default.info(`✅ Posição fechada via Jupiter: ${signature}`);
+                    else {
+                        signature = await sellViaJupiter(tokenData.mint, position.buyTokenAmount);
                     }
-                }
-                else if (shouldStopLoss && AUTO_SELL_STOP_LOSS) {
-                    logger_1.default.info(`📉 STOP LOSS ACIONADO para token ${tokenData.mint}`);
-                    logger_1.default.info(`   Valor investido: ${position.buySolAmount} SOL`);
-                    logger_1.default.info(`   Prejuízo esperado: -${position.stopLoss}%`);
-                    if (tokenData.mode === "CURVE") {
-                        logger_1.default.info(`❌ Stop Loss atingido para token ${tokenData.mint} (CURVE)`);
-                        const signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
-                        position.isActive = false;
-                        logger_1.default.info(`✅ Posição fechada via PumpFun: ${signature}`);
-                    }
-                    else if (tokenData.mode === "DEX") {
-                        logger_1.default.info(`❌ Stop Loss atingido para token ${tokenData.mint} (DEX)`);
-                        const signature = await sellViaJupiter(tokenData.mint, position.buyTokenAmount);
-                        position.isActive = false;
-                        logger_1.default.info(`✅ Posição fechada via Jupiter: ${signature}`);
-                    }
-                }
-                if (!position.isActive) {
+                    logger_1.default.info(`✅ Posição fechada: ${signature}`);
                     await positionManager_1.positionManager.closePosition(tokenData.mint);
+                    (0, broadcastOptimizer_1.notifyDashboardUpdate)();
                 }
                 else {
-                    await positionManager_1.positionManager.updatePosition(tokenData.mint, position);
+                    if (exitResult.newHighWaterMark > (position.highWaterMark || 0)) {
+                        position.highWaterMark = exitResult.newHighWaterMark;
+                        await positionManager_1.positionManager.updatePosition(tokenData.mint, position);
+                    }
                 }
             }
         }
@@ -527,31 +507,15 @@ async function executeHybridTrade(tokenData, tradeType = "BUY") {
         const errorMsg = error?.message || String(error);
         logger_1.default.error(`❌ Erro ao executar trade híbrido para token ${tokenData.mint}:`, error);
         const isRpcError = [
-            'failed to get info',
-            'failed to fetch',
-            'ECONNREFUSED',
-            'ETIMEDOUT',
-            'ENOTFOUND',
-            'socket hang up',
-            'getaddrinfo',
-            'Network request failed',
-            'timeout',
-            'rate limit',
-            '429',
-            '503',
-            '502',
-            'Server responded with',
-            'could not find account',
-            'AccountNotFound',
-            'Invalid param',
-            'block height exceeded',
-            'Blockhash not found',
+            'failed to get info', 'failed to fetch', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND',
+            'socket hang up', 'getaddrinfo', 'Network request failed', 'timeout', 'rate limit',
+            '429', '503', '502', 'Server responded with', 'could not find account',
+            'AccountNotFound', 'Invalid param', 'block height exceeded', 'Blockhash not found'
         ].some(pattern => errorMsg.toLowerCase().includes(pattern.toLowerCase()));
         if (isRpcError) {
-            logger_1.default.warn(`⚠️  Erro de RPC/rede (não conta para Circuit Breaker): ${errorMsg.substring(0, 100)}`);
+            logger_1.default.warn(`⚠️ Erro de RPC/rede: ${errorMsg.substring(0, 100)}`);
         }
         else {
-            logger_1.default.error(`🚨 Erro de trading registrado no Circuit Breaker: ${errorMsg.substring(0, 100)}`);
             circuitBreaker_1.circuitBreaker.recordFailure(error);
         }
     }

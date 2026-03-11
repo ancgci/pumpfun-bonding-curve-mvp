@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 
 // Database path relative to the project root
-const DB_DIR = path.join(__dirname, '../dashboard/db');
+const DB_DIR = path.join(__dirname, '../dashboard-api/db');
 const DB_PATH = path.join(DB_DIR, 'pnl_history.db');
 
 // Ensure directory exists

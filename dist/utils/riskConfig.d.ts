@@ -46,6 +46,13 @@ export declare const RISK_CONFIG: {
     trading: {
         tradeSizeReductionMed: number;
     };
+    taWeights: {
+        rsiHealthy: number;
+        rsiOversoldBullish: number;
+        macdBullish: number;
+        emaBullish: number;
+        maxDiscount: number;
+    };
 };
 export type RiskDecision = "ALLOW_TRADE" | "ALLOW_ALERT" | "BLOCK";
 export interface RiskReason {
@@ -84,6 +91,8 @@ export interface RiskMetrics {
     buySellRatio: number;
     priceImpactPercent: number;
     tokenAgeHours: number;
+    creatorAddr?: string;
+    priceUsd?: number;
 }
 export interface RiskAnalysis {
     score: number;
@@ -91,6 +100,8 @@ export interface RiskAnalysis {
     flags: RiskFlags;
     metrics: RiskMetrics;
     reasons: RiskReason[];
+    taDiscount?: number;
+    taReasons?: RiskReason[];
     analyzedAt: number;
 }
 export declare function getDefaultFlags(): RiskFlags;

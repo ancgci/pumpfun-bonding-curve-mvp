@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DB_PATH = path.join(__dirname, 'dashboard/db/pnl_history.db');
+const DB_PATH = path.join(__dirname, 'dashboard-api/db/pnl_history.db');
 
 if (!fs.existsSync(DB_PATH)) {
     console.error("Database file not found at:", DB_PATH);

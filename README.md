@@ -18,6 +18,7 @@ All project documentation is in the `/docs` folder:
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system: create, import, and manage agent skills
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
+- **[VPS_DEPLOYMENT](docs/VPS_DEPLOYMENT.md)** - Passo a passo para acessar e atualizar a VPS
 - **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - High-res Technical Analysis scalping guide
 - **[QA](docs/QA.md)** - QAgent testing infrastructure
 - **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
@@ -39,8 +40,7 @@ npm run start:all
 ```
 
 **Result:** Bot and Dashboard start together.
-- Legacy Dashboard: http://localhost:3001
-- React Dashboard V2: http://localhost:5174 (run `cd dashboard-new && npm run dev`)
+- React Dashboard V2: http://localhost:5174 (run `cd dashboard && npm run dev`)
 
 ---
 
@@ -85,14 +85,28 @@ npm run test:ai-agent:full
 npm start
 ```
 
-**Dashboard (separate terminal):**
+**Dashboard API (separate terminal):**
 ```bash
-npm run start:dashboard
+npm run start:dashboard-api
 npm run start:all
 ```
 
 
-## 🆕 Latest Changes (Mar 9, 2026)
+## 🆕 Latest Changes (Mar 11, 2026)
+
+### 📈 Análise Técnica V2 (High-Res Scalper)
+A análise técnica foi completamente modernizada e movida para resolução de 1 segundo (High-Resolution), focada no ecossistema pump.fun.
+
+| Feature | Description |
+|---------|-------------|
+| **1-Second Buckets**| Pipeline de dados e indicadores calculados a cada segundo (`periodStore1s`). |
+| **8 Novos Indicadores**| EMA 5/9/13, MACD Acelerado (4,9,3), RSI de curto período (7), ATR, Donchian Channel, ROC, Volume Burst Relativo e VWAP Rolling. |
+| **Score de Confluência**| Engine de pontuação (`technicalScore.ts`) de 0 a 100 baseada em 4 blocos: Tendência Micro, Impulso, Confirmação e Penalidades. Sizing dinâmico por score. |
+| **Pré/Pós Validação LLM**| Devido à latência da LLM, o score bloqueia ativamente os tokens **no exato segundo** pré-compra. Entradas recusadas pós-LLM vão para fila do DipMonitor. |
+| **14 Smart Blocks**| Filtros "HARD" e "SOFT" para evitar falsos rompimentos, candles muito esticados (stretch multiplier), e spikes de RSI ou ATR extremos. |
+| **9 Condições de Saída**| Saída por Stop Loss dinâmico (com Trailing), TP Parcial 50% (+breakeven automático), Reversão de tendência, Timed Stop (120s) ou Falha em Follow-Through. |
+
+**Arquivos-Chave:** `utils/volatilityMonitor.ts`, `utils/technicalScore.ts`, `utils/entryBlocker.ts`, `utils/positionManagerV2.ts`, `agentOrchestrator.ts`. Mais detalhes em `docs/TECHNICAL_ANALYSIS_V2.md`.
 
 ### 🎨 Dashboard V2 — React/Vite Overhaul
 O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
@@ -114,7 +128,7 @@ O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
 | **Auto Regression** | Suite completa valida layout, interações, API health e zero errors. |
 | **Rich Reports** | Gera relatórios HTML visuais em `playwright-report/` para os testes de UI/Regressão. |
 
-**Arquivos:** `dashboard-new/`, `.agents/agents/QAgent/`, `package.json`
+**Arquivos:** `dashboard/`, `.agents/agents/QAgent/`, `package.json`
 
 ### 🎯 Dip Sniper & Pre-Execution Validation
 | Feature | Description |
@@ -146,7 +160,7 @@ O bot agora opera com uma equipe de especialistas trabalhando em paralelo e um d
 | **Scalper 5s (Dip & Rip)** | Agente especializado em HFT rodando em janelas de 5 segundos para precisão cirúrgica. |
 | **Risk Guardian** | Agente de risco dedicado que bloqueia transações suspeitas antes mesmo da análise estratégica. |
 
-**Arquivos:** `.agents/orchestrator/`, `.agents/agents/`, `dashboard/server.ts`, `.agents/skills/custom/`.
+**Arquivos:** `.agents/orchestrator/`, `.agents/agents/`, `dashboard-api/server.ts`, `.agents/skills/custom/`.
 
 ---
 

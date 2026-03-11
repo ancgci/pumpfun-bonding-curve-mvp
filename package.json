@@ -6,8 +6,8 @@
   "scripts": {
     "prepare": "husky",
     "start": "NODE_OPTIONS='--max-old-space-size=8192' npx ts-node index.ts",
-    "start:dashboard-api": "cd dashboard && npx ts-node server.ts",
-    "start:dashboard-ui": "cd dashboard-new && npm run dev",
+    "start:dashboard-api": "cd dashboard-api && npx ts-node server.ts",
+    "start:dashboard-ui": "cd dashboard && npm run dev",
     "start:all": "concurrently -n \"BOT,API,UI\" -c \"blue,green,magenta\" \"npm start\" \"npm run start:dashboard-api\" \"npm run start:dashboard-ui\"",
     "build": "npx tsc",
     "health": "npx ts-node healthCheck.ts",
@@ -46,7 +46,11 @@
     "qa:api": "jest --config jest.config.js .agents/agents/QAgent/tests/api",
     "qa:e2e": "npx playwright test .agents/agents/QAgent/tests/e2e",
     "qa:regression": "npx playwright test .agents/agents/QAgent/tests/regression",
-    "qa:full": "npm run qa:unit && npm run qa:api && npm run qa:e2e && npm run qa:regression"
+    "qa:full": "npm run qa:unit && npm run qa:api && npm run qa:e2e && npm run qa:regression",
+    "start:shadow": "ORGANICITY_SHADOW_MODE=true NODE_OPTIONS='--max-old-space-size=8192' npx ts-node index.ts",
+    "organicity:report": "npx ts-node tools/organicity-report.ts",
+    "organicity:report:fp": "npx ts-node tools/organicity-report.ts -- --fp",
+    "organicity:clear": "npx ts-node tools/organicity-report.ts -- --clear"
   },
   "author": "",
   "license": "ISC",

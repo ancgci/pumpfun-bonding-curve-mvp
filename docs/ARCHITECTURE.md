@@ -206,7 +206,7 @@ Liquidez > 300k SOL → 0.3% slippage (máxima economia)
 ## Dashboard
 
 ### Backend (Express)
-**Arquivo:** `dashboard/server.ts`
+**Arquivo:** `dashboard-api/server.ts`
 
 **Endpoints:**
 - `GET /api/stats` - Estatísticas gerais

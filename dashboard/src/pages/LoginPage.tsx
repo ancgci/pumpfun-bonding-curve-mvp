@@ -4,8 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { useState } from "react";
 import { Activity, Shield, Zap } from "lucide-react";
-
-const API_BASE = "http://localhost:3001/api";
+import { API_BASE } from "@/lib/axios";
 
 export function LoginPage() {
     const navigate = useNavigate();

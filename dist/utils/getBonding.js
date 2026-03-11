@@ -6,20 +6,40 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getBondingCurveAddress = getBondingCurveAddress;
 exports.calculateMarketCap = calculateMarketCap;
 const web3_js_1 = require("@solana/web3.js");
-const dotenv_1 = __importDefault(require("dotenv"));
-dotenv_1.default.config();
-const shyft = process.env.SHYFT_RPC;
-const connection = new web3_js_1.Connection(shyft, 'confirmed');
+const rpcPool_1 = require("./rpcPool");
+const logger_1 = __importDefault(require("./logger"));
+const bottleneck_1 = __importDefault(require("bottleneck"));
+const rpcLimiter = new bottleneck_1.default({
+    maxConcurrent: 5,
+    minTime: 200,
+});
+const bondingCache = new Map();
+const BONDING_CACHE_TTL_MS = 30_000;
 async function getBondingCurveAddress(bondingCurve) {
-    let solBalance;
-    const address = new web3_js_1.PublicKey(bondingCurve);
-    const systemOwner = await connection.getAccountInfo(address);
-    if (systemOwner) {
-        solBalance = systemOwner.lamports;
-        return Number(solBalance / 1000000000).toFixed(2);
+    const cached = bondingCache.get(bondingCurve);
+    if (cached && Date.now() - cached.ts < BONDING_CACHE_TTL_MS) {
+        return cached.balance;
     }
-    else
+    try {
+        const result = await rpcLimiter.schedule(() => rpcPool_1.rpcPool.executeWithFallback(async (connection) => {
+            const address = new web3_js_1.PublicKey(bondingCurve);
+            const systemOwner = await connection.getAccountInfo(address);
+            if (systemOwner) {
+                const solBalance = systemOwner.lamports;
+                return Number((solBalance / 1000000000).toFixed(2));
+            }
+            return 0;
+        }, 2));
+        bondingCache.set(bondingCurve, { balance: result, ts: Date.now() });
+        return result;
+    }
+    catch (error) {
+        if (cached) {
+            return cached.balance;
+        }
+        logger_1.default.debug(`⚠️ getBondingCurveAddress failed for ${bondingCurve.substring(0, 8)}...`);
         return 0;
+    }
 }
 function calculateMarketCap(solBalance, progress) {
     const a = 0.00022500443612959005;

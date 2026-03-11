@@ -79,45 +79,53 @@ async function analyzeHolders(tokenAddr, creatorAddr) {
     return result;
 }
 async function fetchTopHolders(tokenAddr) {
-    try {
-        const api = process.env.SHYFT_RPC;
-        if (api) {
-            const shyftApiKey = new URL(api).searchParams.get("api_key") || "";
-            const response = await axios.get(`https://api.shyft.to/sol/v1/token/holders?network=mainnet-beta&token=${tokenAddr}&limit=50`, {
-                headers: { "x-api-key": shyftApiKey },
-                timeout: 5000,
-            });
-            if (response.data?.success && response.data?.result) {
-                return response.data.result.map((h) => ({
-                    address: h.owner || h.address,
-                    amount: parseFloat(h.balance || h.amount || "0"),
-                }));
+    const endpoints = [
+        process.env.SHYFT_RPC,
+        process.env.RPC_URL,
+        ...(process.env.RPC_FALLBACK_LIST || "").split(',').filter(Boolean)
+    ];
+    for (const url of endpoints) {
+        if (!url)
+            continue;
+        try {
+            const isShyft = url.includes("shyft.to");
+            const isHelius = url.includes("helius");
+            if (isShyft) {
+                const urlObj = new URL(url);
+                const shyftKey = urlObj.searchParams.get("api_key") || urlObj.searchParams.get("api-key") || "";
+                logger_1.default.debug(`[RiskEngine/Holders] Trying Shyft API for ${tokenAddr.substring(0, 8)}`);
+                const response = await axios.get(`https://api.shyft.to/sol/v1/token/holders?network=mainnet-beta&token=${tokenAddr}&limit=50`, {
+                    headers: { "x-api-key": shyftKey },
+                    timeout: 5000,
+                });
+                if (response.data?.success && response.data?.result) {
+                    return response.data.result.map((h) => ({
+                        address: h.owner || h.address,
+                        amount: parseFloat(h.balance || h.amount || "0"),
+                    }));
+                }
+            }
+            else {
+                logger_1.default.debug(`[RiskEngine/Holders] Trying Standard RPC (${isHelius ? 'Helius' : 'Generic'}) for ${tokenAddr.substring(0, 8)}`);
+                const response = await axios.post(url, {
+                    jsonrpc: "2.0",
+                    id: "risk-holders",
+                    method: "getTokenLargestAccounts",
+                    params: [tokenAddr],
+                }, { timeout: 5000 });
+                if (response.data?.result?.value) {
+                    return response.data.result.value.map((h) => ({
+                        address: h.address,
+                        amount: parseFloat(h.uiAmount || h.amount || "0"),
+                    }));
+                }
             }
         }
-    }
-    catch (err) {
-        logger_1.default.debug(`⚠️  [RiskEngine/Holders] Shyft API falhou: ${err.message}`);
-    }
-    try {
-        const rpcUrl = process.env.RPC_URL;
-        if (rpcUrl && rpcUrl.includes("helius")) {
-            const response = await axios.post(rpcUrl, {
-                jsonrpc: "2.0",
-                id: "risk-holders",
-                method: "getTokenLargestAccounts",
-                params: [tokenAddr],
-            }, { timeout: 5000 });
-            if (response.data?.result?.value) {
-                return response.data.result.value.map((h) => ({
-                    address: h.address,
-                    amount: parseFloat(h.uiAmount || h.amount || "0"),
-                }));
-            }
+        catch (err) {
+            logger_1.default.debug(`[RiskEngine/Holders] Endpoint ${url.substring(0, 30)}... falhou: ${err.message}`);
         }
     }
-    catch (err) {
-        logger_1.default.debug(`⚠️  [RiskEngine/Holders] Helius fallback falhou: ${err.message}`);
-    }
+    logger_1.default.warn(`❌ [RiskEngine/Holders] Todos os provedores falharam para ${tokenAddr}`);
     return [];
 }
 function detectClusters(allHolders, top10) {

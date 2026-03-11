@@ -1,10 +1,11 @@
 import axios from "axios";
 import { useAuthStore } from "@/stores/authStore";
 
-export const API_BASE = "http://localhost:3001/api";
+export const API_BASE = window.location.hostname === "localhost"
+    ? "http://localhost:3001/api"
+    : "/api";
 
 const api = axios.create({
-    baseURL: API_BASE,
     withCredentials: true, // Send httpOnly refresh cookie on every request
 });
 
