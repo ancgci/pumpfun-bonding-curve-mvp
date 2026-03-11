@@ -22,6 +22,7 @@ All project documentation is in the `/docs` folder:
 - **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - High-res Technical Analysis scalping guide
 - **[QA](docs/QA.md)** - QAgent testing infrastructure
 - **[ORGANICITY](docs/ORGANICITY_PROTECTION.md)** - Anti-manipulation detection, bot filters and seller churn modeling
+- **[MULTI_AGENT](docs/MULTI_AGENT_ORCHESTRATION.md)** - PRO Multi-Agent intelligence, orchestration and consensus consensus
 - **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
 
 ## 🚀 Quick Start
@@ -106,6 +107,22 @@ O sistema ganhou um motor estatístico independente que avalia a "saudabilidade"
 | **Skill de IA & Persistência** | Novo `PumpFunOrganicityGuard.md` para LLMs e Histórico em disco salvo continuamente. |
 
 **Arquivos:** `utils/organicityMonitor.ts`, `utils/organicityScore.ts`, `utils/entryBlocker.ts`, `utils/microConfirmation.ts`. Doc: `docs/ORGANICITY_PROTECTION.md`.
+
+### 🧠 Ativação do Sistema Multi-Agentes PRO (Full Intelligence)
+O bot agora opera com um "Conselho de Agentes" em paralelo, tornando-o muito mais resiliente e preciso.
+
+| Feature | Description |
+|---------|-------------|
+| **5 Agentes Reais** | Implementada a inteligência LLM real para Risk, Scalper, Sentiment, Whale e CopyTrading (Juiz). |
+| **Fail-Safe Fallback** | Caso a orquestração multi-agente falhe ou atinja timeout, o bot reverte automaticamente para o "cérebro" original (Legacy LLM). |
+| **Mecanismo de Consenso** | O Juiz (CopyTrading) avalia os sinais de todos os outros especialistas para gerar a decisão final. |
+
+**Arquivos:** `.agents/agents/*`, `.agents/orchestrator/`, `utils/agentOrchestrator.ts`. Doc: `docs/MULTI_AGENT_ORCHESTRATION.md`.
+
+### 🛠️ Correção de Bugs Críticos
+- **Resolução de Falha na Compra**: Corrigido o erro que impedia o bot de realizar compras pós-deploy devido a falha de mapeamento no orquestrador.
+- **Melhoria do Deploy**: Script `deploy.sh` agora preserva o diretório `data/` na VPS, evitando perda de histórico de trades e aprendizado.
+
 
 ### 📈 Análise Técnica V2 (High-Res Scalper)
 A análise técnica foi completamente modernizada e movida para resolução de 1 segundo (High-Resolution), focada no ecossistema pump.fun.
