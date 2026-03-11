@@ -780,6 +780,8 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
       liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
       top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
+      protocol: "pumpfun",
+      timeframe: "1s"
     };
 
     try {
