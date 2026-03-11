@@ -21,6 +21,7 @@ All project documentation is in the `/docs` folder:
 - **[VPS_DEPLOYMENT](docs/VPS_DEPLOYMENT.md)** - Passo a passo para acessar e atualizar a VPS
 - **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - High-res Technical Analysis scalping guide
 - **[QA](docs/QA.md)** - QAgent testing infrastructure
+- **[ORGANICITY](docs/ORGANICITY_PROTECTION.md)** - Anti-manipulation detection, bot filters and seller churn modeling
 - **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
 
 ## 🚀 Quick Start
@@ -93,6 +94,18 @@ npm run start:all
 
 
 ## 🆕 Latest Changes (Mar 11, 2026)
+
+### 🛡️ Camada de Proteção de Organicidade (Anti-Rug & Anti-Bot)
+O sistema ganhou um motor estatístico independente que avalia a "saudabilidade" da subida de um token antes de autorizar qualquer compra, prevenindo a entrada em golpes estruturais.
+
+| Feature | Description |
+|---------|-------------|
+| **Novo Motor de Scoring (9 Eixos)** | Calcula densidade, diversidade (carteiras), Recuos orgânicos, R² de robôs, Impacto na Liquidez e Churn de Vendedores (0-100 pts) |
+| **Micro-confirmação Assíncrona** | "Vigília" de 3-8s que segura a compra antes da execução para checar falsos volumes ou mortes súbitas do token. |
+| **15 Filtros HARD/SOFT** | Bloqueia instantaneamente tokens manipulados (ex: Top 3 buyers = 85% do volume, ou Liquidez muito "oca"). |
+| **Skill de IA & Persistência** | Novo `PumpFunOrganicityGuard.md` para LLMs e Histórico em disco salvo continuamente. |
+
+**Arquivos:** `utils/organicityMonitor.ts`, `utils/organicityScore.ts`, `utils/entryBlocker.ts`, `utils/microConfirmation.ts`. Doc: `docs/ORGANICITY_PROTECTION.md`.
 
 ### 📈 Análise Técnica V2 (High-Res Scalper)
 A análise técnica foi completamente modernizada e movida para resolução de 1 segundo (High-Resolution), focada no ecossistema pump.fun.
