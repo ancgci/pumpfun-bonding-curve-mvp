@@ -1,4 +1,16 @@
-# Changelog
+### [1.2.0] - 2026-03-11
+#### 🚀 Added
+- **Early AI Discovery**: AI Agent now analyzes tokens starting at 15% curve progress, independent of Telegram alert thresholds.
+- **Immediate-Buy Stabilization**: New logic in `DipMonitor` to execute AI-approved tokens as soon as technical data stabilizes (15s), bypassing RSI dip requirements for high-momentum launches.
+- **Dashboard Summary Cards**: Restored Total Profit (SOL), Win Rate, and Max Drawdown metrics to the React dashboard.
+
+#### 🔧 Changed
+- **Technical Threshold**: Lowered `BLOCK_INSUFFICIENT_DATA` requirement from 20 to 15 one-second candles for faster execution.
+- **Dynamic Metrics**: Dashboard cards now switch automatically between Simulation and Mainnet data based on the active tab.
+
+#### ⚡ Fixed
+- **Trading Stagnation**: Resolved issue where tokens approved by Risk Engine were stuck in waitlists due to high alert thresholds.
+- **Dip Sniper Mapping**: Fixed callback logic in `index.ts` to correctly route dip snipes to the execution orchestrator.
 
 History of all improvements implemented in the project.
 

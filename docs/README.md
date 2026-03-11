@@ -33,6 +33,9 @@ Bot de trading automático para Solana com suporte a múltiplos protocolos DeFi 
 - **Dashboard WebSocket** - Atualizações instantâneas via Socket.io no servidor e cliente.
 - **Scalper Ultra-Fast** - Agente dedicado para operar em buckets de 5s no modo PRO.
 - **Risk Guardian** - Validação de segurança obrigatória em paralelo a análise de trade.
+- **Sprint 11: Descoberta Híbrida & Estabilização** ✅
+- **Descoberta Antecipada**: Operação a partir de 15% de curva, independente de alertas.
+- **Fila de Compra Imediata**: Compra aprovada por IA assim que dados estabilizam (15s).
 
 ## 📊 Impacto Total
 

@@ -187,6 +187,22 @@ TRADE_TYPE_FILTER=BUY    # Apenas compras
 TRADE_TYPE_FILTER=SELL   # Apenas vendas
 TRADE_TYPE_FILTER=BOTH   # Ambos
 ```
+
+---
+
+## Dashboards & Alertas
+
+### `ALERT_THRESHOLD`
+Percentual de progresso da bonding curve (0-100) para enviar o alerta ao Telegram.
+
+**Nota Técnica**: A partir de Março de 2026, a análise da IA foi desacoplada deste parâmetro. O robô inicia a **Descoberta e Operação aos 15%**, mas só envia o alerta ao Telegram no valor configurado aqui (ex: 90%).
+
+**Padrão:** `90`
+
+```bash
+ALERT_THRESHOLD=90 # Alerta no Telegram apenas no final da curva
+```
+
 ---
 
 ## Modos do Agente (Simulation vs Live)

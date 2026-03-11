@@ -176,7 +176,16 @@ O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
 | **Memória do Agente** | Consensos sobre oportunidades ou novas heurísticas devem ser injetados em `data/agent/patterns.json`. |
 | **Workflow** | Consultar `.agent/workflows/standard_procedure.md` para o passo a passo completo. |
 
----
+### 🚀 Descoberta Híbrida e Fila de Estabilização (Trading Stagnation Fix)
+Corrigido o problema onde o robô parava de executar trades devido a limiares de alerta muito altos e falta de dados iniciais em novos tokens.
+
+| Feature | Description |
+|---------|-------------|
+| **Early AI Discovery** | Decoplagem da análise da IA (agora em **15%** de progresso) do alerta do Telegram (90%). O robô detecta e opera cedo sem poluir o chat. |
+| **Immediate-Buy Queue** | Tokens excelentes mas recém-lançados entram no `DipMonitor` com flag de compra imediata, ignorando o recuo de RSI assim que os dados estabilizam. |
+| **Data Threshold (15s)** | Redução para 15 segundos o tempo mínimo para iniciar análise técnica, permitindo capturar "god candles" iniciais. |
+
+**Arquivos:** `index.ts`, `utils/agentOrchestrator.ts`, `utils/dipMonitor.ts`, `utils/entryBlocker.ts`.
 
 ## 🔵 Previous Changes (Mar 8, 2026)
 

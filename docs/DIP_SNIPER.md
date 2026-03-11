@@ -25,6 +25,7 @@ When a token is "approved by the AI but rejected by timing" (or if the AI explic
 - **Continuous Background Loop**: It scans all waitlisted tokens every 2 seconds.
 - **Micro-Analysis**: It pulls the `TASnapshot` specifically focusing on 5-second `RSI`, `EMA-9` (short-term average), and `MACD Histogram`.
 - **Trend Reversal Execution**: If the RSI is below **45 (recovering/oversold)** AND the current price **crosses above the EMA-9**, the monitor triggers an **unconditional, instant LIVE BUY**.
+- **Stabilization Queue (Immediate Buy)**: If a token is added with the `immediateBuy` flag (usually because it was too new for TA during AI evaluation), the monitor skips the RSI/EMA check and executes as soon as the 15-second data threshold is met.
 - **Self-Cleaning**: Tokens that don't trigger a reversal within 5 minutes are silently forgotten to prevent memory leaks.
 
 ## How it appears in logs:

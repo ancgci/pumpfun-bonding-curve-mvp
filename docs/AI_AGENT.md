@@ -194,7 +194,7 @@ This protects against sudden rug pulls and massive sell-offs.
 | `TAKE_PROFIT_PERCENT` | `40` | Default TP % (fallback if LLM omits) |
 | `STOP_LOSS_PERCENT` | `25` | Default SL % (fallback if LLM omits) |
 | `BUY_AMOUNT_SOL` | `0.1` | Base buy amount (scaled by confidence) |
-| `ALERT_THRESHOLD` | `90` | Bonding curve % to trigger agent analysis |
+| `ALERT_THRESHOLD` | `90` | Bonding curve % to trigger **Telegram alerts**. (AI Discovery starts at **15%**) |
 
 ---
 

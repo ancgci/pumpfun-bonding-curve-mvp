@@ -321,8 +321,9 @@ Devido à latência natural da análise e decisão da Inteligência Artificial (
 *   Se a LLM aprova a compra (`action: "BUY"`), a análise técnica é refeita *no momento exato da execução*.
 *   **Bloqueios HARD avaliados**: Se qualquer bloqueio (ex: VWAP distance, candle esticado, ATR morto) for acionado nesse segundo exato, a compra é abortada.
 *   **Score reavaliado**: Se o score técnico nesse novo segundo for menor que o `scoreMinimo` (ex: 55), a compra é abortada.
+*   **Insuficiência de Dados**: O sistema exige agora o mínimo de **15 candles de 1s** para estabilização de indicadores (anteriormente 20).
 *   **Spike de Preço**: Verifica se o preço subiu > 10% durante a avaliação da LLM. Aborta se sim.
-*   **Ação**: Tokens aprovados pela LLM mas abortados na re-validação técnica são imediatamente enviados para a fila do **DipMonitor** para entrar no próximo pullback seguro.
+*   **Ação**: Tokens aprovados pela LLM mas abortados na re-validação técnica são imediatamente enviados para a fila do **DipMonitor**. Se o motivo for apenas `BLOCK_INSUFFICIENT_DATA`, eles são enfileirados para compra imediata pós-estabilização.
 
 ---
 
