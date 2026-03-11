@@ -450,31 +450,34 @@ export async function getAgentDecision(
     }
 
     const decision = await llmLimiter.schedule(async () => {
-      // ⚠️ Temporarily reverting to direct LLM call while Multi-Agent PRO property mapping is fixed
-      return await callLlm(tokenAnalysis);
-      /*
-      const orchestratedResult = await orchestrator.decide(tokenAnalysis);
+      try {
+        // 🚀 Multi-Agent PRO Orchestration
+        const orchestratedResult = await orchestrator.decide(tokenAnalysis);
 
-      const tpPercent = (typeof orchestratedResult.takeProfitPercent === "number" && orchestratedResult.takeProfitPercent > 0)
-        ? orchestratedResult.takeProfitPercent
-        : CONFIG.TAKE_PROFIT_PERCENT;
-      const slPercent = (typeof orchestratedResult.stopLossPercent === "number" && orchestratedResult.stopLossPercent > 0)
-        ? orchestratedResult.stopLossPercent
-        : CONFIG.STOP_LOSS_PERCENT;
+        const tpPercent = (typeof orchestratedResult.takeProfitPercent === "number" && orchestratedResult.takeProfitPercent > 0)
+          ? orchestratedResult.takeProfitPercent
+          : CONFIG.TAKE_PROFIT_PERCENT;
+        const slPercent = (typeof orchestratedResult.stopLossPercent === "number" && orchestratedResult.stopLossPercent > 0)
+          ? orchestratedResult.stopLossPercent
+          : CONFIG.STOP_LOSS_PERCENT;
 
-      const action = (orchestratedResult.action || orchestratedResult.decision) === "BUY" ? "BUY" : "SKIP";
-      
-      logger.info(`📊 [Agent-Orchestrated] Decision: ${action}, Confidence: ${orchestratedResult.confidence}%`);
+        const action = (orchestratedResult.action || orchestratedResult.decision) === "BUY" ? "BUY" : "SKIP";
 
-      return {
-        action,
-        confidence: orchestratedResult.confidence || 0,
-        reasoning: orchestratedResult.reasoning || orchestratedResult.reason || "Orchestrated decision",
-        entryPrice: tokenAnalysis.price,
-        takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),
-        stopLoss: tokenAnalysis.price * (1 - slPercent / 100),
-      } as AgentDecision;
-      */
+        logger.info(`📊 [Agent-Orchestrated] Decision: ${action}, Confidence: ${orchestratedResult.confidence}%`);
+
+        return {
+          action,
+          confidence: orchestratedResult.confidence || 0,
+          reasoning: orchestratedResult.reasoning || orchestratedResult.reason || "Orchestrated decision",
+          entryPrice: tokenAnalysis.price,
+          takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),
+          stopLoss: tokenAnalysis.price * (1 - slPercent / 100),
+        } as AgentDecision;
+      } catch (error: any) {
+        logger.warn(`⚠️ [Orchestrator] Multi-Agent failed: ${error.message}. Falling back to Legacy LLM.`);
+        // 🔄 Safe Fallback to original single-LLM brain
+        return await callLlm(tokenAnalysis);
+      }
     });
 
     persistAgentStatus({ rateLimited: false, at: Date.now() });

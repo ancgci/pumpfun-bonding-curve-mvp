@@ -56,6 +56,7 @@ const agentOrchestrator_1 = require("./utils/agentOrchestrator");
 const simulationEngine_1 = require("./utils/simulationEngine");
 const copyTradingEngine_1 = require("./utils/copyTradingEngine");
 const volatilityMonitor_1 = require("./utils/volatilityMonitor");
+const organicityMonitor_1 = require("./utils/organicityMonitor");
 const learnerAgent_1 = require("./utils/learnerAgent");
 const config_1 = require("./utils/config");
 const positionManager_1 = require("./utils/positionManager");
@@ -127,6 +128,10 @@ else {
     });
 }
 (0, simulationEngine_1.rebuildMetricsFromFile)().catch(err => logger_1.default.warn(`⚠️ Could not rebuild simulation metrics: ${err.message}`));
+(0, organicityMonitor_1.loadOrganicityFromDisk)();
+setInterval(() => {
+    (0, organicityMonitor_1.saveOrganicityToDisk)();
+}, 300_000);
 dipMonitor_1.dipMonitor.initialize(async (mint) => {
     logger_1.default.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint}`);
     const tokenData = {
@@ -526,6 +531,9 @@ async function processPumpFunTransaction(txn, parsedTxn) {
             currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance / (tokenAmount / 1_000_000)) : 0;
         }
         (0, volatilityMonitor_1.recordPriceSample)(tOutput.mint, currentPrice);
+        if (tOutput.user && (tOutput.type === "BUY" || tOutput.type === "SELL")) {
+            (0, organicityMonitor_1.recordOrganicityTrade)(tOutput.mint, tOutput.user, tOutput.type, Number(tOutput.solAmount) || 0, currentPrice, Number(progress));
+        }
         let riskSection = "";
         if (riskConfig_1.RISK_CONFIG.enabled) {
             try {
@@ -582,6 +590,8 @@ async function processPumpFunTransaction(txn, parsedTxn) {
             volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
             liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
             top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
+            protocol: "pumpfun",
+            timeframe: "1s"
         };
         try {
             let decision = null;
