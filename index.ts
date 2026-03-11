@@ -675,8 +675,15 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   }
 
   const followedWallet = isFollowedWallet(tOutput.user);
+
+  // Decouple AI Discovery from Telegram Alert band
+  // AI should analyze tokens early (e.g., 15% progress) to capture launches
+  const AI_DISCOVERY_MIN_PROGRESS = 15;
+  const withinAiBand = Number(progress) >= AI_DISCOVERY_MIN_PROGRESS && Number(progress) <= 100;
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
-  const isDiscovery = withinAlertBand && !sentAddresses.has(tOutput.mint);
+
+  const isDiscovery = withinAiBand && !sentAddresses.has(tOutput.mint);
+  const shouldAlert = withinAlertBand && !sentAddresses.has(tOutput.mint); // Note: we still use sentAddresses to avoid spam
 
   if (followedWallet || isDiscovery) {
     if (isDiscovery) {
@@ -814,8 +821,8 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       logger.error(`❌ [Decisão] Erro: ${agentErr.message}`);
     }
 
-    // Alerta Telegram (apenas discovery)
-    if (isDiscovery) {
+    // Alerta Telegram (apenas se atingir o limiar configurado)
+    if (shouldAlert) {
       const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
       const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
       const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";

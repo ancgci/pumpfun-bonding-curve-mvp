@@ -5,6 +5,7 @@ interface WaitlistedToken {
     mint: string;
     symbol: string;
     addedAt: number;
+    immediateBuy?: boolean; // If true, buy as soon as data is sufficient (no RSI check)
 }
 
 class DipMonitorService {
@@ -20,10 +21,20 @@ class DipMonitorService {
         logger.info(`🔍 [DipMonitor] Service initialized. Scanning every 2s for Dip Snipes.`);
     }
 
-    public addToken(mint: string, symbol: string) {
-        if (this.waitlist.has(mint)) return;
-        this.waitlist.set(mint, { mint, symbol, addedAt: Date.now() });
-        logger.info(`👀 [DipMonitor] Added ${symbol} (${mint}) to Dip Waitlist.`);
+    public addToken(mint: string, symbol: string, immediateBuy: boolean = false) {
+        if (this.waitlist.has(mint)) {
+            // If already exists but now we want immediate buy, update it
+            if (immediateBuy) {
+                const existing = this.waitlist.get(mint)!;
+                if (!existing.immediateBuy) {
+                    existing.immediateBuy = true;
+                    logger.info(`🎯 [DipMonitor] Updated ${symbol} to IMMEDIATE_BUY once data stabilizes.`);
+                }
+            }
+            return;
+        }
+        this.waitlist.set(mint, { mint, symbol, addedAt: Date.now(), immediateBuy });
+        logger.info(`👀 [DipMonitor] Added ${symbol} (${mint}) to Dip Waitlist (Immediate=${immediateBuy}).`);
     }
 
     private async scanWaitlist() {
@@ -62,9 +73,10 @@ class DipMonitorService {
                     // Condition C: MACD momentum is positive (bullish cross)
                     const isMacdBullish = macd && macd.histogram > 0;
 
-                    if (isRsiFavorable && (isCrossingEMAsUpward || isMacdBullish)) {
-                        // We found the dip + reversal!
-                        logger.info(`🎯 [DipMonitor] OVERSOLD REVERSAL CONFIRMED for ${token.symbol}! RSI=${rsi.toFixed(1)}, Price > EMA9`);
+                    if (token.immediateBuy || (isRsiFavorable && (isCrossingEMAsUpward || isMacdBullish))) {
+                        // We found the dip + reversal OR we were waiting for data to buy immediately!
+                        const reason = token.immediateBuy ? "DATA_STABILIZED" : "OVERSOLD_REVERSAL";
+                        logger.info(`🎯 [DipMonitor] ${reason} CONFIRMED for ${token.symbol}! RSI=${rsi.toFixed(1)}, Price > EMA9`);
 
                         // Immediately stop tracking to prevent duplicate buys
                         this.waitlist.delete(mint);

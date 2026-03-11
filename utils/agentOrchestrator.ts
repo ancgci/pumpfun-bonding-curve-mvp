@@ -562,11 +562,12 @@ export async function executeAgentTrade(
     const execBlocks = checkEntryBlocks(taSnapNow, taConfigExec, tokenAnalysis.mint);
     if (hasHardBlock(execBlocks)) {
       const hardBlock = execBlocks.find(b => b.severity === "HARD");
+      const isInsufficientData = hardBlock?.code === "BLOCK_INSUFFICIENT_DATA";
       logger.warn(
         `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} HARD BLOCK no momento da execução: ` +
-        `${hardBlock?.code} — Enfileirando no DipMonitor.`
+        `${hardBlock?.code} — Enfileirando no DipMonitor (Immediate=${isInsufficientData}).`
       );
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, isInsufficientData);
       return;
     }
 
@@ -580,9 +581,9 @@ export async function executeAgentTrade(
     if (execScore.invalidated || execScore.score < taConfigExec.scoreMinimo) {
       logger.warn(
         `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score insuficiente (${execScore.score} < ${taConfigExec.scoreMinimo}) ` +
-        `— Setup mudou durante avaliação LLM. Enfileirando no DipMonitor.`
+        `— Setup mudou durante avaliação LLM. Enfileirando no DipMonitor (Dip Sniper Mode).`
       );
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
       return;
     }
 
@@ -642,9 +643,9 @@ export async function executeAgentTrade(
           const hardOrgBlock = hardOrgBlocks[0];
           logger.warn(
             `🧪 [Organicity Post-LLM] ${tokenAnalysis.symbol} BLOQUEADO: ` +
-            `${hardOrgBlock.code} — ${hardOrgBlock.reason}. Enfileirando no DipMonitor.`
+            `${hardOrgBlock.code} — ${hardOrgBlock.reason}. Enfileirando no DipMonitor (Dip Sniper Mode).`
           );
-          dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+          dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
           return;
         }
 
@@ -668,7 +669,7 @@ export async function executeAgentTrade(
     if (!mcResult.passed) {
       // Se falhou (e não estamos em shadow mode), aborta.
       // O runner shadow retorna passed: true mesmo se os critérios falharem internamente.
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
       return;
     }
 
@@ -677,9 +678,9 @@ export async function executeAgentTrade(
     if (!validation.isValid) {
       logger.warn(
         `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike. ` +
-        `Moving ${tokenAnalysis.symbol} to Dip Waitlist.`
+        `Moving ${tokenAnalysis.symbol} to Dip Waitlist (Dip Sniper Mode).`
       );
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
+      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
       return;
     }
 
