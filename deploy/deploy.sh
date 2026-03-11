@@ -42,6 +42,9 @@ rsync -avz --progress \
   --exclude 'logs/' \
   --exclude 'test-results/' \
   --exclude '*.log' \
+  --exclude 'data/' \
+  --exclude 'positionManagerV2.db' \
+  --exclude 'sent_addresses.json' \
   ./ "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/"
 
 log "Files synced"
