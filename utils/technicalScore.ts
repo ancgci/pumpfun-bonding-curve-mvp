@@ -52,12 +52,12 @@ export function calculateConfluenceScore(
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
 ): ScoreResult {
     // Guard: dados insuficientes
-    if (snap.candlesAvailable1s < 20) {
+    if (snap.candlesAvailable1s < 3) {
         return {
             score: 0,
             breakdown: makeEmptyBreakdown(),
             invalidated: true,
-            invalidReason: `INSUFFICIENT_DATA: apenas ${snap.candlesAvailable1s} candles de 1s disponíveis (mínimo 20)`,
+            invalidReason: `INSUFFICIENT_DATA: apenas ${snap.candlesAvailable1s} candles de 1s disponíveis (mínimo 3)`,
             sizing: 0,
             regime: "INSUFFICIENT_DATA",
         };
@@ -213,7 +213,7 @@ export function calculateConfluenceScore(
 
     // Regime
     let regime: ScoreResult["regime"] = "NEUTRAL";
-    if (snap.candlesAvailable1s < 20) regime = "INSUFFICIENT_DATA";
+    if (snap.candlesAvailable1s < 3) regime = "INSUFFICIENT_DATA";
     else if (snap.emaAligned && snap.priceAboveVWAP && snap.macd?.histogram !== undefined && snap.macd.histogram > 0) regime = "BULLISH";
     else if (!snap.emaAligned && !snap.priceAboveVWAP) regime = "BEARISH";
 

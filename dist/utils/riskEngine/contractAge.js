@@ -46,7 +46,7 @@ async function checkContractAge(connection, mint) {
         }
     }
     catch (error) {
-        logger_1.default.error(`❌ [RiskEngine/Age] Erro ao verificar idade do contrato para ${mint}:`, error.message);
+        logger_1.default.error(`❌ [RiskEngine/Age] Erro ao verificar idade do contrato para ${mint}: ${error.message || error}`);
     }
     return {
         score,

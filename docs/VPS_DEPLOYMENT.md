@@ -93,10 +93,12 @@ http://localhost:5174/login
 ```
 
 ### Acessando na VPS (Produção)
-A VPS serve o seu painel web para a internet, que pode ser acessado de qualquer navegador no mundo através do seu domínio:
+A VPS serve o seu painel web para a internet, que pode ser acessado de qualquer navegador no mundo através do seu domínio (Recomendado via Porta 80):
 ```
-http://meu.listadecompras.shop:3001/login
+http://meu.listadecompras.shop/login
 ```
+
+*(Se o Nginx ainda não estiver configurado, você pode tentar acessar via porta 3001: http://meu.listadecompras.shop:3001/login)*.
 
 **⚠️ Importante:** O acesso na VPS requer autenticação via Google OAuth e é estritamente limitado aos e-mails autorizados configurados no `.env`.
 

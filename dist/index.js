@@ -149,6 +149,7 @@ dipMonitor_1.dipMonitor.initialize(async (mint) => {
     }
 });
 let sentAddresses = new Set();
+let aiProcessedAddresses = new Set();
 const creatorWatchlist = new Map();
 const SENT_ADDRESSES_FILE = path_1.default.join(__dirname, 'sent_addresses.json');
 function saveSentAddresses() {
@@ -510,12 +511,17 @@ async function processPumpFunTransaction(txn, parsedTxn) {
         return;
     }
     const followedWallet = (0, copyTradingEngine_1.isFollowedWallet)(tOutput.user);
+    const AI_DISCOVERY_MIN_PROGRESS = 15;
+    const withinAiBand = Number(progress) >= AI_DISCOVERY_MIN_PROGRESS && Number(progress) <= 100;
     const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
-    const isDiscovery = withinAlertBand && !sentAddresses.has(tOutput.mint);
-    if (followedWallet || isDiscovery) {
+    const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint);
+    const shouldAlert = withinAlertBand && !sentAddresses.has(tOutput.mint);
+    if (followedWallet || isDiscovery || shouldAlert) {
+        if (shouldAlert) {
+            sentAddresses.add(tOutput.mint);
+        }
         if (isDiscovery) {
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
-            sentAddresses.add(tOutput.mint);
         }
         const solBalance = Number(balance);
         const solAmount = Number(tOutput.solAmount) || 0;
@@ -607,10 +613,22 @@ async function processPumpFunTransaction(txn, parsedTxn) {
                 if (decision)
                     decision.force = true;
             }
+            logger_1.default.info(`🎯 [Dispatch] State -> decision: ${!!decision}, agentEnabled: ${agentEnabled}, isDiscovery: ${isDiscovery}, aiProcessed: ${aiProcessedAddresses.has(tOutput.mint)}`);
             if (!decision && agentEnabled && isDiscovery) {
                 decision = await (0, agentOrchestrator_1.getAgentDecision)(tokenAnalysis);
             }
             if (decision) {
+                const reason = (decision.reasoning || "").toLowerCase();
+                const isInsufficient = reason.includes("insufficient data") ||
+                    reason.includes("too few holders") ||
+                    reason.includes("insufficient_data");
+                if (decision.action === "BUY" || !isInsufficient) {
+                    aiProcessedAddresses.add(tOutput.mint);
+                    logger_1.default.info(`🎯 [Agent] Token ${tOutput.mint} marcado como processado (Decision: ${decision.action})`);
+                }
+                else {
+                    logger_1.default.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+                }
                 await (0, agentOrchestrator_1.executeAgentTrade)(tokenAnalysis, decision, async (force) => {
                     await executeTradeWithRetry(force || decision.force);
                 });
@@ -622,7 +640,7 @@ async function processPumpFunTransaction(txn, parsedTxn) {
         catch (agentErr) {
             logger_1.default.error(`❌ [Decisão] Erro: ${agentErr.message}`);
         }
-        if (isDiscovery) {
+        if (shouldAlert) {
             const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
             const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
             const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";

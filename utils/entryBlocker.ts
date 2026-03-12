@@ -138,10 +138,10 @@ export function checkEntryBlocks(
     }
 
     // 3. BLOCK_INSUFFICIENT_DATA
-    if (snap.candlesAvailable1s < 15) {
+    if (snap.candlesAvailable1s < 3) {
         blocks.push({
             code: "BLOCK_INSUFFICIENT_DATA",
-            reason: `Apenas ${snap.candlesAvailable1s} candles de 1s disponíveis(mínimo 15)`,
+            reason: `Apenas ${snap.candlesAvailable1s} candles de 1s disponíveis(mínimo 3)`,
             severity: "HARD",
         });
         return blocks; // Sem dados suficientes, não verificar mais nada

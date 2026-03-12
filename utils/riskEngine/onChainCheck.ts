@@ -16,11 +16,16 @@ export interface OnChainCheckResult {
 export async function getOnChainAnalysis(tokenAddr: string): Promise<OnChainCheckResult | null> {
     try {
         const { RugChecker } = require("@degenfrends/solana-rugchecker");
-        const rpcUrl = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
-        const connection = new Connection(rpcUrl);
+        const { rpcPool } = require("../rpcPool");
+        const connection = await rpcPool.getBestConnection();
 
         const checker = new RugChecker(connection);
-        const report = await checker.check(new PublicKey(tokenAddr));
+
+        // Proteção contra Rate Limits infinitos (429) do web3.js
+        const report = await Promise.race([
+            checker.check(new PublicKey(tokenAddr)),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout OnChainCheck (>3s)")), 3000))
+        ]) as any;
 
         const result: OnChainCheckResult = {
             risks: report.risks || [],

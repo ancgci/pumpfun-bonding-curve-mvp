@@ -51,7 +51,7 @@ const httpServer = http.createServer(app);
 const PORT = 3001;
 
 const io = new Server(httpServer, {
-    cors: { origin: [FRONTEND_ORIGIN, "http://YOUR_VPS_IP:3001", "http://YOUR_VPS_IP", "http://localhost:5174", "http://localhost:3001"], credentials: true }
+    cors: { origin: [FRONTEND_ORIGIN, "http://meu.listadecompras.shop", "https://meu.listadecompras.shop", "http://YOUR_VPS_IP:3001", "http://YOUR_VPS_IP", "http://localhost:5174", "http://localhost:3001"], credentials: true }
 });
 
 // ── Custom CORS Middleware ────────────────────────────────────
@@ -60,8 +60,8 @@ const ALLOWED_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://localhost:3000",
     "http://localhost:3001",
-    "http://YOUR_VPS_IP:3001",
-    "http://YOUR_VPS_IP",
+    "http://meu.listadecompras.shop",
+    "https://meu.listadecompras.shop",
     FRONTEND_ORIGIN,
 ];
 
@@ -122,7 +122,7 @@ app.post("/api/auth/google", authLimiter, async (req: Request, res: Response) =>
         const refreshToken = signRefreshToken(user);
         res.cookie("refreshToken", refreshToken, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
+            secure: false, // Set to false to allow persistent sessions on HTTP (before HTTPS is configured)
             sameSite: "lax",
             maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
             path: "/",
@@ -1176,12 +1176,24 @@ if (require.main === module) {
 }
 
 // ── SPA Fallback: serve index.html for all non-API routes ────
-app.get('/{*path}', (req: Request, res: Response) => {
+app.get(['/', '/login', '/dashboard', '/settings', '/positions', '/trades'], (req, res) => {
     const indexPath = path.join(DASHBOARD_DIST, 'index.html');
     if (fs.existsSync(indexPath)) {
         return res.sendFile(indexPath);
     }
-    res.status(404).send('Dashboard not built. Run: cd dashboard-new && npm run build');
+    res.status(404).send('Dashboard not built. Run: cd dashboard && npm run build');
+});
+
+// Final catch-all for anything else (including API 404s)
+app.use((req: Request, res: Response) => {
+    if (req.path.startsWith('/api')) {
+        return res.status(404).json({ error: "API route not found" });
+    }
+    const indexPath = path.join(DASHBOARD_DIST, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+    }
+    res.status(404).send('Page not found');
 });
 
 // Iniciar servidor apenas se o script for executado diretamente

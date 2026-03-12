@@ -72,7 +72,7 @@ export async function checkContractAge(
         }
 
     } catch (error: any) {
-        logger.error(`❌ [RiskEngine/Age] Erro ao verificar idade do contrato para ${mint}:`, error.message);
+        logger.error(`❌ [RiskEngine/Age] Erro ao verificar idade do contrato para ${mint}: ${error.message || error}`);
         // On error, we don't penalize to avoid blocking valid tokens due to RPC issues,
         // unless we want to fail-safe. Defaulting to 0 score here.
     }

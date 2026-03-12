@@ -314,9 +314,12 @@ export async function getAgentDecision(
   // NÃO bloqueia a LLM. Re-validação completa ocorre         
   // em executeAgentTrade(), APÓS a aprovação da LLM.         
   // ══════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════
   const taConfig = getTAConfig();
   const taSnap = getTASnapshotV2(tokenAnalysis.mint, taConfig);
   tokenAnalysis.taSnapshot = taSnap;
+
+
 
   // Registrar preço para detecção de pernas consecutivas
   if (taSnap.currentPrice) {
@@ -449,6 +452,11 @@ export async function getAgentDecision(
       return cached.decision;
     }
 
+    const queueSize = llmLimiter.counts().QUEUED;
+    if (queueSize > 5) {
+      logger.warn(`⚠️ [Agent] AI Decision Queue is backing up: ${queueSize} requests waiting.`);
+    }
+
     const decision = await llmLimiter.schedule(async () => {
       try {
         // 🚀 Multi-Agent PRO Orchestration
@@ -463,11 +471,11 @@ export async function getAgentDecision(
 
         const action = (orchestratedResult.action || orchestratedResult.decision) === "BUY" ? "BUY" : "SKIP";
 
-        logger.info(`📊 [Agent-Orchestrated] Decision: ${action}, Confidence: ${orchestratedResult.confidence}%`);
+        logger.info(`📊 [Agent-Orchestrated] Decision: ${action}, Confidence: ${orchestratedResult.confidence ?? 0}%`);
 
         return {
           action,
-          confidence: orchestratedResult.confidence || 0,
+          confidence: orchestratedResult.confidence ?? 0,
           reasoning: orchestratedResult.reasoning || orchestratedResult.reason || "Orchestrated decision",
           entryPrice: tokenAnalysis.price,
           takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),

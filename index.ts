@@ -177,8 +177,10 @@ dipMonitor.initialize(async (mint: string) => {
   }
 });
 
-// Create a Set to track sent addresses
-let sentAddresses = new Set();
+// Create a Set to track sent addresses (Telegram alerts)
+let sentAddresses = new Set<string>();
+// Create a Set to track tokens that have received a FINAL AI decision
+let aiProcessedAddresses = new Set<string>();
 // Creator Watchlist: mint -> creatorAddress
 const creatorWatchlist = new Map<string, string>();
 
@@ -676,19 +678,21 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
   const followedWallet = isFollowedWallet(tOutput.user);
 
-  // Decouple AI Discovery from Telegram Alert band
-  // AI should analyze tokens early (e.g., 15% progress) to capture launches
-  const AI_DISCOVERY_MIN_PROGRESS = 15;
+  const AI_DISCOVERY_MIN_PROGRESS = 15; // Lowered to 15% as a compromise for earlier discovery
   const withinAiBand = Number(progress) >= AI_DISCOVERY_MIN_PROGRESS && Number(progress) <= 100;
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
 
-  const isDiscovery = withinAiBand && !sentAddresses.has(tOutput.mint);
-  const shouldAlert = withinAlertBand && !sentAddresses.has(tOutput.mint); // Note: we still use sentAddresses to avoid spam
+  // AI discovery tracks NEW tokens for analysis, ignoring alert state
+  const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint);
+  // shouldAlert tracks if we ALREADY sent a telegram message (prevents spam)
+  const shouldAlert = withinAlertBand && !sentAddresses.has(tOutput.mint);
 
-  if (followedWallet || isDiscovery) {
+  if (followedWallet || isDiscovery || shouldAlert) {
+    if (shouldAlert) {
+      sentAddresses.add(tOutput.mint);
+    }
     if (isDiscovery) {
       recordTransaction(tOutput.mint);
-      sentAddresses.add(tOutput.mint);
     }
 
     // Calcular informações adicionais (preco, balance, etc se necessário)
@@ -805,11 +809,26 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         if (decision) decision.force = true; // Forçar mirror sells/buys
       }
 
+      logger.info(`🎯 [Dispatch] State -> decision: ${!!decision}, agentEnabled: ${agentEnabled}, isDiscovery: ${isDiscovery}, aiProcessed: ${aiProcessedAddresses.has(tOutput.mint)}`);
+
       if (!decision && agentEnabled && isDiscovery) {
         decision = await getAgentDecision(tokenAnalysis);
       }
 
       if (decision) {
+        // Se houve uma decisão definitiva (BUY ou SKIP por risco concreto), marcamos como processado
+        const reason = (decision.reasoning || "").toLowerCase();
+        const isInsufficient = reason.includes("insufficient data") ||
+          reason.includes("too few holders") ||
+          reason.includes("insufficient_data");
+
+        if (decision.action === "BUY" || !isInsufficient) {
+          aiProcessedAddresses.add(tOutput.mint);
+          logger.info(`🎯 [Agent] Token ${tOutput.mint} marcado como processado (Decision: ${decision.action})`);
+        } else {
+          logger.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+        }
+
         await executeAgentTrade(tokenAnalysis, decision, async (force) => {
           await executeTradeWithRetry(force || decision.force);
         });
