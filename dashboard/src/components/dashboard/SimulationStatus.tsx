@@ -12,6 +12,11 @@ export function SimulationStatus() {
   const readinessScore = Number(simStatus.readinessScore || 0);
   const isReady = simStatus.readyForLive || false;
 
+  // Safety check for reasons array
+  const reasons = simStatus.reasons && Array.isArray(simStatus.reasons)
+    ? simStatus.reasons
+    : [];
+
   return (
     <Card className={`glass mt-4 border-t-4 ${isReady ? 'border-t-green-500' : 'border-t-blue-500'}`}>
       <CardHeader className="pb-2 bg-blue-500/5 border-b border-blue-500/10 flex flex-row items-center justify-between">
@@ -64,13 +69,13 @@ export function SimulationStatus() {
         </div>
 
         {/* Blockers */}
-        {!isReady && simStatus.reasons && simStatus.reasons.length > 0 && (
+        {!isReady && reasons.length > 0 && (
           <div className="space-y-2">
             <div className="text-xs font-medium text-yellow-500 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" /> Readiness Blockers
             </div>
             <ul className="text-xs text-muted-foreground space-y-1 bg-black/40 p-3 rounded border border-white/5">
-              {simStatus.reasons.map((reason: string, i: number) => (
+              {reasons.map((reason: string, i: number) => (
                 <li key={i} className="flex gap-2"><span className="text-red-500">•</span> {reason}</li>
               ))}
             </ul>

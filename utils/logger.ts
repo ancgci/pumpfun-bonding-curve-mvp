@@ -9,12 +9,26 @@ try {
   // O diretório pode já existir
 }
 
+// Helper custom para forçar fuso horário de Brasília (GMT-3)
+const timezoned = () => {
+  return new Date().toLocaleString('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).replace(',', '');
+};
+
 // Configuração do logger
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
     winston.format.timestamp({
-      format: 'YYYY-MM-DD HH:mm:ss'
+      format: timezoned
     }),
     winston.format.errors({ stack: true }),
     winston.format.splat(),
@@ -52,7 +66,7 @@ logger.add(new winston.transports.Console({
   format: winston.format.combine(
     winston.format.colorize(),
     winston.format.timestamp({
-      format: 'YYYY-MM-DD HH:mm:ss'
+      format: timezoned
     }),
     winston.format.printf(({ level, message, timestamp }) => {
       return `${timestamp} ${level}: ${message}`;

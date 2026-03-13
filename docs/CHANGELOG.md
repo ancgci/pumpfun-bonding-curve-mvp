@@ -1,3 +1,22 @@
+### [1.3.0] - 2026-03-13
+#### 🚀 Added
+- **Historical Backfill (Discovery Lane)**: Bot now fetches the last 50 trades from PumpFun API immediately upon token discovery. This seeds the TA monitors with high-quality data, enabling accurate MACD/RSI calculations from the very first second.
+- **Launch Momentum Bonus**: Implemented an aggressive +40 point bonus in Step 3 (Technical Analysis) for new tokens showing >1.5% micro-trend growth in 10s. This helps the AI approve high-momentum launches that lack long-term indicators.
+- **Colored Pipeline Logs**: Full implementation of ANSI color-coded status labels for all 8 pipeline steps.
+  - `APROVADO` (Cyan)
+  - `REPROVADO` (Red)
+  - `EXECUTADO TRADE` (Green)
+- **Pipeline Step Naming**: Explicit friendly names added to all 8 pipeline log tags (Discovery, RiskEngine, Technical Analysis, etc.) for better readability in live terminals.
+
+#### 🔧 Changed
+- **Data Rigidity reduction**: Lowered minimum candle requirement for TA from 3s to 2s to minimize missed opportunities on ultra-fast launches.
+- **Improved Scoping**: Discovery backfill ensures that tokens at 80% bonding curve have enough "pre-history" to bypass traditional initialization delays.
+
+#### ⚡ Fixed
+- **Token Symbol Resolution**: Resolved issue where transaction logs occasionally showed '???' or missing symbols by forcing meta-data refreshes from combined APIs during the discovery phase.
+
+---
+
 ### [1.2.0] - 2026-03-11
 #### 🚀 Added
 - **Early AI Discovery**: AI Agent now analyzes tokens starting at 15% curve progress, independent of Telegram alert thresholds.

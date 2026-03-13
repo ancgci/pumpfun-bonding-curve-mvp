@@ -201,7 +201,13 @@ async function analyzeToken(tokenAddr, cachedMetadata, curveProgress) {
         analyzedAt: Date.now(),
     };
     const emoji = decision === "ALLOW_TRADE" ? "✅" : decision === "ALLOW_ALERT" ? "⚠️" : "🚫";
-    logger_1.default.info(`${emoji} [RiskEngine] Token ${tokenAddr.substring(0, 8)}... → Score: ${finalScore}/100 (${decision}) [${elapsed}ms]`);
+    const symbol = tokenMetadata?.symbol || "???";
+    if (decision === "BLOCK") {
+        logger_1.default.info(`${emoji} [RiskEngine] ${symbol} (${tokenAddr}) → Score: ${finalScore}/100 (${decision}) [${elapsed}ms]`);
+    }
+    else {
+        logger_1.default.debug(`${emoji} [RiskEngine] ${symbol} (${tokenAddr}) → Score: ${finalScore}/100 (${decision}) [${elapsed}ms]`);
+    }
     if (reasons.length > 0) {
         logger_1.default.info(`   Razões: ${reasons.map(r => `${r.filter}(+${r.impact})`).join(", ")}`);
     }

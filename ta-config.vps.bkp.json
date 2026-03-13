@@ -1,0 +1,21 @@
+{
+  "scoreMinimo": 40,
+  "scoreSizingMid": 50,
+  "scoreSizingMax": 70,
+  "rsiBullishMin": 50,
+  "rsiBullishMax": 78,
+  "rsiOverboughtBlock": 85,
+  "atrMinPct": 0.02,
+  "atrMaxPct": 8.0,
+  "maxDistVWAPPct": 5.0,
+  "candleStretchMultiplier": 3.5,
+  "minOrganicScore": 35,
+  "maxLegsWithoutPullback": 3,
+  "maxConsecutiveStops": 5,
+  "consecutiveStopPauseMs": 30000,
+  "adaptiveOrganicEnabled": true,
+  "volumeRelativeMin": 1.2,
+  "volumeSpikeThreshold": 4.0,
+  "sustainCandles": 2,
+  "minFollowThroughPct": 0.2
+}

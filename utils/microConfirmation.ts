@@ -28,11 +28,11 @@ export interface MicroConfirmationConfig {
 }
 
 export const DEFAULT_MICRO_CONFIRM_CONFIG: MicroConfirmationConfig = {
-    windowMs: 5000,
+    windowMs: 3000,
     intervalMs: 1000,
-    maxOrganicScoreDrop: 20,
+    maxOrganicScoreDrop: 30,
     maxPriceAdvancePct: 3.0,
-    maxNewWalletSharePct: 60,
+    maxNewWalletSharePct: 75,
     minTradeActivity: 1,
 };
 

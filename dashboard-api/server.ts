@@ -322,7 +322,7 @@ app.get("/api/agent/logs", (req, res) => {
     try {
         const logsDir = path.join(__dirname, "../logs");
         // Escapa e executa grep seguro; não falha por pipe com maxBuffer alto.
-        const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]|\\[WHALE ALERT\\]" $(ls -tr ${logsDir}/combined*.log 2>/dev/null) | tail -n 60`;
+        const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]|\\[WHALE ALERT\\]|\\[Pipeline" $(ls -tr ${logsDir}/combined*.log 2>/dev/null) | grep -v "ALLOW_TRADE" | tail -n 60`;
         exec(cmd, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
             if (error) {
                 // error code 1 in grep means no lines matched, which is fine = empty.
@@ -423,6 +423,60 @@ app.get("/api/agent/learned-rules", (req, res) => {
     try {
         const rules = loadLearnedPatterns();
         res.json(rules);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/ta/config - Configuração atual de Technical Analysis
+ */
+app.get("/api/ta/config", (req, res) => {
+    try {
+        const TA_CONFIG_FILE = path.join(__dirname, "../data/ta-config.json");
+        if (!fs.existsSync(TA_CONFIG_FILE)) {
+            return res.json({ error: "ta-config.json not found", usingDefaults: true });
+        }
+        const config = JSON.parse(fs.readFileSync(TA_CONFIG_FILE, "utf-8"));
+        res.json(config);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/ta/fallback-state - Estado do fallback automático
+ */
+app.get("/api/ta/fallback-state", (req, res) => {
+    try {
+        const FALLBACK_STATE_FILE = path.join(__dirname, "../data/.ta-fallback-state.json");
+        if (!fs.existsSync(FALLBACK_STATE_FILE)) {
+            return res.json({
+                isActive: false,
+                lastTradeTimestamp: null,
+                timeSinceLastTradeMin: null,
+                message: "No fallback state available",
+            });
+        }
+        const state = JSON.parse(fs.readFileSync(FALLBACK_STATE_FILE, "utf-8"));
+        res.json(state);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/blocks/last-checked - Últimos tokens verificados e seus bloqueios
+ */
+app.get("/api/blocks/last-checked", (req, res) => {
+    try {
+        const BLOCKS_LOG_FILE = path.join(__dirname, "../data/.blocks-log.json");
+        if (!fs.existsSync(BLOCKS_LOG_FILE)) {
+            return res.json([]);
+        }
+        const blocks = JSON.parse(fs.readFileSync(BLOCKS_LOG_FILE, "utf-8"));
+        // Return last 50 entries
+        res.json(blocks.slice(-50));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }

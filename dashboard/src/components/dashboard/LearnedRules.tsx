@@ -20,6 +20,8 @@ function formatDate(iso: string) {
 
 // Group rules by source token
 function groupBySource(rules: any[]) {
+  if (!rules || !Array.isArray(rules)) return [];
+
   const map: Record<string, { rules: string[]; createdAt: string }> = {};
   for (const item of rules) {
     const src = item.source || "unknown";
@@ -33,6 +35,27 @@ function groupBySource(rules: any[]) {
 
 export function LearnedRules() {
   const { learnedRules } = useDashboardData();
+
+  // Safety check
+  if (!learnedRules || !Array.isArray(learnedRules)) {
+    return (
+      <Card className="glass mt-4 h-full">
+        <CardHeader className="pb-2 bg-indigo-500/5 border-b border-indigo-500/10 flex flex-row items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2 text-indigo-200">
+            <BookOpenText className="w-5 h-5 text-indigo-400" /> Learned Rules &amp; Logic
+          </CardTitle>
+          <span className="text-xs font-mono text-indigo-400/50">
+            0 RULES · 0 TOKENS
+          </span>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="p-8 text-center text-muted-foreground">
+            Loading learned rules...
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const grouped = groupBySource(learnedRules);
 

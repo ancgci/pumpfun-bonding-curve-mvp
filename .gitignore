@@ -1,6 +1,16 @@
 *~
 node_modules
-data/
+data/*.db
+data/*.db-journal
+data/positions.json
+data/bot.json
+data/simulation/
+data/agent/trades.json
+data/agent/learner-state.json
+data/agent/status.json
+data/organicity-history.json
+data/telegram-alerts.jsonl
+data/cached-*.json
 .env
 bot-wallet.json
 

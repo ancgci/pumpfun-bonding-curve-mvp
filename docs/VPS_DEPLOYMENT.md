@@ -75,12 +75,16 @@ Embora o `./deploy/deploy.sh` já reinicie tudo sozinho, você pode gerenciar ma
 # Parar o robô (ex: em caso de emergência extrema que o painel não resolva)
 pm2 stop bot
 
+# Parar o Dashboard-api
+pm2 stop dashboard-api
+
 # Iniciar o robô novamente
 pm2 start bot
 
 # Reiniciar tudo
 pm2 restart all
 ```
+
 
 ---
 

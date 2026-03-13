@@ -56,6 +56,7 @@ const agentOrchestrator_1 = require("./utils/agentOrchestrator");
 const simulationEngine_1 = require("./utils/simulationEngine");
 const copyTradingEngine_1 = require("./utils/copyTradingEngine");
 const volatilityMonitor_1 = require("./utils/volatilityMonitor");
+const pumpfunHistory_1 = require("./utils/pumpfunHistory");
 const organicityMonitor_1 = require("./utils/organicityMonitor");
 const learnerAgent_1 = require("./utils/learnerAgent");
 const config_1 = require("./utils/config");
@@ -65,8 +66,12 @@ const metadataCache_1 = require("./utils/metadataCache");
 const performanceMonitor_1 = require("./utils/performanceMonitor");
 const riskEngine_1 = require("./utils/riskEngine");
 const riskConfig_1 = require("./utils/riskConfig");
-const dipMonitor_1 = require("./utils/dipMonitor");
 const logger_1 = __importDefault(require("./utils/logger"));
+const dipMonitor_1 = require("./utils/dipMonitor");
+const C_BLUE = "\x1b[36m";
+const C_RED = "\x1b[31m";
+const C_GREEN = "\x1b[32m";
+const C_RST = "\x1b[0m";
 const dotenv_1 = __importDefault(require("dotenv"));
 const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
 const fs_1 = __importDefault(require("fs"));
@@ -511,7 +516,7 @@ async function processPumpFunTransaction(txn, parsedTxn) {
         return;
     }
     const followedWallet = (0, copyTradingEngine_1.isFollowedWallet)(tOutput.user);
-    const AI_DISCOVERY_MIN_PROGRESS = 15;
+    const AI_DISCOVERY_MIN_PROGRESS = 80;
     const withinAiBand = Number(progress) >= AI_DISCOVERY_MIN_PROGRESS && Number(progress) <= 100;
     const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
     const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint);
@@ -521,6 +526,8 @@ async function processPumpFunTransaction(txn, parsedTxn) {
             sentAddresses.add(tOutput.mint);
         }
         if (isDiscovery) {
+            logger_1.default.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
+            await (0, pumpfunHistory_1.backfillTokenHistory)(tOutput.mint, 50);
             (0, performanceMonitor_1.recordTransaction)(tOutput.mint);
         }
         const solBalance = Number(balance);
@@ -543,16 +550,26 @@ async function processPumpFunTransaction(txn, parsedTxn) {
         let riskSection = "";
         if (riskConfig_1.RISK_CONFIG.enabled) {
             try {
+                if (isDiscovery)
+                    logger_1.default.info(`[Pipeline 2/8 - RiskEngine] 🛡️ Validando ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) no Motor de Risco (RiskEngine).`);
                 riskAnalysis = await (0, riskEngine_1.analyzeToken)(tOutput.mint, tokenMetadata, Number(progress));
                 if (isDiscovery && riskConfig_1.RISK_CONFIG.detection.blockUnlockedLP &&
                     !riskAnalysis.flags.LP_LOCKED && !riskAnalysis.flags.LP_BURNED) {
                     logger_1.default.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
+                    logger_1.default.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine: LP não lockado).`);
                     return;
+                }
+                if (isDiscovery && riskAnalysis.score > riskConfig_1.RISK_CONFIG.thresholds.med) {
+                    logger_1.default.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Score Alto: ${riskAnalysis.score}).`);
+                }
+                else if (isDiscovery) {
+                    logger_1.default.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) aprovado no RiskEngine.`);
                 }
                 riskSection = (0, riskEngine_1.formatRiskForTelegram)(riskAnalysis);
             }
             catch (riskError) {
                 logger_1.default.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
+                logger_1.default.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Error).`);
                 return;
             }
         }

@@ -137,11 +137,11 @@ export function checkEntryBlocks(
         }
     }
 
-    // 3. BLOCK_INSUFFICIENT_DATA
-    if (snap.candlesAvailable1s < 3) {
+    // 3. BLOCK_INSUFFICIENT_DATA (baixado para 2 candles para permitir scalping de lançamento)
+    if (snap.candlesAvailable1s < 2) {
         blocks.push({
             code: "BLOCK_INSUFFICIENT_DATA",
-            reason: `Apenas ${snap.candlesAvailable1s} candles de 1s disponíveis(mínimo 3)`,
+            reason: `Apenas ${snap.candlesAvailable1s} candles de 1s disponíveis(mínimo 2)`,
             severity: "HARD",
         });
         return blocks; // Sem dados suficientes, não verificar mais nada
@@ -321,51 +321,51 @@ export function checkOrganicityHardBlocks(
     const r2 = computePriceLinearityR2(prices1s);
     const pullbacks = computePullbackCount(prices1s, 10);
 
-    // 1. BLOCK_LOW_TRADE_DENSITY
+    // 1. BLOCK_LOW_TRADE_DENSITY (SOFT — tokens novos podem ter baixa densidade inicial)
     if (h.trades_20s.length < minTrades20s) {
         blocks.push({
             code: "BLOCK_LOW_TRADE_DENSITY",
             reason: `Densidade baixa: ${h.trades_20s.length}/${minTrades20s} trades em 20s`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 2. BLOCK_LOW_WALLET_DIVERSITY
+    // 2. BLOCK_LOW_WALLET_DIVERSITY (SOFT — diversidade aumenta com o tempo)
     if (h.buyerSet_30s.size < minUniqueBuyers30s || h.totalUniqueWalletsSet.size < minUniqueWalletsLifetime) {
         blocks.push({
             code: "BLOCK_LOW_WALLET_DIVERSITY",
             reason: `Wallets: ${h.buyerSet_30s.size} buyers/30s (min ${minUniqueBuyers30s}), ${h.totalUniqueWalletsSet.size} únicas (min ${minUniqueWalletsLifetime})`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 3. BLOCK_UNILATERAL_MOVEMENT
+    // 3. BLOCK_UNILATERAL_MOVEMENT (SOFT — movimento unilateral pode ser orgânico no início)
     const altRatio = computeAlternationRatio(h.recentSides);
     if (h.recentSides.length >= 10 && altRatio < minAlternationRatio) {
         blocks.push({
             code: "BLOCK_UNILATERAL_MOVEMENT",
             reason: `Movimento unilateral: alternância ${(altRatio * 100).toFixed(0)}% < mínimo ${(minAlternationRatio * 100).toFixed(0)}%`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 4. BLOCK_EXCESSIVE_LINEARITY
-    if (prices1s.length >= 20 && r2 > maxLinearityR2) {
+    // 4. BLOCK_EXCESSIVE_LINEARITY (HARD — R² > 0.98 é quase certeza de bot staircase)
+    if (prices1s.length >= 20 && r2 > 0.98) {
         blocks.push({
             code: "BLOCK_EXCESSIVE_LINEARITY",
-            reason: `Subida linear demais: R²=${r2.toFixed(3)} > ${maxLinearityR2} (suspeito de bot staircase)`,
+            reason: `Subida linear demais: R²=${r2.toFixed(3)} > 0.98 (suspeito de bot staircase)`,
             severity: "HARD",
         });
     }
 
-    // 5. BLOCK_WALLET_CONCENTRATION
+    // 5. BLOCK_WALLET_CONCENTRATION (SOFT — concentração é comum em tokens novos)
     const top1Share = bd.top1WalletSharePct;
     const top2Share = bd.top2WalletSharePct;
     if (top1Share > maxTop1WalletSharePct || top2Share > maxTop2WalletSharePct) {
         blocks.push({
             code: "BLOCK_WALLET_CONCENTRATION",
             reason: `Concentração alta: top1=${top1Share.toFixed(0)}% (max ${maxTop1WalletSharePct}%) top2=${top2Share.toFixed(0)}% (max ${maxTop2WalletSharePct}%)`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
@@ -385,16 +385,16 @@ export function checkOrganicityHardBlocks(
         });
     }
 
-    // 7. BLOCK_NO_PARTICIPATION_EXPANSION
+    // 7. BLOCK_NO_PARTICIPATION_EXPANSION (SOFT — participação pode crescer com o tempo)
     if (bd.participationExpansionScore < 30) {
         blocks.push({
             code: "BLOCK_NO_PARTICIPATION_EXPANSION",
             reason: `Preço subiu sem expansão de participantes (score ${bd.participationExpansionScore}/100)`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 8. BLOCK_NO_SELLER_PRESENCE (SOFT — peso moderado, ajuste #2)
+    // 8. BLOCK_NO_SELLER_PRESENCE (SOFT — peso moderado)
     const sellRatio = bd.sellPresenceRatio;
     const priceAdvance = prices1s.length >= 2
         ? ((prices1s[prices1s.length - 1] - prices1s[0]) / prices1s[0]) * 100
@@ -403,25 +403,25 @@ export function checkOrganicityHardBlocks(
         blocks.push({
             code: "BLOCK_NO_SELLER_PRESENCE",
             reason: `Subida de ${priceAdvance.toFixed(1)}% sem sellers reais (${(sellRatio * 100).toFixed(0)}% sells)`,
-            severity: "SOFT", // moderado conforme ajuste #2
+            severity: "SOFT",
         });
     }
 
-    // 9. BLOCK_LOW_ORGANIC_SCORE
+    // 9. BLOCK_LOW_ORGANIC_SCORE (SOFT — score baixo não deve bloquear, apenas alertar)
     if (organicityResult.organicMarketScore < minOrganicScore) {
         blocks.push({
             code: "BLOCK_LOW_ORGANIC_SCORE",
             reason: `OrganicMarketScore ${organicityResult.organicMarketScore} < mínimo ${minOrganicScore}`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 10. BLOCK_ARTIFICIAL_COMBO
+    // 10. BLOCK_ARTIFICIAL_COMBO (HARD — combo muito suspeito)
     if (
         pullbacks === 0 &&
-        r2 > 0.95 &&
-        altRatio < 0.25 &&
-        prices1s.length >= 30
+        r2 > 0.97 &&
+        altRatio < 0.15 &&
+        prices1s.length >= 40
     ) {
         blocks.push({
             code: "BLOCK_ARTIFICIAL_COMBO",
@@ -430,60 +430,56 @@ export function checkOrganicityHardBlocks(
         });
     }
 
-    // ── SPRINT 2 — FILTROS DE WALLET AVANÇADOS ──
+    // ── SPRINT 2 — FILTROS DE WALLET AVANÇADOS (todos SOFT — deixam LLM decidir) ──
 
-    // 11. BLOCK_TOP3_BUYER_CONCENTRATION
-    // Top 3 compradores concentrando mais de 80% do volume de compra = artificial
+    // 11. BLOCK_TOP3_BUYER_CONCENTRATION (SOFT)
     const { top3Buy, top3Sell } = computeTop3WalletShareBySide(h.buyerVolumes_60s, h.sellerVolumes_60s);
     if (top3Buy > 80 && h.buyerVolumes_60s.size >= 3) {
         blocks.push({
             code: "BLOCK_TOP3_BUYER_CONCENTRATION",
             reason: `Top 3 buyers = ${top3Buy.toFixed(0)}% do volume de compra (max 80%)`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 12. BLOCK_TOP5_WALLET_CONCENTRATION
-    // Top 5 wallets com mais de 90% do volume total = mercado controlado
+    // 12. BLOCK_TOP5_WALLET_CONCENTRATION (SOFT)
     const top5Share = computeTop5WalletShare(h.walletVolumes_60s);
     if (top5Share > 90 && h.walletVolumes_60s.size >= 5) {
         blocks.push({
             code: "BLOCK_TOP5_WALLET_CONCENTRATION",
             reason: `Top 5 wallets = ${top5Share.toFixed(0)}% do volume total (max 90%)`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 13. BLOCK_WALLET_REPETITION_STREAK
+    // 13. BLOCK_WALLET_REPETITION_STREAK (SOFT)
     const streak = getConsecutiveWalletStreak(h);
     if (streak >= 6) {
         blocks.push({
             code: "BLOCK_WALLET_REPETITION_STREAK",
             reason: `Mesma wallet em ${streak} trades consecutivos (≥ 6 = comportamento de bot)`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // ── SPRINT 3 — MATURIDADE DE MERCADO ──
+    // ── SPRINT 3 — MATURIDADE DE MERCADO (todos SOFT) ──
 
-    // 14. BLOCK_HOLLOW_LIQUIDITY
-    // Impacto de preço > 1.2% por SOL = liquidez artificial/baixa
+    // 14. BLOCK_HOLLOW_LIQUIDITY (SOFT)
     const impact = organicityResult.breakdown.priceImpactPerSol;
     if (impact > 1.2 && h.trades_60s.length >= 5) {
         blocks.push({
             code: "BLOCK_HOLLOW_LIQUIDITY",
             reason: `Liquidez oca: impacto de ${impact.toFixed(2)}%/SOL (max 1.2% - mercado manipulável)`,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
-    // 15. BLOCK_MASS_SELLER_EXODUS
-    // Score de comportamento de vendedor muito baixo indica despejo sem absorção
+    // 15. BLOCK_MASS_SELLER_EXODUS (SOFT)
     if (organicityResult.breakdown.sellerBehaviorScore < 15 && h.trades_60s.length >= 10) {
         blocks.push({
             code: "BLOCK_MASS_SELLER_EXODUS",
             reason: `Êxodo massivo: vendedores sem absorção orgânica (Score=${organicityResult.breakdown.sellerBehaviorScore})`,
-            severity: "SOFT", // Soft por ser comportamental
+            severity: "SOFT",
         });
     }
 

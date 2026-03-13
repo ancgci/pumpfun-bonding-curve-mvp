@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 const TA_CONFIG_FILE = path.join(__dirname, "../data/ta-config.json");
+const FALLBACK_STATE_FILE = path.join(__dirname, "../data/.ta-fallback-state.json");
 
 // ============================================================
 // Interface completa de configuração da Análise Técnica V2
@@ -114,6 +115,14 @@ export interface TechnicalAnalysisConfig {
     minOrganicScore: number;
     /** Habilitar ajuste automático do score baseado em performance. Default: false */
     adaptiveOrganicEnabled: boolean;
+
+    // --- Fallback Automático ---
+    /** Habilitar fallback se 0 trades em N minutos. Default: true */
+    fallbackEnabled?: boolean;
+    /** Tempo sem trades para ativar fallback (minutos). Default: 30 */
+    fallbackNoTradeTimeoutMinutes?: number;
+    /** Score mínimo em fallback mode. Default: 30 */
+    fallbackScoreMinimo?: number;
 }
 
 // ============================================================
@@ -194,8 +203,29 @@ export function loadTAConfig(): TechnicalAnalysisConfig {
         if (fs.existsSync(TA_CONFIG_FILE)) {
             const raw = fs.readFileSync(TA_CONFIG_FILE, "utf-8");
             const saved = JSON.parse(raw);
-            // Merge: defaults + overrides do arquivo
-            return { ...DEFAULT_TA_CONFIG, ...saved };
+            
+            let modeConfig: Partial<TechnicalAnalysisConfig> = {};
+            
+            // Se tem campo "mode" e "modes", usa o modo selecionado
+            if (saved.mode && saved.modes && saved.modes[saved.mode]) {
+                modeConfig = saved.modes[saved.mode];
+            } else if (!saved.mode) {
+                // Fallback: usa o arquivo inteiro como config (para backward compatibility)
+                modeConfig = saved;
+            }
+            
+            // Merge: defaults + modo selecionado + fallback/autoSell
+            return { 
+                ...DEFAULT_TA_CONFIG, 
+                ...modeConfig,
+                ...(saved.fallback ? { fallbackEnabled: saved.fallback.enabled, fallbackNoTradeTimeoutMinutes: saved.fallback.noTradeTimeoutMinutes, fallbackScoreMinimo: saved.fallback.overrideScoreMinimo } : {}),
+                ...(saved.autoSell ? { 
+                    stopMultiplier: saved.autoSell.sl / 100 * 1.5, // Convert %SL to multiplier
+                    tpMultiplier1: saved.autoSell.tp1 / 100 * 1.5,
+                    tpMultiplier2: saved.autoSell.tp2 / 100 * 1.5,
+                    partialExitPct: saved.autoSell.tp1
+                } : {})
+            };
         }
     } catch (err) {
         console.error("[TA Config] Erro ao carregar ta-config.json, usando defaults:", err);
@@ -226,4 +256,101 @@ export function saveTAConfig(config: Partial<TechnicalAnalysisConfig>): void {
     } catch (err) {
         console.error("[TA Config] Erro ao salvar ta-config.json:", err);
     }
+}
+
+// ============================================================
+// FALLBACK AUTOMÁTICO — Ativa modo emergencial se 0 trades em N min
+// ============================================================
+interface FallbackState {
+    lastTradeTimestamp: number | null;
+    fallbackActive: boolean;
+    fallbackActivatedAt: number | null;
+    originalScoreMinimo: number | null;
+}
+
+let _fallbackState: FallbackState = {
+    lastTradeTimestamp: null,
+    fallbackActive: false,
+    fallbackActivatedAt: null,
+    originalScoreMinimo: null,
+};
+
+export function registerTradeExecution(): void {
+    _fallbackState.lastTradeTimestamp = Date.now();
+    // Se estava em fallback e teve trade, desativa
+    if (_fallbackState.fallbackActive) {
+        _fallbackState.fallbackActive = false;
+        _fallbackState.fallbackActivatedAt = null;
+        console.log("[TA Fallback] Desativado após trade executado");
+    }
+}
+
+export function checkAndActivateFallback(): void {
+    const config = getTAConfig();
+
+    // Fallback desabilitado na config?
+    if (config.fallbackEnabled === false) return;
+
+    // Já está em fallback?
+    if (_fallbackState.fallbackActive) return;
+
+    const timeoutMinutes = config.fallbackNoTradeTimeoutMinutes ?? 30;
+    const timeoutMs = timeoutMinutes * 60 * 1000;
+    const now = Date.now();
+
+    // Sem trade registrado ainda?
+    if (_fallbackState.lastTradeTimestamp === null) {
+        // Se bot está rodando há mais que timeout, ativa fallback
+        const bootTime = now - (process.uptime() * 1000);
+        if (now - bootTime > timeoutMs) {
+            activateFallback();
+        }
+        return;
+    }
+
+    // Tempo desde último trade
+    const timeSinceLastTrade = now - _fallbackState.lastTradeTimestamp;
+
+    if (timeSinceLastTrade > timeoutMs) {
+        activateFallback();
+    }
+}
+
+function activateFallback(): void {
+    const config = getTAConfig();
+    _fallbackState.fallbackActive = true;
+    _fallbackState.fallbackActivatedAt = Date.now();
+    _fallbackState.originalScoreMinimo = config.scoreMinimo;
+
+    const fallbackScore = config.fallbackScoreMinimo ?? 30;
+
+    console.log(
+        `[TA Fallback] ⚠️  ATIVADO: 0 trades em ${config.fallbackNoTradeTimeoutMinutes ?? 30}min. ` +
+        `scoreMinimo: ${config.scoreMinimo} → ${fallbackScore}`
+    );
+
+    // Atualiza config em memória com score reduzido
+    _taConfig.scoreMinimo = fallbackScore;
+}
+
+export function getFallbackState(): FallbackState & { isActive: boolean; timeSinceLastTradeMin: number | null } {
+    const now = Date.now();
+    const timeSinceLastTradeMin = _fallbackState.lastTradeTimestamp
+        ? Math.floor((now - _fallbackState.lastTradeTimestamp) / 60000)
+        : null;
+
+    return {
+        ..._fallbackState,
+        isActive: _fallbackState.fallbackActive,
+        timeSinceLastTradeMin,
+    };
+}
+
+export function resetFallbackState(): void {
+    _fallbackState = {
+        lastTradeTimestamp: null,
+        fallbackActive: false,
+        fallbackActivatedAt: null,
+        originalScoreMinimo: null,
+    };
 }

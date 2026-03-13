@@ -6,7 +6,25 @@ import { List } from "lucide-react";
 export function PositionsList() {
   const { positions } = useDashboardData();
 
-  if (!positions) return null;
+  // Safety check
+  const safePositions = positions && Array.isArray(positions) ? positions : [];
+
+  if (safePositions.length === 0) {
+    return (
+      <Card className="glass border-blue-500/20">
+        <CardHeader className="pb-2 bg-blue-500/5 border-b border-blue-500/10">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <List className="w-5 h-5 text-blue-400" /> Active Positions
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="p-8 text-center text-muted-foreground">
+            No active positions open right now.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card className="glass border-blue-500/20">
@@ -34,7 +52,7 @@ export function PositionsList() {
                 </tr>
               </thead>
               <tbody>
-                {positions.map((pos, i) => {
+                {safePositions.map((pos, i) => {
                   const pnlClass =
                     pos.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400";
                   return (

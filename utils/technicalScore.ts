@@ -51,13 +51,13 @@ export function calculateConfluenceScore(
     snap: TASnapshotV2,
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
 ): ScoreResult {
-    // Guard: dados insuficientes
-    if (snap.candlesAvailable1s < 3) {
+    // Guard: dados insuficientes (baixado para 2 candles para pegar o 'instante zero')
+    if (snap.candlesAvailable1s < 2) {
         return {
             score: 0,
             breakdown: makeEmptyBreakdown(),
             invalidated: true,
-            invalidReason: `INSUFFICIENT_DATA: apenas ${snap.candlesAvailable1s} candles de 1s disponíveis (mínimo 3)`,
+            invalidReason: `INSUFFICIENT_DATA: apenas ${snap.candlesAvailable1s} candles de 1s disponíveis (mínimo 2)`,
             sizing: 0,
             regime: "INSUFFICIENT_DATA",
         };
@@ -135,8 +135,23 @@ export function calculateConfluenceScore(
     // BÔNUS
     // ============================================================
 
+    // Se o score técnico tradicional (EMA/MACD) estiver zerado por falta de histórico
+    // mas o microTrend e volume estiverem explodindo, damos um bônus agressivo de lançamento.
     if (snap.microTrend !== null && snap.microTrend.changePct > 0.1) {
+        // Peso base do microTrend
         bd.microTrendPositive = 5;
+
+        // BÔNUS DE LANÇAMENTO AGRESSIVO (Sprint 4)
+        // Se priceAboveVWAP e microTrend forte, compensamos a falta de EMA/MACD
+        if (snap.microTrend.changePct > 1.5 && snap.priceAboveVWAP) {
+            // Se não temos EMA/MACD (provavelmente token < 10 segundos)
+            const hasSlowSignals = snap.emaAligned || (snap.macd && snap.macd.histogram > 0);
+            if (!hasSlowSignals) {
+                bd.microTrendPositive += 35; // Total 40: aprova quase sozinho se o preço estiver voando
+            } else {
+                bd.microTrendPositive += 10; // Se já tem sinais lentos, bônus é menor pra não overfit
+            }
+        }
     }
 
     // ============================================================
@@ -195,7 +210,7 @@ export function calculateConfluenceScore(
 
     // Volume spike sem follow-through (burst excessivo sem avanço de preço)
     if (snap.volumeRelative?.isSpike && snap.microTrend !== null) {
-        if (Math.abs(snap.microTrend.changePct) < 0.1) {
+        if (Math.abs(snap.microTrend.changePct) < ((config as any).volumeSpikeFollowMinPct ?? 0.1)) {
             invalidReason = invalidReason ?? `BLOCK_VOLUME_SPIKE_NO_FOLLOW: spike de volume sem movimento de preço`;
         }
     }

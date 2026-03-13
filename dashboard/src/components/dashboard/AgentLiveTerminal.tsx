@@ -72,6 +72,9 @@ export function AgentLiveTerminal() {
   //   bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   // }, [logs]);
 
+  // Safety check
+  const safeLogs = logs && Array.isArray(logs) ? logs : [];
+
   return (
     <Card className="glass flex flex-col pt-4 overflow-hidden border-orange-500/20" style={{ minHeight: "600px" }}>
       <div className="px-4 pb-2 border-b border-orange-500/10 flex items-center justify-between">
@@ -91,12 +94,12 @@ export function AgentLiveTerminal() {
       <CardContent className="flex-1 p-0 relative">
         <ScrollArea className="h-full w-full bg-black/80 font-mono text-xs" style={{ height: "540px" }}>
           <div className="p-4 space-y-1">
-            {logs.length === 0 ? (
+            {safeLogs.length === 0 ? (
               <div className="text-muted-foreground animate-pulse py-8 text-center">
                 ⏳ Waiting for terminal logs...
               </div>
             ) : (
-              logs.map((log: any, i) => (
+              safeLogs.map((log: any, i) => (
                 <div
                   key={i}
                   className={`flex gap-3 leading-relaxed border-b border-white/5 pb-1 mb-1 ${(log.type || log.level) === "error"

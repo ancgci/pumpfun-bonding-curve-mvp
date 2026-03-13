@@ -31,6 +31,24 @@ export function TradeHistory() {
   const rawTrades =
     simTrades && simTrades.length > 0 ? simTrades : tradeHistory || [];
 
+  // Safety: ensure rawTrades is an array before mapping
+  if (!rawTrades || !Array.isArray(rawTrades)) {
+    return (
+      <Card className="glass mt-4">
+        <CardHeader className="pb-2 bg-black/20 border-b border-white/5">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <History className="w-5 h-5 text-gray-400" /> Recent Simulation Trades
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="p-8 text-center text-muted-foreground">
+            Loading trade data...
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   const trades = rawTrades.map((t: any) => ({
     symbol: t.symbol || t.tokenSymbol || null,
     mint: t.mint || t.tokenMint || null,

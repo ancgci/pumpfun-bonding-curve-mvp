@@ -28,7 +28,8 @@ import { alertQueue } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from "./utils/agentOrchestrator";
 import { rebuildMetricsFromFile } from "./utils/simulationEngine";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
-import { recordPriceSample } from "./utils/volatilityMonitor";
+import { recordPriceSample, getLatestPrice } from './utils/volatilityMonitor';
+import { backfillTokenHistory } from './utils/pumpfunHistory';
 import { recordOrganicityTrade, loadOrganicityFromDisk, saveOrganicityToDisk } from "./utils/organicityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
 import { CONFIG, validateConfig, getRuntimeConfig } from "./utils/config";
@@ -38,10 +39,16 @@ import { getCachedTokenMetadata } from "./utils/metadataCache";
 import { recordTransaction, recordCacheHit, recordCacheMiss, recordApiCall, recordError, reportPerformance } from "./utils/performanceMonitor";
 import { analyzeToken, formatRiskForTelegram } from "./utils/riskEngine";
 import { RISK_CONFIG } from "./utils/riskConfig";
+import logger from "./utils/logger";
 import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
 import { dipMonitor } from "./utils/dipMonitor";
 import { circuitBreaker } from "./utils/circuitBreaker";
-import logger from "./utils/logger";
+
+// Cores ANSI para Logs
+const C_BLUE = "\x1b[36m";
+const C_RED = "\x1b[31m";
+const C_GREEN = "\x1b[32m";
+const C_RST = "\x1b[0m";
 
 import dotenv from "dotenv";
 import TelegramBot from "node-telegram-bot-api";
@@ -678,7 +685,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
   const followedWallet = isFollowedWallet(tOutput.user);
 
-  const AI_DISCOVERY_MIN_PROGRESS = 15; // Lowered to 15% as a compromise for earlier discovery
+  const AI_DISCOVERY_MIN_PROGRESS = 80; // Voltando para 80% (foco em tokens maduros próximos da migração) para não inflar a fila com tokens novos que geram SKIP.
   const withinAiBand = Number(progress) >= AI_DISCOVERY_MIN_PROGRESS && Number(progress) <= 100;
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
 
@@ -692,6 +699,12 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       sentAddresses.add(tOutput.mint);
     }
     if (isDiscovery) {
+      logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
+
+      // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
+      // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
+      await backfillTokenHistory(tOutput.mint, 50);
+
       recordTransaction(tOutput.mint);
     }
 
@@ -732,19 +745,30 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     let riskSection = "";
     if (RISK_CONFIG.enabled) {
       try {
+        if (isDiscovery) logger.info(`[Pipeline 2/8 - RiskEngine] 🛡️ Validando ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) no Motor de Risco (RiskEngine).`);
         riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata, Number(progress));
 
         // Bloqueio de risco apenas para discovery (Mirror confia na wallet?)
         if (isDiscovery && RISK_CONFIG.detection.blockUnlockedLP &&
           !riskAnalysis.flags.LP_LOCKED && !riskAnalysis.flags.LP_BURNED) {
           logger.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
+          logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine: LP não lockado).`);
           return;
         }
+
+        if (isDiscovery && riskAnalysis.score > RISK_CONFIG.thresholds.med) {
+          logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Score Alto: ${riskAnalysis.score}).`);
+          // The return happens later via getAgentDecision's evaluation of riskScore, or we can just let it pass to agent.
+        } else if (isDiscovery) {
+          logger.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) aprovado no RiskEngine.`);
+        }
+
         riskSection = formatRiskForTelegram(riskAnalysis);
       } catch (riskError: any) {
         // [SAFETY GATE] Se a análise de risco falhou por erro técnico (API limit/Timeout), 
         // abortamos o trade para não entrar às cegas.
         logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
+        logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Error).`);
         return;
       }
     }

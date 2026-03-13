@@ -11,10 +11,22 @@ try {
 }
 catch (error) {
 }
+const timezoned = () => {
+    return new Date().toLocaleString('en-CA', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).replace(',', '');
+};
 const logger = winston_1.default.createLogger({
     level: 'info',
     format: winston_1.default.format.combine(winston_1.default.format.timestamp({
-        format: 'YYYY-MM-DD HH:mm:ss'
+        format: timezoned
     }), winston_1.default.format.errors({ stack: true }), winston_1.default.format.splat(), winston_1.default.format.json()),
     defaultMeta: { service: 'pumpfun-monitor' },
     transports: [
@@ -39,7 +51,7 @@ const logger = winston_1.default.createLogger({
 });
 logger.add(new winston_1.default.transports.Console({
     format: winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.timestamp({
-        format: 'YYYY-MM-DD HH:mm:ss'
+        format: timezoned
     }), winston_1.default.format.printf(({ level, message, timestamp }) => {
         return `${timestamp} ${level}: ${message}`;
     }))

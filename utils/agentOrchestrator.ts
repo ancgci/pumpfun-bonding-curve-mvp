@@ -14,8 +14,19 @@ import {
 } from "./simulationEngine";
 import { recordPriceSample, getVolatility, getTASnapshotV2, TASnapshotV2 } from "./volatilityMonitor";
 import { getTAConfig } from "./technicalConfig";
+const C_BLUE = "\x1b[36m";
+const C_RED = "\x1b[31m";
+const C_GREEN = "\x1b[32m";
+const C_RST = "\x1b[0m";
+
 import { calculateConfluenceScore, formatScoreLog } from "./technicalScore";
-import { checkEntryBlocks, hasHardBlock, formatBlocksLog, registerPriceForLegDetection, checkOrganicityHardBlocks } from "./entryBlocker";
+import {
+  checkEntryBlocks,
+  hasHardBlock,
+  formatBlocksLog,
+  registerPriceForLegDetection,
+  checkOrganicityHardBlocks
+} from "./entryBlocker";
 import { getOrganicityWindowData, getCurveHistory } from "./organicityMonitor";
 import { calculateOrganicityScore, formatOrganicityLog } from "./organicityScore";
 import { SHADOW_MODE, recordShadowEvent } from "./organicityShadowLogger";
@@ -136,7 +147,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        timeout: 20000,
+        timeout: 45000,
       }
     );
 
@@ -341,6 +352,7 @@ export async function getAgentDecision(
   tokenAnalysis.taScore = scoreResult.score;
   tokenAnalysis.taScoreBreakdown = formatScoreLog(scoreResult);
   logger.info(`📊 [TA V2 Pre-LLM] ${tokenAnalysis.symbol} Score=${scoreResult.score}/100 Regime=${scoreResult.regime}`);
+  logger.info(`[Pipeline 3/8 - Technical Analysis] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) passou pela Análise Técnica Pre-LLM (Score: ${scoreResult.score}).`);
 
   // ── FILTROS RÁPIDOS PRÉ-LLM (< 1ms, apenas casos óbvios) ──
   // Bloqueios de gestão de risco: cooldown e stops consecutivos
@@ -457,7 +469,24 @@ export async function getAgentDecision(
       logger.warn(`⚠️ [Agent] AI Decision Queue is backing up: ${queueSize} requests waiting.`);
     }
 
-    const decision = await llmLimiter.schedule(async () => {
+    // Retry helper
+    const attemptWithRetry = async (fn: () => Promise<AgentDecision>, maxRetries: number = 2): Promise<AgentDecision> => {
+      let lastError: Error | null = null;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          return await fn();
+        } catch (error: any) {
+          lastError = error;
+          logger.warn(`⚠️ [Agent] Attempt ${attempt}/${maxRetries} failed: ${error.message}`);
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Backoff 1s, 2s
+          }
+        }
+      }
+      throw lastError;
+    };
+
+    const decision = await attemptWithRetry(async () => {
       try {
         // 🚀 Multi-Agent PRO Orchestration
         const orchestratedResult = await orchestrator.decide(tokenAnalysis);
@@ -486,7 +515,7 @@ export async function getAgentDecision(
         // 🔄 Safe Fallback to original single-LLM brain
         return await callLlm(tokenAnalysis);
       }
-    });
+    }, 2);
 
     persistAgentStatus({ rateLimited: false, at: Date.now() });
     decisionCache.set(cacheKey, { decision, ts: Date.now() });
@@ -545,6 +574,7 @@ export async function executeAgentTrade(
     `🤖 [Agent ${agentMode}] ${decision.action}: ${tokenAnalysis.symbol} (confidence: ${decision.confidence}%)`
   );
   logger.info(`   Reasoning: ${decision.reasoning}`);
+  logger.info(`[Pipeline 4/8 - AI Agent] 🧠 ${decision.action === "BUY" ? C_BLUE + "APROVADO" : C_RED + "REPROVADO"}${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) gerou decisão LLM: ${decision.action} (${decision.confidence}%).`);
 
   // ══════════════════════════════════════════════════
   // PRE-EXECUTION VALIDATION AND DIP ROUTING
@@ -567,6 +597,7 @@ export async function executeAgentTrade(
     const taSnapNow = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
 
     // 1. Checar bloqueios HARD no momento atual
+    logger.info(`[Pipeline 5/8 - Hard Blocks] 🛡️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) revalidando Hard Blocks (Pré-execução)...`);
     const execBlocks = checkEntryBlocks(taSnapNow, taConfigExec, tokenAnalysis.mint);
     if (hasHardBlock(execBlocks)) {
       const hardBlock = execBlocks.find(b => b.severity === "HARD");
@@ -575,9 +606,11 @@ export async function executeAgentTrade(
         `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} HARD BLOCK no momento da execução: ` +
         `${hardBlock?.code} — Enfileirando no DipMonitor (Immediate=${isInsufficientData}).`
       );
+      logger.info(`[Pipeline 5/8 - Hard Blocks] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) BLOQUEADO por regra estática (${hardBlock?.code}).`);
       dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, isInsufficientData);
       return;
     }
+    logger.info(`[Pipeline 5/8 - Hard Blocks] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) sobreviveu aos Hard Blocks post-LLM.`);
 
     // 2. Checar score de confluência no momento atual
     const execScore = calculateConfluenceScore(taSnapNow, taConfigExec);
@@ -603,9 +636,24 @@ export async function executeAgentTrade(
       const prices1sNow = (taSnapNow as any).closes1s as number[] | undefined ?? [];
       const t0 = performance.now();
       const orgResult = calculateOrganicityScore(orgHistory, prices1sNow, tokenAnalysis.bondingCurvePercent || 90);
-      const orgBlocks = checkOrganicityHardBlocks(orgHistory, orgResult, prices1sNow);
+      const orgBlocks = checkOrganicityHardBlocks(
+        orgHistory,
+        orgResult,
+        prices1sNow,
+        /* minTrades20s */ 3,
+        /* minUniqueBuyers30s */ 2,
+        /* minUniqueWalletsLifetime */ 5,
+        /* minAlternationRatio */ 0.15,
+        /* maxLinearityR2 */ 0.98,
+        /* maxTop1WalletSharePct */ 70,
+        /* maxTop2WalletSharePct */ 85,
+        /* maxOrderRepetitionRatioHard */ 0.75,
+        /* maxOrderRepetitionRatioSoft */ 0.55,
+        /* minOrganicScore */ taConfigExec.minOrganicScore ?? 30
+      );
       const latencyMs = performance.now() - t0;
 
+      logger.info(`[Pipeline 6/8 - Organicity] 🧬 Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) avaliando Organicidade de Fluxo...`);
       logger.info(formatOrganicityLog(orgResult, tokenAnalysis.mint));
 
       const hardOrgBlocks = orgBlocks.filter(b => b.severity === "HARD");
@@ -641,8 +689,10 @@ export async function executeAgentTrade(
             `🔬 [SHADOW] ${tokenAnalysis.symbol} TERIA SIDO BLOQUEADO por organicidade: ` +
             `${hardOrgBlock.code} — ${hardOrgBlock.reason} (latência: ${latencyMs.toFixed(2)}ms)`
           );
+          logger.info(`[Pipeline 6/8 - Organicity] ⚠️ ${C_BLUE}APROVADO (Shadow)${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) falharia na Organicidade, mas salvo pelo SHADOW MODE.`);
         } else {
           logger.debug(`🔬 [SHADOW] ${tokenAnalysis.symbol} PASSARIA na camada de organicidade (score=${orgResult.organicMarketScore}, ${latencyMs.toFixed(2)}ms)`);
+          logger.info(`[Pipeline 6/8 - Organicity] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) com fluxo de trade Orgânico.`);
         }
         // Em shadow mode: não bloquear, apenas observar → continua execução
       } else {
@@ -653,9 +703,11 @@ export async function executeAgentTrade(
             `🧪 [Organicity Post-LLM] ${tokenAnalysis.symbol} BLOQUEADO: ` +
             `${hardOrgBlock.code} — ${hardOrgBlock.reason}. Enfileirando no DipMonitor (Dip Sniper Mode).`
           );
+          logger.info(`[Pipeline 6/8 - Organicity] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) BLOQUEADO pela Proteção de Organicidade.`);
           dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
           return;
         }
+        logger.info(`[Pipeline 6/8 - Organicity] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) com fluxo de trade Orgânico.`);
 
         if (softOrgBlocks.length > 0) {
           logger.debug(`⚠️ [Organicity] ${tokenAnalysis.symbol} Soft signals: ${softOrgBlocks.map(b => b.code).join(", ")}`);
@@ -665,6 +717,7 @@ export async function executeAgentTrade(
 
     // 2.7. micro-confirmação (Sprint 2)
     // Janela assíncrona de 3-8s observando a saúde do token no momento da execução.
+    logger.info(`[Pipeline 7/8 - Micro-Confirm] ⏱️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) iniciando janela de Micro-Confirmação...`);
     const runMicroConfirm = getMicroConfirmRunner();
     const prices1sExec = (taSnapNow as any).closes1s as number[] | undefined ?? [];
     const mcResult = await runMicroConfirm(
@@ -676,10 +729,12 @@ export async function executeAgentTrade(
 
     if (!mcResult.passed) {
       // Se falhou (e não estamos em shadow mode), aborta.
-      // O runner shadow retorna passed: true mesmo se os critérios falharem internamente.
+      // O runner shadow retorna passed: true even if criteria fail internally.
+      logger.info(`[Pipeline 7/8 - Micro-Confirm] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) falhou na Micro-Confirmação (Sinais de Despejo).`);
       dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
       return;
     }
+    logger.info(`[Pipeline 7/8 - Micro-Confirm] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) confirmado contra Despejos Rápidos!`);
 
     // 3. Checar spike de preço durante avaliação LLM
     const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, 10.0);
@@ -688,12 +743,14 @@ export async function executeAgentTrade(
         `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike. ` +
         `Moving ${tokenAnalysis.symbol} to Dip Waitlist (Dip Sniper Mode).`
       );
+      logger.info(`[Pipeline 8/8 - Execution] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) abortado (Price Spike detectado pré-compra).`);
       dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
       return;
     }
 
     // ✅ Setup ainda válido após LLM + Organicidade — pode executar!
     logger.info(`✅ [Post-LLM Full] ${tokenAnalysis.symbol} TA=${execScore.score} ORGANIC=✅ APROVADO — executando compra.`);
+    logger.info(`[Pipeline 8/8 - Execution] 🚀 ${C_GREEN}EXECUTADO TRADE${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) aprovado em todas as etapas! Enviando Ordem (COMPRA) para a Blockchain.`);
   }
 
 

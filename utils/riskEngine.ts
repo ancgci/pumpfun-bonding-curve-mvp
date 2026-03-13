@@ -246,9 +246,16 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
     };
 
     const emoji = decision === "ALLOW_TRADE" ? "✅" : decision === "ALLOW_ALERT" ? "⚠️" : "🚫";
-    logger.info(
-        `${emoji} [RiskEngine] Token ${tokenAddr.substring(0, 8)}... → Score: ${finalScore}/100 (${decision}) [${elapsed}ms]`
-    );
+    const symbol = tokenMetadata?.symbol || "???";
+    if (decision === "BLOCK") {
+        logger.info(
+            `${emoji} [RiskEngine] ${symbol} (${tokenAddr}) → Score: ${finalScore}/100 (${decision}) [${elapsed}ms]`
+        );
+    } else {
+        logger.debug(
+            `${emoji} [RiskEngine] ${symbol} (${tokenAddr}) → Score: ${finalScore}/100 (${decision}) [${elapsed}ms]`
+        );
+    }
 
     if (reasons.length > 0) {
         logger.info(`   Razões: ${reasons.map(r => `${r.filter}(+${r.impact})`).join(", ")}`);

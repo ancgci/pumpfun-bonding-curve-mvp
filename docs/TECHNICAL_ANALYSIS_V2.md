@@ -1,9 +1,9 @@
-# ANÁLISE TÉCNICA V2 — ARQUITETURA QUANT PARA BOT SCALPER PUMP.FUN
+# ANÁLISE TÉCNICA V4 — ARQUITETURA QUANT PARA BOT SCALPER PUMP.FUN
 
-> **Versão**: 2.0  
-> **Data**: 2026-03-11  
-> **Timeframe operacional**: 1 segundo (buckets de 1s)  
-> **Objetivo**: Comprar o mais barato possível em estrutura de continuação/reversão de curtíssimo prazo e vender na expansão rápida.
+> **Versão**: 4.0
+> **Data**: 2026-03-13
+> **Timeframe operacional**: 1 segundo (buckets de 1s)
+> **Objetivo**: Scalping agressivo em lançamentos (80% curve) com injeção de histórico prévio.
 
 ---
 
@@ -289,6 +289,7 @@ BLOCO 4 — FILTRO (penalidades):
 
 BÔNUS:
   Micro-trend positivo (10s)     → +5 pts
+  🚀 Launch Momentum (NEW)       → +35 pts (Total +40 se for launch sem MACD/EMA pronto)
   ADX > 25 (se habilitado)       → +5 pts
 ```
 
@@ -321,9 +322,9 @@ Devido à latência natural da análise e decisão da Inteligência Artificial (
 *   Se a LLM aprova a compra (`action: "BUY"`), a análise técnica é refeita *no momento exato da execução*.
 *   **Bloqueios HARD avaliados**: Se qualquer bloqueio (ex: VWAP distance, candle esticado, ATR morto) for acionado nesse segundo exato, a compra é abortada.
 *   **Score reavaliado**: Se o score técnico nesse novo segundo for menor que o `scoreMinimo` (ex: 55), a compra é abortada.
-*   **Insuficiência de Dados**: O sistema exige agora o mínimo de **15 candles de 1s** para estabilização de indicadores (anteriormente 20).
-*   **Spike de Preço**: Verifica se o preço subiu > 10% durante a avaliação da LLM. Aborta se sim.
-*   **Ação**: Tokens aprovados pela LLM mas abortados na re-validação técnica são imediatamente enviados para a fila do **DipMonitor**. Se o motivo for apenas `BLOCK_INSUFFICIENT_DATA`, eles são enfileirados para compra imediata pós-estabilização.
+*   **🚀 Backfill de Histórico (Discovery Lane)**: O sistema agora **não exige espera**. Ao descobrir o token (Step 1), o bot busca automaticamente os últimos **50 trades** via API. Isso popula os indicadores (MACD/RSI) instantaneamente.
+*   **Min Candles**: A trava técnica mínima foi baixada para **2 candles de 1s** (devido ao backfill).
+*   **Ação**: Tokens aprovados pela LLM mas abortados na re-validação técnica são imediatamente enviados para a fila do **DipMonitor**.
 
 ---
 
