@@ -52,12 +52,12 @@ export function calculateConfluenceScore(
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
 ): ScoreResult {
     // Guard: dados insuficientes (baixado para 2 candles para pegar o 'instante zero')
-    if (snap.candlesAvailable1s < 2) {
+    if (snap.candlesAvailable1s < 1) {
         return {
             score: 0,
             breakdown: makeEmptyBreakdown(),
             invalidated: true,
-            invalidReason: `INSUFFICIENT_DATA: apenas ${snap.candlesAvailable1s} candles de 1s disponíveis (mínimo 2)`,
+            invalidReason: `INSUFFICIENT_DATA: 0 candles de 1s disponíveis`,
             sizing: 0,
             regime: "INSUFFICIENT_DATA",
         };

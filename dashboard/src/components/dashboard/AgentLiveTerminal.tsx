@@ -24,6 +24,8 @@ function colorizeLogMessage(message: string): string {
   if (!message) return "";
 
   let html = message
+    // Strip ANSI escape codes (e.g., [36m, [0m)
+    .replace(/\x1b\[[0-9;]*m/g, "")
     // Escape HTML first to prevent XSS and malformed tags
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 

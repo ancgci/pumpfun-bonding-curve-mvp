@@ -352,7 +352,13 @@ export async function getAgentDecision(
   tokenAnalysis.taScore = scoreResult.score;
   tokenAnalysis.taScoreBreakdown = formatScoreLog(scoreResult);
   logger.info(`📊 [TA V2 Pre-LLM] ${tokenAnalysis.symbol} Score=${scoreResult.score}/100 Regime=${scoreResult.regime}`);
-  logger.info(`[Pipeline 3/8 - Technical Analysis] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) passou pela Análise Técnica Pre-LLM (Score: ${scoreResult.score}).`);
+  // No Pipeline 3/8, o Score de TA serve para informar a LLM. 
+  // Se for 0, marcamos como ANALISADO (Informação Pura) para não confundir o usuário.
+  const isTaValid = !scoreResult.invalidated && scoreResult.score >= (taConfig.scoreMinimo || 55);
+  const taLabel = isTaValid ? `${C_BLUE}APROVADO${C_RST}` : (scoreResult.score > 0 ? `${C_BLUE}ANALISADO${C_RST}` : `${C_RED}REPROVADO${C_RST}`);
+  const taEmoji = isTaValid ? "✅" : (scoreResult.score > 0 ? "ℹ️" : "⚠️");
+
+  logger.info(`[Pipeline 3/8 - Technical Analysis] ${taEmoji} ${taLabel} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) Technical Report (Score: ${scoreResult.score}).`);
 
   // ── FILTROS RÁPIDOS PRÉ-LLM (< 1ms, apenas casos óbvios) ──
   // Bloqueios de gestão de risco: cooldown e stops consecutivos
