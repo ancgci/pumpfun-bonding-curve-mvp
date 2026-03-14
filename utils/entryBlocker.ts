@@ -101,6 +101,7 @@ export function checkEntryBlocks(
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG,
     mint: string = ""
 ): BlockResult[] {
+    const isUltraAggressive = config.scoreMinimo <= 5; // Modo Killer
     const blocks: BlockResult[] = [];
     const now = Date.now();
 
@@ -137,11 +138,11 @@ export function checkEntryBlocks(
         }
     }
 
-    // 3. BLOCK_INSUFFICIENT_DATA (baixado para 2 candles para permitir scalping de lançamento)
-    if (snap.candlesAvailable1s < 2) {
+    // 3. BLOCK_INSUFFICIENT_DATA (baixado para 1 candle para permitir scalping instantâneo de lançamento com backfill)
+    if (snap.candlesAvailable1s < 1) {
         blocks.push({
             code: "BLOCK_INSUFFICIENT_DATA",
-            reason: `Apenas ${snap.candlesAvailable1s} candles de 1s disponíveis(mínimo 2)`,
+            reason: `Nenhum candle de 1s disponível (mínimo 1)`,
             severity: "HARD",
         });
         return blocks; // Sem dados suficientes, não verificar mais nada
@@ -152,7 +153,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_VWAP_DISTANCE",
             reason: `Preço ${snap.distVWAPPct.toFixed(2)}% longe da VWAP(max ${config.maxDistVWAPPct} %)`,
-            severity: "HARD",
+            severity: isUltraAggressive ? "SOFT" : "HARD",
         });
     }
 
@@ -162,7 +163,7 @@ export function checkEntryBlocks(
             blocks.push({
                 code: "BLOCK_CANDLE_STRETCHED",
                 reason: `Candle range ${snap.candleRangePct.toFixed(2)}% > ${config.candleStretchMultiplier}x ATR(${(snap.atrPct * config.candleStretchMultiplier).toFixed(2)}%)`,
-                severity: "HARD",
+                severity: isUltraAggressive ? "SOFT" : "HARD",
             });
         }
     }
@@ -181,7 +182,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_ATR_EXTREME",
             reason: `Volatilidade extrema: ATR ${snap.atrPct.toFixed(2)}% > máximo ${config.atrMaxPct}% `,
-            severity: "HARD",
+            severity: isUltraAggressive ? "SOFT" : "HARD",
         });
     }
 
@@ -190,7 +191,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_RSI_OVERBOUGHT",
             reason: `RSI sobrecomprado: ${snap.rsi.toFixed(1)} > ${config.rsiOverboughtBlock} `,
-            severity: "HARD",
+            severity: isUltraAggressive ? "SOFT" : "HARD",
         });
     }
 
@@ -201,7 +202,7 @@ export function checkEntryBlocks(
             blocks.push({
                 code: "BLOCK_3RD_LEG",
                 reason: `${legs} pernas consecutivas sem pullback(max ${config.maxLegsWithoutPullback})`,
-                severity: "HARD",
+                severity: isUltraAggressive ? "SOFT" : "HARD",
             });
         }
     }
@@ -213,7 +214,7 @@ export function checkEntryBlocks(
             blocks.push({
                 code: "BLOCK_VOLUME_SPIKE_NO_FOLLOW",
                 reason: `Volume spike(${snap.volumeRelative.ratio.toFixed(1)}x) mas preço avançou apenas ${microChangePct.toFixed(3)}% (min ${config.volumeSpikeFollowMinPct}%)`,
-                severity: "HARD",
+                severity: isUltraAggressive ? "SOFT" : "HARD",
             });
         }
     }
@@ -318,6 +319,7 @@ export function checkOrganicityHardBlocks(
     if (organicityResult.dataInsufficient) return blocks;
 
     const bd = organicityResult.breakdown;
+    const isUltraAggressive = minOrganicScore <= 5;
     const r2 = computePriceLinearityR2(prices1s);
     const pullbacks = computePullbackCount(prices1s, 10);
 
@@ -354,7 +356,7 @@ export function checkOrganicityHardBlocks(
         blocks.push({
             code: "BLOCK_EXCESSIVE_LINEARITY",
             reason: `Subida linear demais: R²=${r2.toFixed(3)} > 0.98 (suspeito de bot staircase)`,
-            severity: "HARD",
+            severity: isUltraAggressive ? "SOFT" : "HARD",
         });
     }
 
@@ -375,7 +377,7 @@ export function checkOrganicityHardBlocks(
         blocks.push({
             code: "BLOCK_ORDER_REPETITION",
             reason: `Repetição suspeita de orders: ${(repRatio * 100).toFixed(0)}% mesmos tamanhos (hard limit ${(maxOrderRepetitionRatioHard * 100).toFixed(0)}%)`,
-            severity: "HARD",
+            severity: isUltraAggressive ? "SOFT" : "HARD",
         });
     } else if (repRatio > maxOrderRepetitionRatioSoft) {
         blocks.push({
@@ -426,7 +428,7 @@ export function checkOrganicityHardBlocks(
         blocks.push({
             code: "BLOCK_ARTIFICIAL_COMBO",
             reason: `Combo artificial: 0 pullbacks + R²=${r2.toFixed(3)} + alternância=${(altRatio * 100).toFixed(0)}% (staircase bot detectado)`,
-            severity: "HARD",
+            severity: isUltraAggressive ? "SOFT" : "HARD",
         });
     }
 

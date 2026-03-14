@@ -141,15 +141,16 @@ export function calculateConfluenceScore(
         // Peso base do microTrend
         bd.microTrendPositive = 5;
 
-        // BÔNUS DE LANÇAMENTO AGRESSIVO (Sprint 4)
+        // BÔNUS DE LANÇAMENTO AGRESSIVO (Sprint 4 / Sprint 12)
         // Se priceAboveVWAP e microTrend forte, compensamos a falta de EMA/MACD
-        if (snap.microTrend.changePct > 1.5 && snap.priceAboveVWAP) {
+        if (snap.microTrend.changePct > 1.2 && snap.priceAboveVWAP) {
             // Se não temos EMA/MACD (provavelmente token < 10 segundos)
             const hasSlowSignals = snap.emaAligned || (snap.macd && snap.macd.histogram > 0);
             if (!hasSlowSignals) {
-                bd.microTrendPositive += 35; // Total 40: aprova quase sozinho se o preço estiver voando
+                // MODO KILLER: Se o score mínimo for baixo, quase garantimos a aprovação aqui
+                bd.microTrendPositive += (config.scoreMinimo <= 5) ? 65 : 35;
             } else {
-                bd.microTrendPositive += 10; // Se já tem sinais lentos, bônus é menor pra não overfit
+                bd.microTrendPositive += 10;
             }
         }
     }
@@ -232,11 +233,14 @@ export function calculateConfluenceScore(
     else if (snap.emaAligned && snap.priceAboveVWAP && snap.macd?.histogram !== undefined && snap.macd.histogram > 0) regime = "BULLISH";
     else if (!snap.emaAligned && !snap.priceAboveVWAP) regime = "BEARISH";
 
+    const isUltraAggressive = config.scoreMinimo <= 5;
+    const finalInvalidated = isUltraAggressive ? false : (invalidReason !== undefined);
+
     return {
         score,
         breakdown: bd,
-        invalidated: invalidReason !== undefined,
-        invalidReason,
+        invalidated: finalInvalidated,
+        invalidReason: isUltraAggressive && invalidReason ? `[Killer-Pass-thru] ${invalidReason}` : invalidReason,
         sizing,
         regime,
     };

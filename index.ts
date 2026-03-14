@@ -43,6 +43,7 @@ import logger from "./utils/logger";
 import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
 import { dipMonitor } from "./utils/dipMonitor";
 import { circuitBreaker } from "./utils/circuitBreaker";
+import { getTAConfig } from "./utils/technicalConfig";
 
 // Cores ANSI para Logs
 const C_BLUE = "\x1b[36m";
@@ -188,6 +189,7 @@ dipMonitor.initialize(async (mint: string) => {
 let sentAddresses = new Set<string>();
 // Create a Set to track tokens that have received a FINAL AI decision
 let aiProcessedAddresses = new Set<string>();
+let currentlyProcessing = new Set<string>();
 // Creator Watchlist: mint -> creatorAddress
 const creatorWatchlist = new Map<string, string>();
 
@@ -685,204 +687,219 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
   const followedWallet = isFollowedWallet(tOutput.user);
 
-  const AI_DISCOVERY_MIN_PROGRESS = 80; // Voltando para 80% (foco em tokens maduros próximos da migração) para não inflar a fila com tokens novos que geram SKIP.
+  const AI_DISCOVERY_MIN_PROGRESS = 90; // Fixado em 90% conforme solicitado para foco total em tokens próximos da migração.
   const withinAiBand = Number(progress) >= AI_DISCOVERY_MIN_PROGRESS && Number(progress) <= 100;
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
 
   // AI discovery tracks NEW tokens for analysis, ignoring alert state
-  const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint);
+  const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint) && !currentlyProcessing.has(tOutput.mint);
   // shouldAlert tracks if we ALREADY sent a telegram message (prevents spam)
   const shouldAlert = withinAlertBand && !sentAddresses.has(tOutput.mint);
 
   if (followedWallet || isDiscovery || shouldAlert) {
-    if (shouldAlert) {
-      sentAddresses.add(tOutput.mint);
-    }
-    if (isDiscovery) {
-      logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
-
-      // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
-      // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
-      await backfillTokenHistory(tOutput.mint, 50);
-
-      recordTransaction(tOutput.mint);
-    }
-
-    // Calcular informações adicionais (preco, balance, etc se necessário)
-    const solBalance = Number(balance);
-    const solAmount = Number(tOutput.solAmount) || 0;
-    const tokenAmount = Number(tOutput.tokenAmount) || 0;
-
-    let currentPrice = 0;
-    if (solAmount > 0 && tokenAmount > 0) {
-      // OTIMIZAÇÃO: PumpFun tokens possuem 6 decimais. TokenAmount vem em unidades base.
-      // Preço correto = SOL / (Tokens / 10^6)
-      currentPrice = solAmount / (tokenAmount / 1_000_000);
-    } else if (tokenMetadata?.price) {
-      currentPrice = tokenMetadata.price;
-    } else {
-      // Fallback baseada no balanço da curva
-      currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance / (tokenAmount / 1_000_000)) : 0;
-    }
-
-    recordPriceSample(tOutput.mint, currentPrice);
-
-    // ── Camada de Organicidade ─────────────────────────────────
-    // Coleta dados estruturais de CADA trade para detecção de
-    // tokens artificiais (staircase bots, subida morta, etc.)
-    if (tOutput.user && (tOutput.type === "BUY" || tOutput.type === "SELL")) {
-      recordOrganicityTrade(
-        tOutput.mint,
-        tOutput.user,
-        tOutput.type as "BUY" | "SELL",
-        Number(tOutput.solAmount) || 0,
-        currentPrice,
-        Number(progress)
-      );
-    }
-
-    // ── Risk Engine Analysis ──
-    let riskSection = "";
-    if (RISK_CONFIG.enabled) {
-      try {
-        if (isDiscovery) logger.info(`[Pipeline 2/8 - RiskEngine] 🛡️ Validando ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) no Motor de Risco (RiskEngine).`);
-        riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata, Number(progress));
-
-        // Bloqueio de risco apenas para discovery (Mirror confia na wallet?)
-        if (isDiscovery && RISK_CONFIG.detection.blockUnlockedLP &&
-          !riskAnalysis.flags.LP_LOCKED && !riskAnalysis.flags.LP_BURNED) {
-          logger.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
-          logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine: LP não lockado).`);
-          return;
-        }
-
-        if (isDiscovery && riskAnalysis.score > RISK_CONFIG.thresholds.med) {
-          logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Score Alto: ${riskAnalysis.score}).`);
-          // The return happens later via getAgentDecision's evaluation of riskScore, or we can just let it pass to agent.
-        } else if (isDiscovery) {
-          logger.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) aprovado no RiskEngine.`);
-        }
-
-        riskSection = formatRiskForTelegram(riskAnalysis);
-      } catch (riskError: any) {
-        // [SAFETY GATE] Se a análise de risco falhou por erro técnico (API limit/Timeout), 
-        // abortamos o trade para não entrar às cegas.
-        logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
-        logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Error).`);
-        return;
+    if (isDiscovery) currentlyProcessing.add(tOutput.mint);
+    try {
+      if (shouldAlert) {
+        sentAddresses.add(tOutput.mint);
       }
-    }
+      if (isDiscovery) {
+        logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
 
-    // Preparar dados do token para o executor
-    const tokenData: TokenData = {
-      mint: tOutput.mint,
-      bondingCurve: tOutput.bondingCurve,
-      creatorWallet: creator,
-      curvePercent: Number(progress),
-      isLaunched: Number(progress) >= 100,
-      mode: Number(progress) >= 100 ? "DEX" : "CURVE"
-    };
+        // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
+        // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
+        await backfillTokenHistory(tOutput.mint, 50);
 
-    const executeTradeWithRetry = async (force: boolean = false) => {
-      const maxRetries = 3;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        recordTransaction(tOutput.mint);
+      }
+
+      // Calcular informações adicionais (preco, balance, etc se necessário)
+      const solBalance = Number(balance);
+      const solAmount = Number(tOutput.solAmount) || 0;
+      const tokenAmount = Number(tOutput.tokenAmount) || 0;
+
+      let currentPrice = 0;
+      if (solAmount > 0 && tokenAmount > 0) {
+        // OTIMIZAÇÃO: PumpFun tokens possuem 6 decimais. TokenAmount vem em unidades base.
+        // Preço correto = SOL / (Tokens / 10^6)
+        currentPrice = solAmount / (tokenAmount / 1_000_000);
+      } else if (tokenMetadata?.price) {
+        currentPrice = tokenMetadata.price;
+      } else {
+        // Fallback baseada no balanço da curva
+        currentPrice = solBalance > 0 && tokenAmount > 0 ? (solBalance / (tokenAmount / 1_000_000)) : 0;
+      }
+
+      recordPriceSample(tOutput.mint, currentPrice);
+
+      // ── Camada de Organicidade ─────────────────────────────────
+      // Coleta dados estruturais de CADA trade para detecção de
+      // tokens artificiais (staircase bots, subida morta, etc.)
+      if (tOutput.user && (tOutput.type === "BUY" || tOutput.type === "SELL")) {
+        recordOrganicityTrade(
+          tOutput.mint,
+          tOutput.user,
+          tOutput.type as "BUY" | "SELL",
+          Number(tOutput.solAmount) || 0,
+          currentPrice,
+          Number(progress)
+        );
+      }
+
+      // ── Risk Engine Analysis ──
+      let riskSection = "";
+      if (RISK_CONFIG.enabled) {
         try {
-          await executeHybridTrade(tokenData, tOutput.type, force);
-          logger.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
+          if (isDiscovery) logger.info(`[Pipeline 2/8 - RiskEngine] 🛡️ Validando ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) no Motor de Risco (RiskEngine).`);
+          riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata, Number(progress));
+
+          const isUltraAggressive = getTAConfig().scoreMinimo <= 5;
+
+          // Bloqueio de risco apenas para discovery
+          if (isDiscovery && RISK_CONFIG.detection.blockUnlockedLP &&
+            !riskAnalysis.flags.LP_LOCKED && !riskAnalysis.flags.LP_BURNED) {
+            if (isUltraAggressive) {
+              logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando LP Locker para ${tOutput.mint}.`);
+            } else {
+              logger.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
+              logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine: LP não lockado).`);
+              return;
+            }
+          }
+
+          if (isDiscovery && riskAnalysis.score > RISK_CONFIG.thresholds.med) {
+            if (isUltraAggressive) {
+              logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando Risk Score alto (${riskAnalysis.score}).`);
+            } else {
+              logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Score Alto: ${riskAnalysis.score}).`);
+              return;
+            }
+          } else if (isDiscovery) {
+            logger.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) aprovado no RiskEngine.`);
+          }
+
+          riskSection = formatRiskForTelegram(riskAnalysis);
+        } catch (riskError: any) {
+          // [SAFETY GATE] Se a análise de risco falhou por erro técnico (API limit/Timeout), 
+          // abortamos o trade para não entrar às cegas.
+          logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
+          logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Error).`);
           return;
-        } catch (error: any) {
-          if (attempt === maxRetries) {
-            logger.error(`❌ Trade falhou após retries: ${error.message}`);
-            recordError();
-          } else {
-            await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
+      }
+
+      // Preparar dados do token para o executor
+      const tokenData: TokenData = {
+        mint: tOutput.mint,
+        bondingCurve: tOutput.bondingCurve,
+        creatorWallet: creator,
+        curvePercent: Number(progress),
+        isLaunched: Number(progress) >= 100,
+        mode: Number(progress) >= 100 ? "DEX" : "CURVE"
+      };
+
+      const executeTradeWithRetry = async (force: boolean = false) => {
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            await executeHybridTrade(tokenData, tOutput.type, force);
+            logger.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
+            return;
+          } catch (error: any) {
+            if (attempt === maxRetries) {
+              logger.error(`❌ Trade falhou após retries: ${error.message}`);
+              recordError();
+            } else {
+              await new Promise(r => setTimeout(r, 1000 * attempt));
+            }
           }
         }
-      }
-    };
+      };
 
-    // ── AI Agent / Copy-Trading orchestration ──
-    const agentEnabled = process.env.AGENT_ENABLED === "true";
-    const tokenAnalysis: any = {
-      mint: tOutput.mint,
-      symbol: tokenMetadata?.symbol || "UNK",
-      price: currentPrice,
-      bondingCurvePercent: Number(progress),
-      riskScore: riskAnalysis?.score ?? 0,
-      honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
-      isCopyTrade: !!followedWallet,
-      holders: riskAnalysis?.metrics?.totalHolders ?? 0,
-      volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
-      liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
-      top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
-      protocol: "pumpfun",
-      timeframe: "1s"
-    };
+      // ── AI Agent / Copy-Trading orchestration ──
+      const agentEnabled = process.env.AGENT_ENABLED === "true";
+      const tokenAnalysis: any = {
+        mint: tOutput.mint,
+        symbol: tokenMetadata?.symbol || "UNK",
+        price: currentPrice,
+        bondingCurvePercent: Number(progress),
+        riskScore: riskAnalysis?.score ?? 0,
+        honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
+        isCopyTrade: !!followedWallet,
+        holders: riskAnalysis?.metrics?.totalHolders ?? 0,
+        volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
+        liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+        top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
+        protocol: "pumpfun",
+        timeframe: "1s"
+      };
 
-    try {
-      let decision: any = null;
-      if (followedWallet) {
-        decision = getCopyTradeDecision({
-          mint: tOutput.mint,
-          user: tOutput.user,
-          type: tOutput.type as any,
-          solAmount: Number(tOutput.solAmount),
-          tokenAmount: Number(tOutput.tokenAmount),
-          signature: txn.transaction.signatures[0]
-        });
-        if (decision) decision.force = true; // Forçar mirror sells/buys
-      }
-
-      logger.info(`🎯 [Dispatch] State -> decision: ${!!decision}, agentEnabled: ${agentEnabled}, isDiscovery: ${isDiscovery}, aiProcessed: ${aiProcessedAddresses.has(tOutput.mint)}`);
-
-      if (!decision && agentEnabled && isDiscovery) {
-        decision = await getAgentDecision(tokenAnalysis);
-      }
-
-      if (decision) {
-        // Se houve uma decisão definitiva (BUY ou SKIP por risco concreto), marcamos como processado
-        const reason = (decision.reasoning || "").toLowerCase();
-        const isInsufficient = reason.includes("insufficient data") ||
-          reason.includes("too few holders") ||
-          reason.includes("insufficient_data");
-
-        if (decision.action === "BUY" || !isInsufficient) {
-          aiProcessedAddresses.add(tOutput.mint);
-          logger.info(`🎯 [Agent] Token ${tOutput.mint} marcado como processado (Decision: ${decision.action})`);
-        } else {
-          logger.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+      try {
+        let decision: any = null;
+        if (followedWallet) {
+          decision = getCopyTradeDecision({
+            mint: tOutput.mint,
+            user: tOutput.user,
+            type: tOutput.type as any,
+            solAmount: Number(tOutput.solAmount),
+            tokenAmount: Number(tOutput.tokenAmount),
+            signature: txn.transaction.signatures[0]
+          });
+          if (decision) decision.force = true; // Forçar mirror sells/buys
         }
 
-        await executeAgentTrade(tokenAnalysis, decision, async (force) => {
-          await executeTradeWithRetry(force || decision.force);
-        });
-      } else if (isDiscovery && !agentEnabled) {
-        // Fallback discovery sem agent
-        await executeTradeWithRetry(false);
+        logger.info(`🎯 [Dispatch] State -> decision: ${!!decision}, agentEnabled: ${agentEnabled}, isDiscovery: ${isDiscovery}, aiProcessed: ${aiProcessedAddresses.has(tOutput.mint)}`);
+
+        if (!decision && agentEnabled && isDiscovery) {
+          decision = await getAgentDecision(tokenAnalysis);
+        }
+
+        if (decision) {
+          // Se houve uma decisão definitiva (BUY ou SKIP por risco concreto), marcamos como processado
+          const reason = (decision.reasoning || "").toLowerCase();
+          const isInsufficient = reason.includes("insufficient data") ||
+            reason.includes("too few holders") ||
+            reason.includes("insufficient_data");
+
+          if (decision.action === "BUY" || !isInsufficient) {
+            aiProcessedAddresses.add(tOutput.mint);
+            logger.info(`🎯 [Agent] Token ${tOutput.mint} marcado como processado (Decision: ${decision.action})`);
+          } else {
+            logger.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+          }
+
+          await executeAgentTrade(tokenAnalysis, decision, async (force) => {
+            await executeTradeWithRetry(force || decision.force);
+          });
+        } else if (isDiscovery && !agentEnabled) {
+          // Fallback discovery sem agent
+          await executeTradeWithRetry(false);
+        }
+      } catch (agentErr: any) {
+        logger.error(`❌ [Decisão] Erro: ${agentErr.message}`);
       }
-    } catch (agentErr: any) {
-      logger.error(`❌ [Decisão] Erro: ${agentErr.message}`);
-    }
 
-    // Alerta Telegram (apenas se atingir o limiar configurado)
-    if (shouldAlert) {
-      const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
-      const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
-      const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
+      // Alerta Telegram (apenas se atingir o limiar configurado)
+      if (shouldAlert) {
+        const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+        const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+        const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
 
-      const timestamp = new Date().toLocaleTimeString('pt-BR');
-      sendMessage(
-        `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
-        `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
-        `Symbol: <b>${tokenSymbol}</b>\n` +
-        `Fonte: 💊 <b>Pumpfun</b>\n` +
-        `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
-        riskSection + `\n` +
-        `Market Cap: <b>${marketCap}</b>\n` +
-        `Type: <b>${tOutput.type}</b>\n` +
-        `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
-        `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`
-      );
+        const timestamp = new Date().toLocaleTimeString('pt-BR');
+        sendMessage(
+          `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
+          `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
+          `Symbol: <b>${tokenSymbol}</b>\n` +
+          `Fonte: 💊 <b>Pumpfun</b>\n` +
+          `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
+          riskSection + `\n` +
+          `Market Cap: <b>${marketCap}</b>\n` +
+          `Type: <b>${tOutput.type}</b>\n` +
+          `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
+          `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`
+        );
+      }
+    } finally {
+      if (isDiscovery) currentlyProcessing.delete(tOutput.mint);
     }
   }
 }

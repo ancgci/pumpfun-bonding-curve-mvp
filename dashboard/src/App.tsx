@@ -52,9 +52,9 @@ function OverviewTab() {
     <div className="space-y-8">
       <StatsOverview />
       <ControlPanel />
+      <ActiveProtocols />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
         <div className="space-y-6">
-          <ActiveProtocols />
           <AgentStatus />
           <CircuitBreakerStatus />
         </div>

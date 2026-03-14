@@ -1,4 +1,3 @@
-import { Card, CardContent } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { CircleDot } from "lucide-react";
 
@@ -16,38 +15,39 @@ export function ActiveProtocols() {
   if (!protocolConfig) return null;
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-xl font-bold flex items-center gap-2">
-        <CircleDot className="w-5 h-5 text-gray-400" /> Active Protocols
-      </h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <CircleDot className="w-4 h-4 text-primary" /> Active Protocols
+        </h2>
+        <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded border border-primary/20 font-mono">
+          LIVE FEED
+        </span>
+      </div>
+
+      <div className="flex flex-row flex-wrap gap-2">
         {Object.entries(KNOWN_PROTOCOLS).map(([key, meta]) => {
           const isActive = protocolConfig[key] !== false;
 
           return (
-            <Card
+            <div
               key={key}
-              className={`glass overflow-hidden transition-all cursor-pointer hover:scale-[1.02] ${isActive ? "border-primary/50" : "opacity-60 border-transparent"
-                }`}
               onClick={() => toggleProtocol(key)}
+              className={`flex items-center gap-3 px-4 py-2 rounded-lg border transition-all cursor-pointer select-none
+                ${isActive
+                  ? "glass border-primary/40 bg-primary/5 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
+                  : "bg-black/20 border-white/5 opacity-40 grayscale hover:opacity-60"
+                } hover:scale-[1.02] active:scale-95`}
             >
-              <CardContent className="p-4 flex items-center flex-row justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-xl">{meta.icon}</span>
-                  <h3 className="font-semibold leading-tight">{meta.name}</h3>
-                </div>
-                {/* Toggle switch */}
-                <div
-                  className={`w-10 h-5 rounded-full transition-colors relative ${isActive ? "bg-green-500" : "bg-gray-700"
-                    }`}
-                >
-                  <div
-                    className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-all ${isActive ? "left-6" : "left-1"
-                      }`}
-                  />
-                </div>
-              </CardContent>
-            </Card>
+              <span className="text-lg">{meta.icon}</span>
+              <div className="flex flex-col">
+                <span className="text-[10px] leading-none text-muted-foreground font-medium uppercase">{isActive ? "ON" : "OFF"}</span>
+                <span className="text-sm font-bold leading-tight mt-0.5">{meta.name}</span>
+              </div>
+
+              {/* Status Indicator */}
+              <div className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-gray-600"}`} />
+            </div>
           );
         })}
       </div>

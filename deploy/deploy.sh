@@ -56,9 +56,11 @@ rsync -avz --progress \
   --exclude 'logs/' \
   --exclude 'test-results/' \
   --exclude '*.log' \
-  --exclude 'data/' \
+  --exclude 'data/*.db' \
   --exclude 'positionManagerV2.db' \
   --exclude 'sent_addresses.json' \
+  --include 'data/trading-config.json' \
+  --include 'data/ta-config.json' \
   ./ "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/"
 
 log "Files synced"
@@ -87,48 +89,9 @@ ssh "${VPS_USER}@${VPS_HOST}" << 'REMOTE_CMD'
   echo "Copying deploy files..."
   cp deploy/ecosystem.config.js .
 
-  # Ensure critical config files exist
+  # Config files validation
   echo "Validating critical configuration files..."
-  if [ ! -f "data/ta-config.json" ]; then
-    echo "⚠️  WARNING: data/ta-config.json not found! Creating from template..."
-    mkdir -p data
-    cat > data/ta-config.json << 'TACONFIG'
-{
-  "mode": "BALANCED",
-  "scoreMinimo": 40,
-  "scoreSizingMid": 50,
-  "scoreSizingMax": 70,
-  "rsiBullishMin": 50,
-  "rsiBullishMax": 78,
-  "rsiOverboughtBlock": 85,
-  "atrMinPct": 0.02,
-  "atrMaxPct": 8.0,
-  "maxDistVWAPPct": 5.0,
-  "candleStretchMultiplier": 3.5,
-  "minOrganicScore": 35,
-  "maxLegsWithoutPullback": 3,
-  "volumeRelativeMin": 1.2,
-  "volumeSpikeThreshold": 4.0
-}
-TACONFIG
-  else
-    echo "✅ data/ta-config.json exists"
-  fi
-
-  if [ ! -f "data/trading-config.json" ]; then
-    echo "⚠️  WARNING: data/trading-config.json not found! Creating default..."
-    mkdir -p data
-    cat > data/trading-config.json << 'TRADINGCONFIG'
-{
-  "enabled": true,
-  "mode": "SIMULATION",
-  "maxPositionSize": 0.5,
-  "maxPositions": 3
-}
-TRADINGCONFIG
-  else
-    echo "✅ data/trading-config.json exists"
-  fi
+  ls -la data/*.json 2>/dev/null || echo "  ⚠️  No JSON configs found in data/"
 
   echo "Starting/restarting PM2 services..."
   pm2 startOrRestart ecosystem.config.js --update-env

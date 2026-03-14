@@ -388,34 +388,16 @@ export async function getAgentDecision(
     return { action: "SKIP", confidence: 0, reasoning: "PreFilter: honeypot risk" };
   }
 
+  const isUltraAggressive = taConfig.scoreMinimo <= 5;
+
   if (hasRiskData) {
-    // Only apply data-dependent filters when we actually have data
-    if (tokenAnalysis.liquiditySol > 0 && tokenAnalysis.liquiditySol < 2) {
-      logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: liquidity ${tokenAnalysis.liquiditySol.toFixed(2)} SOL < 2 SOL`);
-      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: low liquidity" };
-    }
-    if (tokenAnalysis.holders > 0) {
-      const curve = tokenAnalysis.bondingCurvePercent;
-      const h = tokenAnalysis.holders;
-
-      let minRequired = 5;
-      if (curve > 90) minRequired = 20;
-      else if (curve > 80) minRequired = 15;
-      else if (curve > 50) minRequired = 10;
-      else minRequired = 5;
-
-      if (agentMode === "SIMULATION") {
-        minRequired = Math.max(5, Math.floor(minRequired / 2)); // Soften by 50% for simulation
+    if (isUltraAggressive) {
+      logger.info(`🔥 [Killer Mode] Skipping Pre-Filters for ${tokenAnalysis.symbol}. Let LLM decide.`);
+    } else {
+      if (tokenAnalysis.liquiditySol > 0 && tokenAnalysis.liquiditySol < 1.0) {
+        logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: low liquidity (${tokenAnalysis.liquiditySol} SOL)`);
+        return { action: "SKIP", confidence: 0, reasoning: "PreFilter: low liquidity" };
       }
-
-      if (h < minRequired) {
-        logger.warn(`⚡ [PreFilter ${agentMode}] ${tokenAnalysis.symbol} REJECTED: Low holders (${h}) for curve progress (${curve.toFixed(1)}%). Min required: ${minRequired}`);
-        return { action: "SKIP", confidence: 0, reasoning: `PreFilter: too few holders (${h}) for ${curve.toFixed(1)}% curve` };
-      }
-    }
-    if (tokenAnalysis.riskScore > 70) {
-      logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: riskScore ${tokenAnalysis.riskScore} > 70`);
-      return { action: "SKIP", confidence: 0, reasoning: "PreFilter: high risk score" };
     }
   } else {
     logger.info(`⚠️ [PreFilter] ${tokenAnalysis.symbol}: RiskEngine data unavailable, deferring to LLM`);
@@ -506,7 +488,7 @@ export async function getAgentDecision(
 
         const action = (orchestratedResult.action || orchestratedResult.decision) === "BUY" ? "BUY" : "SKIP";
 
-        logger.info(`📊 [Agent-Orchestrated] Decision: ${action}, Confidence: ${orchestratedResult.confidence ?? 0}%`);
+        logger.info(`📊 [Agent-Orchestrated] Decision: ${action}, Confidence: ${orchestratedResult.confidence ?? 0}%, Reasoning: ${orchestratedResult.reasoning || orchestratedResult.reason || "N/A"}`);
 
         return {
           action,
@@ -555,7 +537,7 @@ export async function executeAgentTrade(
 
   if (decision.action === "SKIP") {
     logger.info(
-      `⏭️  [Agent ${agentMode}] Skipping ${tokenAnalysis.symbol}: confidence ${decision.confidence}% < threshold`
+      `⏭️  [Agent ${agentMode}] Skipping ${tokenAnalysis.symbol}: confidence ${decision.confidence}% < threshold. Reasoning: ${decision.reasoning}`
     );
     return;
   }
@@ -605,16 +587,24 @@ export async function executeAgentTrade(
     // 1. Checar bloqueios HARD no momento atual
     logger.info(`[Pipeline 5/8 - Hard Blocks] 🛡️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) revalidando Hard Blocks (Pré-execução)...`);
     const execBlocks = checkEntryBlocks(taSnapNow, taConfigExec, tokenAnalysis.mint);
+
+    const isUltraAggressive = taConfigExec.scoreMinimo <= 5;
     if (hasHardBlock(execBlocks)) {
       const hardBlock = execBlocks.find(b => b.severity === "HARD");
       const isInsufficientData = hardBlock?.code === "BLOCK_INSUFFICIENT_DATA";
-      logger.warn(
-        `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} HARD BLOCK no momento da execução: ` +
-        `${hardBlock?.code} — Enfileirando no DipMonitor (Immediate=${isInsufficientData}).`
-      );
-      logger.info(`[Pipeline 5/8 - Hard Blocks] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) BLOQUEADO por regra estática (${hardBlock?.code}).`);
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, isInsufficientData);
-      return;
+
+      // No modo Ultra-Agressivo, só paramos por Insuficiência de Dados ou Cooldown/Stops
+      if (!isUltraAggressive || isInsufficientData || hardBlock?.code === "BLOCK_COOLDOWN" || hardBlock?.code === "BLOCK_CONSECUTIVE_STOPS") {
+        logger.warn(
+          `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} HARD BLOCK no momento da execução: ` +
+          `${hardBlock?.code} — Enfileirando no DipMonitor (Immediate=${isInsufficientData}).`
+        );
+        logger.info(`[Pipeline 5/8 - Hard Blocks] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) BLOQUEADO por regra estática (${hardBlock?.code}).`);
+        dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, isInsufficientData);
+        return;
+      } else {
+        logger.info(`[Pipeline 5/8 - Hard Blocks] ⚠️ ${C_BLUE}PASS-THRU (Aggressive)${C_RST} | Ignorando ${hardBlock?.code} para execução imediata.`);
+      }
     }
     logger.info(`[Pipeline 5/8 - Hard Blocks] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) sobreviveu aos Hard Blocks post-LLM.`);
 
@@ -626,12 +616,16 @@ export async function executeAgentTrade(
     );
 
     if (execScore.invalidated || execScore.score < taConfigExec.scoreMinimo) {
-      logger.warn(
-        `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score insuficiente (${execScore.score} < ${taConfigExec.scoreMinimo}) ` +
-        `— Setup mudou durante avaliação LLM. Enfileirando no DipMonitor (Dip Sniper Mode).`
-      );
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
-      return;
+      if (isUltraAggressive && !execScore.invalidated) {
+        logger.info(`📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score baixo (${execScore.score}), mas mantendo BUY por modo Ultra-Agressivo.`);
+      } else {
+        logger.warn(
+          `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score insuficiente (${execScore.score} < ${taConfigExec.scoreMinimo}) ` +
+          `— Setup mudou durante avaliação LLM. Enfileirando no DipMonitor (Dip Sniper Mode).`
+        );
+        dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
+        return;
+      }
     }
 
     // 2.5. Re-validação de ORGANICIDADE — detecta tokens artificiais
@@ -743,10 +737,11 @@ export async function executeAgentTrade(
     logger.info(`[Pipeline 7/8 - Micro-Confirm] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) confirmado contra Despejos Rápidos!`);
 
     // 3. Checar spike de preço durante avaliação LLM
-    const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, 10.0);
+    const maxSpike = isUltraAggressive ? 25.0 : 10.0;
+    const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, maxSpike);
     if (!validation.isValid) {
       logger.warn(
-        `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike. ` +
+        `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike > ${maxSpike}%. ` +
         `Moving ${tokenAnalysis.symbol} to Dip Waitlist (Dip Sniper Mode).`
       );
       logger.info(`[Pipeline 8/8 - Execution] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) abortado (Price Spike detectado pré-compra).`);
@@ -786,6 +781,13 @@ export async function executeAgentTrade(
     // ════════════════════════════════════════════════════════
     // SIMULATION MODE: Record fake trade, learn from paths
     // ════════════════════════════════════════════════════════
+    // Check if we already have an open trade for this token to avoid duplicates
+    const existingTrade = getOpenTradeForToken(tokenAnalysis.mint);
+    if (existingTrade) {
+      logger.info(`⏭️  [SIMULATION] Skipping trade for ${tokenAnalysis.symbol}: Position already open.`);
+      return;
+    }
+
     logger.info(`📊 [SIMULATION] Recording simulated trade...`);
 
     await recordSimulatedTrade(
@@ -831,8 +833,23 @@ export function scheduleSimulationExit(
   const mint = tokenAnalysis.mint;
   const symbol = tokenAnalysis.symbol;
   const entryPrice = decision.entryPrice || tokenAnalysis.price;
-  const tp = decision.takeProfit || entryPrice * (1 + CONFIG.TAKE_PROFIT_PERCENT / 100);
-  let sl = decision.stopLoss || entryPrice * (1 - CONFIG.STOP_LOSS_PERCENT / 100);
+
+  // Ensure TP/SL logic respects disabled state
+  const minTpPercent = 1; // 1%
+  const tpRaw = Math.max(decision.takeProfit || 0, entryPrice * (1 + minTpPercent / 100));
+
+  // If Stop Loss is disabled, set slRaw to 0 (ignored)
+  const isSlDisabled = CONFIG.AUTO_SELL_STOP_LOSS === false || CONFIG.STOP_LOSS_PERCENT >= 100;
+  let slRaw = isSlDisabled ? 0 : Math.min(decision.stopLoss || Infinity, entryPrice * 0.99);
+
+  // Cross-reference with global config for safety
+  const configTp = entryPrice * (1 + (CONFIG.TAKE_PROFIT_PERCENT || 30) / 100);
+  const configSl = isSlDisabled ? 0 : entryPrice * (1 - (CONFIG.STOP_LOSS_PERCENT || 100) / 100);
+
+  // Decidir valores finais: USAR O GLOBAL CONFIG COMO PISO (Minimum Floor)
+  // O bot só usa o TP da IA se ele for MAIOR que o alvo global.
+  const tp = Math.max(tpRaw, configTp);
+  let sl = isSlDisabled ? 0 : ((slRaw < entryPrice && slRaw > 0) ? slRaw : configSl);
 
   // Calculate remaining timeout if this is a resumed trade
   const entryTime = (decision as any).entryTime || Date.now();
@@ -907,25 +924,22 @@ export function scheduleSimulationExit(
       if (currentPrice >= tp) {
         clearInterval(exitCheckInterval);
         logger.info(
-          `📈 [SIMULATION] ${symbol} HIT TAKE PROFIT: ${currentPrice.toFixed(8)}`
+          `📈 [SIMULATION] ${symbol} HIT TAKE PROFIT: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
         await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_TP", "Take Profit hit");
         return;
       }
 
-      // Check SL (now uses trailing stop)
-      // [DISABLED FOR TODAY'S TEST]
-      /*
-      if (currentPrice <= sl) {
+      // Check SL (now uses trailing stop if enabled)
+      if (sl > 0 && currentPrice <= sl) {
         clearInterval(exitCheckInterval);
         const reason = sl > (decision.stopLoss || 0) ? "Trailing Stop hit" : "Stop Loss hit";
         logger.info(
-          `📉 [SIMULATION] ${symbol} HIT ${reason.toUpperCase()}: ${currentPrice.toFixed(8)}`
+          `📉 [SIMULATION] ${symbol} HIT ${reason.toUpperCase()}: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
         await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", reason);
         return;
       }
-      */
 
       // Timeout
       if (elapsedCount >= maxElapsed) {
