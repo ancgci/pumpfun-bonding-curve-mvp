@@ -1,3 +1,23 @@
+### [1.4.0] - 2026-03-16
+#### 🚀 Added
+- **Integrated Premium Dashboard**: The new high-fidelity interface is now fully functional and feature-complete.
+  - **Crypto Wallet**: Full asset management module (Balance, Deposit, Withdraw, History, Settings).
+  - **DexScreener Integration**: Real-time pricing and contract search for the Token Converter.
+  - **Tabbed Navigation**: Integrated Sidebar with functional tabs for Overview, Trading, Logs, AI, and Wallet.
+  - **Draggable UI**: Supported native Drag & Drop for all cards in the Overview tab.
+  - **Enhanced Visuals**: Refined Trade Performance bubbles and fixed Agent Status grid layout for better responsiveness.
+- **Institutional Styling**: Full implementation of Glassmorphism 2.0 with dynamic lighting and high-contrast financial widgets.
+
+#### 🔧 Changed
+- **Navigation Default**: Dashboard now lands on Premium UI by default.
+- **API Synchronization**: Optimized polling and WebSocket streams to ensure all Premium widgets (Bot Health, RPC Latency, etc.) have live data.
+
+#### ⚡ Fixed
+- **React Render Crash**: Fixed `toFixed` type error in `PaymentOnTimeChart` caused by undefined initial P&L values.
+- **Sidebar Integration**: Resolved broken navigation links and non-functional menu items.
+
+---
+
 ### [1.3.0] - 2026-03-13
 #### 🚀 Added
 - **Historical Backfill (Discovery Lane)**: Bot now fetches the last 50 trades from PumpFun API immediately upon token discovery. This seeds the TA monitors with high-quality data, enabling accurate MACD/RSI calculations from the very first second.

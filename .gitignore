@@ -38,3 +38,15 @@ yarn-error.log*
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Test reports and results
+playwright-report/
+test-results/
+
+# Backups and local data
+backup_top_vps/
+**/*.db
+**/*.db-journal
+**/*.db-shm
+**/*.db-wal
+*.tsbuildinfo

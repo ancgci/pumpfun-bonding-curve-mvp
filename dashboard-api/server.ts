@@ -15,19 +15,50 @@ import cookieParser from "cookie-parser";
 import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
+import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import bs58 from "bs58";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
 const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "sr.antoniocarlos@gmail.com";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5174";
+const BOT_WALLET_FILE = path.join(__dirname, "../bot-wallet.json");
+const WALLET_ADDRESS_ENV = process.env.WALLET_PUBLIC_ADDRESS || process.env.WALLET_ADDRESS || null;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+const connection = new Connection(CONFIG.RPC_URL, "confirmed");
 
 function signAccessToken(payload: object) {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: "15m" });
 }
 function signRefreshToken(payload: object) {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+}
+
+function loadBotWallet() {
+    try {
+        if (!fs.existsSync(BOT_WALLET_FILE)) return null;
+        const raw = JSON.parse(fs.readFileSync(BOT_WALLET_FILE, "utf-8"));
+        const secretKey = Uint8Array.from(raw);
+        const kp = Keypair.fromSecretKey(secretKey);
+        return { publicKey: kp.publicKey.toBase58(), secretKey };
+    } catch (err) {
+        console.error("Erro ao carregar bot-wallet.json", err);
+        return null;
+    }
+}
+
+function loadSimTradesFallback(limit: number) {
+    try {
+        const file = path.join(__dirname, "../data/simulation/trades.json");
+        if (!fs.existsSync(file)) return [];
+        const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+        return Array.isArray(raw) ? raw.slice(0, limit) : [];
+    } catch (e) {
+        console.error("Erro ao carregar trades de simulação (fallback JSON)", e);
+        return [];
+    }
 }
 
 // ── Auth Middleware ───────────────────────────────────────────
@@ -200,17 +231,28 @@ app.get("/api/stats", (req, res) => {
         const closed = positions.filter(p => !p.isActive);
 
         const totalInvested = active.reduce((sum, p) => sum + p.buySolAmount, 0);
+        const trades = loadAgentTrades();
+        const totalPnlTrades = trades.reduce((sum: number, t: any) => sum + Number(t.pnl || t.pnl_sol || 0), 0);
+        const plHistory = getPnLHistory(30);
+        const pnlFromHistory = plHistory?.plValues?.length ? plHistory.plValues[plHistory.plValues.length - 1] : 0;
+        const totalPnL = parseFloat((totalPnlTrades || pnlFromHistory || 0).toFixed(4));
+
         const wins = closed.filter(p => {
             // Simplificado: assumir que posição fechada = lucro se durou menos de 1h
             return p.buyTimestamp && Date.now() - p.buyTimestamp < 3600000;
         }).length;
         const losses = closed.length - wins;
+        const walletInfo = loadBotWallet();
+        const walletAddress = WALLET_ADDRESS_ENV || walletInfo?.publicKey || null;
 
         res.json({
             totalPositions: positions.length,
             activePositions: active.length,
             closedPositions: closed.length,
             totalInvested: parseFloat(totalInvested.toFixed(4)),
+            totalPnL,
+            walletSol: totalPnL,
+            walletAddress,
             wins,
             losses,
             winRate: closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : "0.0",
@@ -304,12 +346,87 @@ app.get("/api/agent/trades", (req, res) => {
         res.json(trades.slice(0, 20).map(trade => ({
             token: trade.token || "Unknown",
             timestamp: formatTimestamp(trade.timestamp),
+            entryTime: trade.entryTime || trade.timestamp || null,
+            exitTime: trade.exitTime || null,
             entryPrice: trade.entryPrice || 0,
             exitPrice: trade.exitPrice || 0,
             pnl: trade.pnl || 0,
+            pnlPercent: trade.pnlPercent || trade.pnl_percent || 0,
             confidence: trade.confidence || 0,
             status: trade.status || "closed",
+            tokenMint: trade.mint || trade.tokenMint || null,
         })));
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/wallet/new - Gera uma nova carteira (sobrescreve bot-wallet.json)
+ */
+app.post("/api/wallet/new", (req, res) => {
+    try {
+        const kp = Keypair.generate();
+        const secretArray = Array.from(kp.secretKey);
+        fs.writeFileSync(BOT_WALLET_FILE, JSON.stringify(secretArray, null, 2));
+        res.json({
+            publicKey: kp.publicKey.toBase58(),
+            secretBase58: bs58.encode(kp.secretKey),
+            savedAt: new Date().toISOString(),
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/wallet/export - Exporta carteira atual (pública + privada base58)
+ */
+app.get("/api/wallet/export", (req, res) => {
+    try {
+        const wallet = loadBotWallet();
+        if (!wallet) return res.status(404).json({ error: "Wallet not found" });
+        return res.json({
+            publicKey: wallet.publicKey,
+            secretBase58: bs58.encode(wallet.secretKey),
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/wallet/balances - Retorna saldo de SOL e tokens SPL reais
+ */
+app.get("/api/wallet/balances", async (req, res) => {
+    try {
+        const walletInfo = loadBotWallet();
+        const address = WALLET_ADDRESS_ENV || walletInfo?.publicKey;
+        if (!address) return res.status(400).json({ error: "Wallet address not configured" });
+
+        const owner = new PublicKey(address);
+        const solLamports = await connection.getBalance(owner);
+        const solBalance = solLamports / LAMPORTS_PER_SOL;
+
+        const tokensResp = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID });
+        const tokens = tokensResp.value
+            .map((acc: any) => {
+                const info = acc.account.data?.parsed?.info;
+                if (!info?.tokenAmount) return null;
+                const t = info.tokenAmount;
+                if (Number(t.amount) <= 0) return null;
+                const mint = info.mint;
+                return {
+                    mint,
+                    amount: t.amount,
+                    decimals: t.decimals,
+                    uiAmount: t.uiAmount,
+                    symbol: t.symbol || (mint ? mint.slice(0, 4) : 'TOK'),
+                };
+            })
+            .filter(Boolean);
+
+        res.json({ address, solBalance, tokens });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -321,28 +438,45 @@ app.get("/api/agent/trades", (req, res) => {
 app.get("/api/agent/logs", (req, res) => {
     try {
         const logsDir = path.join(__dirname, "../logs");
-        // Escapa e executa grep seguro; não falha por pipe com maxBuffer alto.
-        const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]|\\[WHALE ALERT\\]|\\[Pipeline" $(ls -tr ${logsDir}/combined*.log 2>/dev/null) | grep -v "ALLOW_TRADE" | tail -n 60`;
-        exec(cmd, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
-            if (error) {
-                // error code 1 in grep means no lines matched, which is fine = empty.
-                if (error.code === 1) return res.json([]);
-                return res.status(500).json({ error: "Failed to read logs: " + error.message });
-            }
-            const rawLines = stdout.trim().split('\n').filter(Boolean);
-            const parsedLogs = rawLines.map(line => {
-                try {
-                    const parsed = JSON.parse(line);
-                    return {
-                        timestamp: parsed.timestamp || new Date().toISOString(),
-                        level: parsed.level || 'info',
-                        message: parsed.message || line
-                    };
-                } catch {
-                    return { timestamp: new Date().toISOString(), level: 'info', message: line };
+        // Versão segura: Evita usar Shell $(ls ...) que permite injeção de comando.
+        // Listamos os arquivos manualmente e passamos para o grep.
+        fs.readdir(logsDir, (err, files) => {
+            if (err) return res.status(500).json({ error: "Failed to read logs directory" });
+
+            const logFiles = files
+                .filter(f => f.startsWith('combined') && f.endsWith('.log'))
+                .sort((a, b) => {
+                    const statA = fs.statSync(path.join(logsDir, a));
+                    const statB = fs.statSync(path.join(logsDir, b));
+                    return statA.mtime.getTime() - statB.mtime.getTime();
+                })
+                .map(f => path.join(logsDir, f));
+
+            if (logFiles.length === 0) return res.json([]);
+
+            // Usamos spawn ou escapamos os nomes dos arquivos para segurança máxima.
+            const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]|\\[WHALE ALERT\\]|\\[Pipeline" "${logFiles.join('" "')}" | grep -v "ALLOW_TRADE" | tail -n 60`;
+
+            exec(cmd, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+                if (error) {
+                    if (error.code === 1) return res.json([]);
+                    return res.status(500).json({ error: "Failed to read logs: " + error.message });
                 }
+                const rawLines = stdout.trim().split('\n').filter(Boolean);
+                const parsedLogs = rawLines.map(line => {
+                    try {
+                        const parsed = JSON.parse(line);
+                        return {
+                            timestamp: parsed.timestamp || new Date().toISOString(),
+                            level: parsed.level || 'info',
+                            message: parsed.message || line
+                        };
+                    } catch {
+                        return { timestamp: new Date().toISOString(), level: 'info', message: line };
+                    }
+                });
+                res.json(parsedLogs);
             });
-            res.json(parsedLogs);
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -581,6 +715,9 @@ app.get("/api/simulation/trades", (req, res) => {
             ORDER BY entry_time DESC
             LIMIT ?
         `).all(limit);
+        if (rows.length === 0) {
+            return res.json(loadSimTradesFallback(limit));
+        }
         res.json(rows);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -1165,24 +1302,37 @@ function getPnLHistory(days: number = 30) {
         `).all(since);
 
         if (rows.length === 0) {
-            // Se vazio, gerar ponto inicial a partir dos trades atuais
-            const trades = loadAgentTrades();
-            const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+            // Se vazio, gerar a partir dos trades simulados (JSON) ou agent trades
+            const simTrades = loadSimTradesFallback(200).filter((t: any) => t.status !== "OPEN" && t.pnl !== undefined);
+            const trades = simTrades.length > 0 ? simTrades : loadAgentTrades();
+            let cumulative = 0;
+            const series = trades
+                .filter((t: any) => t.exitTime || t.entryTime)
+                .sort((a: any, b: any) => (a.exitTime || a.entryTime) - (b.exitTime || b.entryTime))
+                .map((t: any) => {
+                    cumulative += Number(t.pnl || 0);
+                    return { ts: t.exitTime || t.entryTime, pnl: parseFloat(cumulative.toFixed(4)) };
+                });
+
+            const timestamps = series.length ? series.map(s => s.ts) : [Date.now()];
+            const values = series.length ? series.map(s => s.pnl) : [0];
             return {
-                timestamps: [new Date().toLocaleTimeString()],
-                plValues: [parseFloat(totalPnl.toFixed(4))],
-                positions: [0]
+                timestamps: timestamps.map(t => formatTimestamp(t)),
+                rawTimestamps: timestamps,
+                plValues: values,
+                positions: values.map(() => 0)
             };
         }
 
         return {
             timestamps: rows.map(r => formatTimestamp(r.timestamp)),
+            rawTimestamps: rows.map(r => Number(r.timestamp)),
             plValues: rows.map(r => parseFloat(r.pnl_sol.toFixed(4))),
             positions: rows.map(r => r.positions_count)
         };
     } catch (error) {
         console.error("Erro ao ler histórico P&L do SQLite:", error);
-        return { timestamps: [], plValues: [], positions: [] };
+        return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
     }
 }
 
@@ -1230,7 +1380,7 @@ if (require.main === module) {
 }
 
 // ── SPA Fallback: serve index.html for all non-API routes ────
-app.get(['/', '/login', '/dashboard', '/settings', '/positions', '/trades'], (req, res) => {
+app.get(['/', '/login', '/dashboard', '/settings', '/positions', '/trades', '/premium', '/classic'], (req, res) => {
     const indexPath = path.join(DASHBOARD_DIST, 'index.html');
     if (fs.existsSync(indexPath)) {
         return res.sendFile(indexPath);

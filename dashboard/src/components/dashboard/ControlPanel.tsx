@@ -1,6 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { ShieldAlert, RefreshCcw, Power, Zap, Bot, Target } from "lucide-react";
+import { ShieldAlert, RefreshCcw, Zap, Bot, Target } from "lucide-react";
 
 export function ControlPanel() {
   const {
@@ -21,10 +21,6 @@ export function ControlPanel() {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-bold flex items-center gap-2">
-        <Power className="w-5 h-5 text-blue-400" /> Control Center
-      </h2>
-
       {emergencyActive && (
         <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-4 flex items-center justify-between animate-pulse-slow">
           <div className="flex items-center gap-3">

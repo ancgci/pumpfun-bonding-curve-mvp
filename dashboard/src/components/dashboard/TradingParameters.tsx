@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { Settings } from "lucide-react";
 
 export function TradingParameters() {
   const { tradingConfig, updateConfig } = useDashboardData();
@@ -38,10 +37,6 @@ export function TradingParameters() {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-bold flex items-center gap-2">
-        <Settings className="w-5 h-5 text-gray-400" /> Trading Parameters
-      </h2>
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {/* Buy Amount */}
         <Card className="glass">
@@ -55,7 +50,7 @@ export function TradingParameters() {
                 min="0.001"
                 max="1"
                 step="0.001"
-                value={localConfig.buyAmountSol || 0.01}
+                value={localConfig.buyAmountSol || 0.005}
                 onChange={(e) =>
                   handleChange("buyAmountSol", parseFloat(e.target.value))
                 }
@@ -65,9 +60,9 @@ export function TradingParameters() {
                 <input
                   type="number"
                   min="0.001"
-                  max="1"
+                  max="5"
                   step="0.001"
-                  value={localConfig.buyAmountSol || 0.01}
+                  value={localConfig.buyAmountSol || 0.005}
                   onChange={(e) =>
                     handleChange("buyAmountSol", parseFloat(e.target.value))
                   }

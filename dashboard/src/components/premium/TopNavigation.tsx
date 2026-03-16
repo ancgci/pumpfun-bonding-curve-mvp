@@ -1,0 +1,65 @@
+import {
+    Search,
+    Bell,
+    Settings,
+    Sun,
+    Moon
+} from 'lucide-react';
+import { useAuthStore } from '../../stores/authStore';
+
+export const TopNavigation = () => {
+    const { user } = useAuthStore();
+
+    return (
+        <header className="flex items-center justify-between py-6 px-10 bg-transparent">
+            {/* Search Bar */}
+            <div className="relative group w-96">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <Search className="h-5 w-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                </div>
+                <input
+                    type="text"
+                    className="block w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl leading-5 text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 transition-all duration-300"
+                    placeholder="Search Transaction..."
+                />
+            </div>
+
+            {/* Right Actions */}
+            <div className="flex items-center gap-4">
+                <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">
+                    <button className="p-2 text-muted-foreground hover:text-foreground transition-colors">
+                        <Sun className="h-5 w-5" />
+                    </button>
+                    <button className="p-2 bg-white/10 rounded-xl text-foreground shadow-lg backdrop-blur-md">
+                        <Moon className="h-5 w-5" />
+                    </button>
+                </div>
+
+                <button className="p-3 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
+                    <Settings className="h-5 w-5" />
+                </button>
+
+                <button className="relative p-3 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
+                    <Bell className="h-5 w-5" />
+                    <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full border border-background"></span>
+                </button>
+
+                {/* User Profile */}
+                <div className="flex items-center gap-4 pl-4 ml-2 border-l border-white/10">
+                    <div className="text-right hidden sm:block">
+                        <p className="text-sm font-semibold text-foreground">{user?.name || "Premium User"}</p>
+                        <p className="text-xs text-muted-foreground">{user?.email || "bot.owner@pumpfun.io"}</p>
+                    </div>
+                    <div className="relative">
+                        <img
+                            src={user?.picture || "https://api.dicebear.com/7.x/avataaars/svg?seed=John"}
+                            alt="Avatar"
+                            className="w-12 h-12 rounded-2xl border border-white/20 object-cover"
+                        />
+                        <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${user ? 'bg-green-500' : 'bg-gray-500'}`}></div>
+                    </div>
+                </div>
+            </div>
+        </header>
+    );
+};

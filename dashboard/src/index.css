@@ -38,37 +38,35 @@
 
 @layer base {
   :root {
-    --background: 230 40% 4%;
-    /* Darker, slightly blue tint */
+    --background: 230 20% 5%; /* Very dark, almost black */
     --foreground: 210 40% 98%;
 
-    --card: 230 35% 10%;
+    --card: 230 15% 10%; /* Slightly lighter than background for definition */
     --card-foreground: 210 40% 98%;
 
-    --popover: 230 35% 10%;
+    --popover: 230 15% 10%;
     --popover-foreground: 210 40% 98%;
 
-    --primary: 250 80% 65%;
-    /* Vibrant Purple/Blue */
-    --primary-foreground: 210 40% 98%;
+    --primary: 162 100% 70%; /* Mint Green */
+    --primary-foreground: 230 20% 5%;
 
-    --secondary: 230 30% 15%;
+    --secondary: 175 40% 15%; /* Dark Teal accent */
     --secondary-foreground: 210 40% 98%;
 
-    --muted: 230 30% 15%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 230 10% 15%;
+    --muted-foreground: 215 10% 65%;
 
-    --accent: 250 80% 65%;
+    --accent: 175 75% 50%; /* Vibrant Teal */
     --accent-foreground: 210 40% 98%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 230 30% 20%;
-    --input: 230 30% 20%;
-    --ring: 250 80% 65%;
+    --border: 230 10% 15%;
+    --input: 230 10% 15%;
+    --ring: 162 100% 70%;
 
-    --radius: 0.75rem;
+    --radius: 1rem; /* More rounded as requested */
   }
 }
 
@@ -81,8 +79,8 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
     background-image:
-      radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
-      radial-gradient(circle at 85% 30%, rgba(168, 85, 247, 0.08) 0%, transparent 40%);
+      radial-gradient(circle at 15% 50%, rgba(162, 255, 218, 0.03) 0%, transparent 40%),
+      radial-gradient(circle at 85% 30%, rgba(20, 184, 166, 0.03) 0%, transparent 40%);
     background-attachment: fixed;
   }
 }

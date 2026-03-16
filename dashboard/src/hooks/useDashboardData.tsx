@@ -25,6 +25,7 @@ export interface DashboardData {
   emergencyActive: boolean;
   learnedRules: any[];
   cbStatus: any;
+  walletBalances: any;
   refreshData: () => Promise<void>;
   toggleAgent: () => Promise<void>;
   toggleMode: () => Promise<void>;
@@ -54,6 +55,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [emergencyActive, setEmergencyActive] = useState(false);
   const [learnedRules, setLearnedRules] = useState<any[]>([]);
   const [cbStatus, setCbStatus] = useState<any>(null);
+  const [walletBalances, setWalletBalances] = useState<any>(null);
   const [logs, setLogs] = useState<
     { message: string; type: "info" | "warn" | "error"; time: number }[]
   >([]);
@@ -76,6 +78,19 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       throw new Error(err.response?.data?.error || err.message || "API Request Failed");
     }
+  };
+
+  const applyPlHistory = (history: any) => {
+    if (!history || !Array.isArray(history.plValues)) return;
+    const timestamps = history.rawTimestamps || history.timestamps || [];
+    const mapped = timestamps
+      .map((t: any, idx: number) => {
+        const time = typeof t === "number" ? t : Date.parse(t);
+        if (Number.isNaN(time)) return null;
+        return { timestamp: time, pnl: Number(history.plValues[idx] ?? 0) };
+      })
+      .filter(Boolean) as any[];
+    if (mapped.length > 0) setPlChartData(mapped);
   };
 
   // Build cumulative PnL chart from simulation trades
@@ -102,6 +117,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const refreshData = async () => {
     try {
+      let chartData: any[] = [];
+
       const [
         statsData,
         posData,
@@ -116,6 +133,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         emergData,
         rulesData,
         cbData,
+        walletData,
+        plHistoryData,
       ] = await Promise.all([
         apiFetch(`${API_BASE}/stats`).catch(() => null),
         apiFetch(`${API_BASE}/positions`).catch(() => []),
@@ -130,6 +149,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         apiFetch(`${API_BASE}/emergency-stop`).catch(() => ({ active: false })),
         apiFetch(`${API_BASE}/agent/learned-rules`).catch(() => []),
         apiFetch(`${API_BASE}/cb-status`).catch(() => null),
+        apiFetch(`${API_BASE}/wallet/balances`).catch(() => null),
+        apiFetch(`${API_BASE}/pl-history`).catch(() => null),
       ]);
 
       if (statsData) setStats(statsData);
@@ -141,8 +162,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         setSimTrades(simTrData);
         // Build PnL chart from closed simulation trades
         const closedTrades = simTrData.filter((t: any) => t.status !== "OPEN" && t.pnl !== undefined);
-        const chartData = buildPlChart(closedTrades);
-        if (chartData.length > 0) setPlChartData(chartData);
+        chartData = buildPlChart(closedTrades);
       }
       if (patData) setPatterns(patData);
       if (healthData) setBotHealth(healthData);
@@ -151,6 +171,24 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setEmergencyActive(emergData?.active || false);
       if (rulesData) setLearnedRules(rulesData);
       if (cbData) setCbStatus(cbData);
+      if (walletData) setWalletBalances(walletData);
+
+      const span = (vals: any[]) => {
+        if (!Array.isArray(vals) || vals.length === 0) return 0;
+        const nums = vals.map((v) => Number(v) || 0);
+        return Math.max(...nums) - Math.min(...nums);
+      };
+
+      const historySpan = plHistoryData ? span(plHistoryData.plValues || []) : 0;
+      const chartSpan = span(chartData.map((c: any) => c.pnl));
+
+      if (historySpan > 1e-6 && plHistoryData) {
+        applyPlHistory(plHistoryData);
+      } else if (chartSpan > 0 && chartData.length > 0) {
+        setPlChartData(chartData);
+      } else if (plHistoryData) {
+        applyPlHistory(plHistoryData);
+      }
     } catch (e) {
       console.error("Dashboard fetch error:", e);
     }
@@ -166,6 +204,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     newSocket.on("dashboardUpdate", (data: any) => {
       if (data.stats) setStats(data.stats);
       if (data.simTrades) setSimTrades(data.simTrades);
+      if (data.plHistory) applyPlHistory(data.plHistory);
+    });
+
+    newSocket.on("pnl-update", (data: any) => {
+      if (data.stats) setStats(data.stats);
+      if (data.plHistory) applyPlHistory(data.plHistory);
     });
 
     const fetchLogs = async () => {
@@ -225,12 +269,28 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const toggleProtocol = async (key: string) => {
     const current = protocolConfig?.[key] ?? true;
-    await apiFetch(`${API_BASE}/protocol-config`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [key]: !current }),
-    });
-    await refreshData();
+    const next = !current;
+    const prev = protocolConfig;
+
+    // Optimistic update
+    setProtocolConfig((old: any) => ({
+      ...(old || {}),
+      [key]: next,
+      updatedAt: new Date().toISOString(),
+    }));
+
+    try {
+      await apiFetch(`${API_BASE}/protocol-config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: next }),
+      });
+      await refreshData();
+    } catch (err) {
+      // rollback on failure
+      setProtocolConfig(prev || null);
+      throw err;
+    }
   };
 
   const isAgentActive = agentStatus?.enabled === true;
@@ -256,6 +316,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         emergencyActive,
         learnedRules,
         cbStatus,
+        walletBalances,
         refreshData,
         toggleAgent,
         toggleMode,

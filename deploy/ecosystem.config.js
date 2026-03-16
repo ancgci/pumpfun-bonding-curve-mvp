@@ -9,7 +9,7 @@
  *   pm2 logs
  */
 
-const PROJECT_DIR = '/opt/agents/pumpfun-bot';
+const PROJECT_DIR = '/home/srant/projects/pumpfun-bonding-curve-Test';
 
 module.exports = {
     apps: [

@@ -82,7 +82,7 @@ export function StatsOverview() {
           <CardContent>
             <TabsContent value="simulation" className="mt-0 focus-visible:outline-none focus-visible:ring-0">
               <div className="flex justify-end mb-2 gap-1">
-                {["1d", "3d", "7d", "1m", "1y", "all"].map((t) => (
+                {["1d", "7d", "1m", "1y", "all"].map((t) => (
                   <button
                     key={t}
                     onClick={() => setTimeFilter(t)}

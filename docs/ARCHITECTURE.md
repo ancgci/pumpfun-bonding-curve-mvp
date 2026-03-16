@@ -203,28 +203,28 @@ Liquidez > 300k SOL → 0.3% slippage (máxima economia)
 
 ---
 
-## Dashboard
-
 ### Backend (Express)
 **Arquivo:** `dashboard-api/server.ts`
 
-**Endpoints:**
-- `GET /api/stats` - Estatísticas gerais
-- `GET /api/positions` - Posições ativas
-- `GET /api/cb-status` - Status do Circuit Breaker
+**Responsabilidades:**
+- Servir a API institucional para o frontend.
+- Gerenciar sessões de autenticação (JWT + Google OAuth).
+- Atuar como proxy para o WebSocket (`dashboardUpdate`).
+- Facilitar controle remoto do bot via endpoints de POST (`/agent/toggle`, `/agent/mode`, `/trading-config`).
+- Stream de logs em tempo real via `/api/agent/logs` (polling de 2s).
 
-**Dados:**
-- Lê `data/positions.json`
-- Lê `circuit_breaker_state.json`
+### Frontend (React + Vite)
+**Caminho:** `dashboard/`
 
-### Frontend
-**Arquivos:** `dashboard/public/*`
+**Funcionalidades Premium:**
+- **Tabbed Layout:** Organização modular via `Sidebar.tsx` e `PremiumDashboardPage.tsx` servindo 5 visões principais (Overview, Trading, Logs, IA, Wallet).
+- **Crypto Wallet:** Módulo central de gestão de ativos (`WalletDashboard.tsx`) com suporte a depósitos, saques e visualização de portfólio SOL/Tokens.
+- **DexScreener API:** Integração direta no `CurrencyExchangeWidget.tsx` para precificação em tempo real via endpoints públicos da DexScreener.
+- **Draggable Cards:** Implementação de Drag & Drop nativa (HTML5 API) em `PremiumDashboardPage` para reordenação persistente de widgets nas abas de visão geral.
+- **Integrated Terminal:** Portal de visualização direta dos logs do bot (`AgentLiveTerminal.tsx`).
+- **Dynamic Charts:** Visualização de P&L acumulado (`BalanceChart`) e score de precisão (`PaymentOnTimeChart`) com suporte a bolhas de trading dinâmicas.
 
-**Features:**
-- Auto-refresh (5s)
-- Cards animados
-- Status visual do CB
-- Lista de posições ativas
+**Autenticação:** Google OAuth 2.0 com persistência de sessão via JWT e Zustand hook em `authStore.ts`.
 
 ---
 

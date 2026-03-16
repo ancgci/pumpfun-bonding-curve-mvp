@@ -105,8 +105,11 @@ function DashboardContent() {
   );
 }
 
+import { PremiumDashboardPage } from "./components/premium/PremiumDashboardPage";
+
 function AppWithAuth() {
   const { login } = useAuthStore();
+  const [checkingSession, setCheckingSession] = useState(true);
 
   // On mount: try to restore session from httpOnly refresh cookie
   useEffect(() => {
@@ -119,9 +122,22 @@ function AppWithAuth() {
         }
       } catch {
         // No active session
+      } finally {
+        setCheckingSession(false);
       }
     })();
   }, [login]);
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
+          <p className="text-muted-foreground text-sm font-medium animate-pulse">Initializing Secure Session...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <BrowserRouter>
@@ -130,6 +146,14 @@ function AppWithAuth() {
         <Route element={<ProtectedRoute />}>
           <Route
             path="/"
+            element={
+              <DashboardProvider>
+                <PremiumDashboardPage />
+              </DashboardProvider>
+            }
+          />
+          <Route
+            path="/classic"
             element={
               <DashboardProvider>
                 <DashboardContent />

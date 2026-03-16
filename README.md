@@ -94,61 +94,51 @@ npm run start:all
 ```
 
 
-## 🆕 Latest Changes (Mar 11, 2026)
-
-### 🛡️ Camada de Proteção de Organicidade (Anti-Rug & Anti-Bot)
-O sistema ganhou um motor estatístico independente que avalia a "saudabilidade" da subida de um token antes de autorizar qualquer compra, prevenindo a entrada em golpes estruturais.
+### 💎 Premium Financial Dashboard & Crypto Wallet (Mar 16, 2026)
+O dashboard foi elevado a um patamar profissional com uma interface de alto desempenho focada em métricas financeiras e gestão de ativos.
 
 | Feature | Description |
 |---------|-------------|
-| **Novo Motor de Scoring (9 Eixos)** | Calcula densidade, diversidade (carteiras), Recuos orgânicos, R² de robôs, Impacto na Liquidez e Churn de Vendedores (0-100 pts) |
-| **Micro-confirmação Assíncrona** | "Vigília" de 3-8s que segura a compra antes da execução para checar falsos volumes ou mortes súbitas do token. |
-| **15 Filtros HARD/SOFT** | Bloqueia instantaneamente tokens manipulados (ex: Top 3 buyers = 85% do volume, ou Liquidez muito "oca"). |
-| **Skill de IA & Persistência** | Novo `PumpFunOrganicityGuard.md` para LLMs e Histórico em disco salvo continuamente. |
+| **Carteira Cripto (NEW)** | Submenu completo para gestão de SOL/Tokens: Saldo em tempo real, Depósitos (QR), Saques e Histórico. |
+| **DexScreener API** | Conversor de tokens agora utiliza a API oficial da DexScreener para preços e buscas por contrato (Mint). |
+| **Trade Performance** | Gráficos de precisão refinados com visualização de bolhas escalonadas por P&L e legenda clara. |
+| **Layout Responsivo** | Widgets como "Agent Status" agora possuem layout horizontal que não distorce em diferentes resoluções. |
+| **Auto-Sync Mode** | Sincronização automática de dados ao alternar entre os modos de Simulation e Mainnet. |
+| **Draggable UI** | Customize seu layout arrastando os quadros do Overview para as posições desejadas. |
+| **Integrated Terminal** | Terminal de logs em tempo real portado diretamente para a aba "Logs". |
 
-**Arquivos:** `utils/organicityMonitor.ts`, `utils/organicityScore.ts`, `utils/entryBlocker.ts`, `utils/microConfirmation.ts`. Doc: `docs/ORGANICITY_PROTECTION.md`.
+**Arquivos:** `dashboard/src/components/premium/*`, `dashboard/src/components/dashboard/AgentStatus.tsx`.
 
-### 🧠 Ativação do Sistema Multi-Agentes PRO (Full Intelligence)
-O bot agora opera com um "Conselho de Agentes" em paralelo, tornando-o muito mais resiliente e preciso.
+### 🛠️ Estabilização e QA
+- **Auth Session Fix**: Implementado estado de `checkingSession` para evitar redirects indesejados para o login durante a restauração da sessão.
+- **E2E Playwright**: Adicionada suite completa de testes para validar o Premium Dashboard, garantindo que widgets, gráficos e botões de controle funcionem conforme o esperado.
 
-| Feature | Description |
-|---------|-------------|
-| **5 Agentes Reais** | Implementada a inteligência LLM real para Risk, Scalper, Sentiment, Whale e CopyTrading (Juiz). |
-| **Fail-Safe Fallback** | Caso a orquestração multi-agente falhe ou atinja timeout, o bot reverte automaticamente para o "cérebro" original (Legacy LLM). |
-| **Mecanismo de Consenso** | O Juiz (CopyTrading) avalia os sinais de todos os outros especialistas para gerar a decisão final. |
+---
 
-**Arquivos:** `.agents/agents/*`, `.agents/orchestrator/`, `utils/agentOrchestrator.ts`. Doc: `docs/MULTI_AGENT_ORCHESTRATION.md`.
+## 🚀 Quick Start
 
-### 🛠️ Correção de Bugs Críticos
-- **Resolução de Falha na Compra**: Corrigido o erro que impedia o bot de realizar compras pós-deploy devido a falha de mapeamento no orquestrador.
-- **Melhoria do Deploy**: Script `deploy.sh` agora preserva o diretório `data/` na VPS, evitando perda de histórico de trades e aprendizado.
+### Option 1: Everything at Once (Recommended)
 
+```bash
+# 1. Install dependencies
+npm install
 
-### 📈 Análise Técnica V2 (High-Res Scalper)
-A análise técnica foi completamente modernizada e movida para resolução de 1 segundo (High-Resolution), focada no ecossistema pump.fun.
+# 2. Configure .env
+cp .env.example .env
+# Edit .env with your credentials
 
-| Feature | Description |
-|---------|-------------|
-| **1-Second Buckets**| Pipeline de dados e indicadores calculados a cada segundo (`periodStore1s`). |
-| **8 Novos Indicadores**| EMA 5/9/13, MACD Acelerado (4,9,3), RSI de curto período (7), ATR, Donchian Channel, ROC, Volume Burst Relativo e VWAP Rolling. |
-| **Score de Confluência**| Engine de pontuação (`technicalScore.ts`) de 0 a 100 baseada em 4 blocos: Tendência Micro, Impulso, Confirmação e Penalidades. Sizing dinâmico por score. |
-| **Pré/Pós Validação LLM**| Devido à latência da LLM, o score bloqueia ativamente os tokens **no exato segundo** pré-compra. Entradas recusadas pós-LLM vão para fila do DipMonitor. |
-| **14 Smart Blocks**| Filtros "HARD" e "SOFT" para evitar falsos rompimentos, candles muito esticados (stretch multiplier), e spikes de RSI ou ATR extremos. |
-| **9 Condições de Saída**| Saída por Stop Loss dinâmico (com Trailing), TP Parcial 50% (+breakeven automático), Reversão de tendência, Timed Stop (120s) ou Falha em Follow-Through. |
+# 3. Start bot + dashboard simultaneously
+npm run start:all
+```
 
-**Arquivos-Chave:** `utils/volatilityMonitor.ts`, `utils/technicalScore.ts`, `utils/entryBlocker.ts`, `utils/positionManagerV2.ts`, `agentOrchestrator.ts`. Mais detalhes em `docs/TECHNICAL_ANALYSIS_V2.md`.
+**Result:** Bot and Dashboard start together.
+- **New Premium Dashboard:** [http://localhost:5174](http://localhost:5174)
+- **Classic Dashboard:** [http://localhost:5174/classic](http://localhost:5174/classic)
 
-### 🎨 Dashboard V2 — React/Vite Overhaul
-O dashboard foi 100% reescrito em React + Vite + TypeScript com Tailwind CSS v4.
+---
 
-| Feature | Description |
-|---------|-------------|
-| **React 19 + Vite** | Migração completa do HTML/JS para stack moderna com HMR. |
-| **3-Tab Navigation** | Overview, Trading, Logs & History — organização em abas. |
-| **Live Protocol Toggles** | Protocolos clicáveis que atualizam via API em tempo real. |
-| **PnL Chart** | Gráfico cumulative de P&L gerado do histórico de simulação. |
-| **Trojan Token Links** | Tokens na tabela linkam para trojan.com para trading rápido. |
-| **Status Colors** | Linhas verde (profit), vermelho (loss), azul (open) na tabela de trades. |
+## 🛡️ QA & Quality Control
+... (rest of the section)
 
 ### 🧪 QAgent (QA Senior)
 | Feature | Description |

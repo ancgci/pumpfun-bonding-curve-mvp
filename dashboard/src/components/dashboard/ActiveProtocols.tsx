@@ -1,6 +1,4 @@
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { CircleDot } from "lucide-react";
-
 const KNOWN_PROTOCOLS: Record<string, { name: string; icon: string }> = {
   PUMPFUN: { name: "PumpFun", icon: "🟣" },
   METEORA_DBC: { name: "Meteora DBC", icon: "🔵" },
@@ -16,16 +14,10 @@ export function ActiveProtocols() {
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-          <CircleDot className="w-4 h-4 text-primary" /> Active Protocols
-        </h2>
-        <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded border border-primary/20 font-mono">
-          LIVE FEED
-        </span>
-      </div>
-
-      <div className="flex flex-row flex-wrap gap-2">
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}
+      >
         {Object.entries(KNOWN_PROTOCOLS).map(([key, meta]) => {
           const isActive = protocolConfig[key] !== false;
 
