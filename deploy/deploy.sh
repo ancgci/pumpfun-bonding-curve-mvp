@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-VPS_HOST="<VPS_IP>"  # Define your VPS IP here or in .env
+VPS_HOST="${VPS_HOST:-$(cat .vps_host 2>/dev/null || echo '')}"
+if [ -z "$VPS_HOST" ]; then echo "❌ VPS_HOST not set. Create .vps_host file or export VPS_HOST=<ip>"; exit 1; fi
 VPS_USER="anto"
 REMOTE_DIR="/home/anto/pumpfun-bot"
 

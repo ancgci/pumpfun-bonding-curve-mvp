@@ -158,11 +158,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       if (agentData) setAgentStatus(agentData);
       if (historyData) setTradeHistory(historyData);
       if (simStatData) setSimStatus(simStatData);
-      if (simTrData) {
+      if (simTrData && Array.isArray(simTrData) && simTrData.length > 0) {
         setSimTrades(simTrData);
         // Build PnL chart from closed simulation trades
         const closedTrades = simTrData.filter((t: any) => t.status !== "OPEN" && t.pnl !== undefined);
         chartData = buildPlChart(closedTrades);
+      } else if (simTrData && Array.isArray(simTrData) && simTrData.length === 0) {
+        // Server returned genuinely empty — only update if we have no data at all
+        setSimTrades((prev: any[]) => prev.length === 0 ? simTrData : prev);
       }
       if (patData) setPatterns(patData);
       if (healthData) setBotHealth(healthData);
@@ -203,7 +206,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
     newSocket.on("dashboardUpdate", (data: any) => {
       if (data.stats) setStats(data.stats);
-      if (data.simTrades) setSimTrades(data.simTrades);
+      // Guard: only update simTrades if server returns actual data
+      // Never flash to empty if we already have trades displayed
+      if (data.simTrades && Array.isArray(data.simTrades) && data.simTrades.length > 0) {
+        setSimTrades(data.simTrades);
+      }
       if (data.plHistory) applyPlHistory(data.plHistory);
     });
 

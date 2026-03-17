@@ -50,3 +50,4 @@ backup_top_vps/
 **/*.db-shm
 **/*.db-wal
 *.tsbuildinfo
+.vps_host
