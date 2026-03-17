@@ -50,6 +50,7 @@ rsync -avz --progress \
   --exclude 'node_modules' \
   --exclude '.git' \
   --exclude 'dist' \
+  --exclude 'backups' \
   --exclude 'dashboard/node_modules' \
   --exclude 'dashboard/dist' \
   --exclude 'dashboard-api/node_modules' \
@@ -73,6 +74,39 @@ echo "Installing dependencies and building on VPS..."
 ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
   set -e
   cd "$REMOTE_DIR"
+  API_BASE_URL="http://127.0.0.1:3001"
+
+  wait_for_json_endpoint() {
+    local url="\$1"
+    local label="\$2"
+    local attempts="\${3:-15}"
+    local delay="\${4:-2}"
+    local response=""
+    local http_code=""
+    local body_file=""
+
+    body_file=\$(mktemp)
+    trap 'rm -f "\$body_file"' RETURN
+
+    for ((i=1; i<=attempts; i++)); do
+      http_code=\$(curl -sS -o "\$body_file" -w "%{http_code}" --max-time 5 "\$url" 2>/dev/null || echo "000")
+      response=\$(cat "\$body_file" 2>/dev/null || true)
+
+      if [[ "\$http_code" == "200" || "\$http_code" == "401" ]]; then
+        if [[ "\$response" == \[* || "\$response" == \{* ]]; then
+          echo "  ✅ \$label OK"
+          return 0
+        fi
+        echo "  ⚠️  \$label respondeu com HTTP \$http_code, mas não retornou JSON válido"
+      else
+        echo "  ⏳ Aguardando \$label (\$i/\$attempts, http=\$http_code)..."
+      fi
+      sleep "\$delay"
+    done
+
+    echo "  ❌ Falha ao validar \$label em \$url"
+    return 1
+  }
 
   # Check for Node.js/NPM and install if missing
   if ! command -v npm &> /dev/null; then
@@ -85,6 +119,12 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_\$NODE_MAJOR.x nodistro main" | sudo tee /etc/apt/keyrings/nodesource.list
     sudo apt-get update
     sudo apt-get install nodejs -y
+  fi
+
+  if ! command -v curl &> /dev/null; then
+    echo "curl not found. Installing..."
+    sudo apt-get update
+    sudo apt-get install -y curl
   fi
 
   # Check for PM2
@@ -127,6 +167,11 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
   echo "═══════════════════════════════════════════════════════════════"
   echo "  Config files:"
   ls -la data/*.json 2>/dev/null || echo "  ⚠️  No JSON configs found in data/"
+
+  echo ""
+  echo "  API validation:"
+  wait_for_json_endpoint "\$API_BASE_URL/api/agent/learned-rules" "GET /api/agent/learned-rules"
+  wait_for_json_endpoint "\$API_BASE_URL/api/agent/postmortems" "GET /api/agent/postmortems"
 REMOTE_CMD
 
 log "Deployment complete!"

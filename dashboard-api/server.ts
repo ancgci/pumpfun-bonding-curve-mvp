@@ -6,7 +6,7 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
-import { getSimulationMetrics, isSimulationReadyForLive } from "../utils/simulationEngine";
+import { getRecentPostMortemTrades, getSimulationMetrics, isSimulationReadyForLive } from "../utils/simulationEngine";
 import { CONFIG } from "../utils/config";
 import http from "http";
 import { Server } from "socket.io";
@@ -580,6 +580,18 @@ app.get("/api/agent/learned-rules", (req, res) => {
     try {
         const rules = loadLearnedPatterns();
         res.json(rules);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/agent/postmortems - Ultimas autopsias de trades perdedores
+ */
+app.get("/api/agent/postmortems", (req, res) => {
+    try {
+        const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
+        res.json(getRecentPostMortemTrades(limit));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }

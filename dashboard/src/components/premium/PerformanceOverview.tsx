@@ -142,10 +142,16 @@ export function PerformanceOverview() {
                     tick={{ fill: "rgba(255,255,255,0.5)", fontSize: 10 }}
                     tickFormatter={(val) => {
                       const d = new Date(val);
-                      const isShort = period === "1d";
-                      return isShort
-                        ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                        : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                      const span = chartData.length > 1 ? chartData[chartData.length - 1].timestamp - chartData[0].timestamp : 0;
+                      const oneDay = 24 * 60 * 60 * 1000;
+                      const threeDays = 3 * oneDay;
+                      if (span <= oneDay || period === "1d") {
+                        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                      } else if (span <= threeDays || period === "7d") {
+                        return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                      } else {
+                        return d.toLocaleDateString([], { month: "short", day: "numeric" });
+                      }
                     }}
                   />
                   <YAxis

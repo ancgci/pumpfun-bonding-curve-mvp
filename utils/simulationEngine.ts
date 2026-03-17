@@ -3,6 +3,14 @@ import { CONFIG, getRuntimeConfig } from "./config";
 import * as fs from "fs";
 import * as path from "path";
 import db from "./db";
+import {
+  PostMortemStatus,
+  TradeDecisionContext,
+  TradeMarketSnapshot,
+  TradeMonitoringPoint,
+  TradePostMortemReport,
+} from "./postMortemTypes";
+import { getPostMortemStatusForClosedTrade } from "./postMortemContext";
 
 /**
  * SIMULATION ENGINE
@@ -17,7 +25,7 @@ import db from "./db";
  * risking actual funds
  */
 
-interface SimulatedTrade {
+export interface SimulatedTrade {
   tokenMint: string;
   tokenSymbol: string;
   entryTime: number;
@@ -33,6 +41,14 @@ interface SimulatedTrade {
   tokenHolders?: number;
   marketCapEntry?: number | null;
   marketCapExit?: number | null;
+  decisionContext?: TradeDecisionContext | null;
+  entrySnapshot?: TradeMarketSnapshot | null;
+  exitSnapshot?: TradeMarketSnapshot | null;
+  monitoringTrace?: TradeMonitoringPoint[];
+  postMortemStatus?: PostMortemStatus;
+  postMortemSummary?: string | null;
+  postMortemReport?: TradePostMortemReport | null;
+  postMortemAnalyzedAt?: number | null;
 }
 
 interface SimulationMetrics {
@@ -52,6 +68,57 @@ interface SimulationMetrics {
 const SIMULATION_DATA_DIR = path.join(__dirname, "../data/simulation");
 const SIMULATION_TRADES_FILE = path.join(SIMULATION_DATA_DIR, "trades.json");
 const SIMULATION_METRICS_FILE = path.join(SIMULATION_DATA_DIR, "metrics.json");
+
+function serializeJson(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  return JSON.stringify(value);
+}
+
+function parseJsonField<T>(value: unknown): T | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") return value as T;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function loadSimulationTrades(): SimulatedTrade[] {
+  ensureSimulationDir();
+  try {
+    if (!fs.existsSync(SIMULATION_TRADES_FILE)) return [];
+    const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
+    const trades = JSON.parse(data);
+    return Array.isArray(trades) ? trades : [];
+  } catch (error) {
+    logger.error(`Error loading simulation trades:`, error);
+    return [];
+  }
+}
+
+function saveSimulationTrades(trades: SimulatedTrade[]): void {
+  ensureSimulationDir();
+  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
+}
+
+function normalizeTradeRow(row: any): SimulatedTrade {
+  return {
+    ...row,
+    entryTime: Number(row.entryTime),
+    exitTime: row.exitTime ? Number(row.exitTime) : null,
+    marketCapEntry: row.marketCapEntry ?? null,
+    marketCapExit: row.marketCapExit ?? null,
+    decisionContext: parseJsonField<TradeDecisionContext>(row.decisionContext),
+    entrySnapshot: parseJsonField<TradeMarketSnapshot>(row.entrySnapshot),
+    exitSnapshot: parseJsonField<TradeMarketSnapshot>(row.exitSnapshot),
+    monitoringTrace: parseJsonField<TradeMonitoringPoint[]>(row.monitoringTrace) || [],
+    postMortemStatus: (row.postMortemStatus || "PENDING") as PostMortemStatus,
+    postMortemSummary: row.postMortemSummary ?? null,
+    postMortemReport: parseJsonField<TradePostMortemReport>(row.postMortemReport),
+    postMortemAnalyzedAt: row.postMortemAnalyzedAt ? Number(row.postMortemAnalyzedAt) : null,
+  };
+}
 const getBuyAmountSol = () => {
   try {
     const cfg = getRuntimeConfig();
@@ -79,7 +146,9 @@ export async function recordSimulatedTrade(
   confidence: number,
   agentAnalysis: any,
   holders?: number,
-  marketCap?: number
+  marketCap?: number,
+  decisionContext?: TradeDecisionContext | null,
+  entrySnapshot?: TradeMarketSnapshot | null
 ): Promise<void> {
   ensureSimulationDir();
   const entryAmount = getBuyAmountSol();
@@ -100,29 +169,35 @@ export async function recordSimulatedTrade(
     tokenHolders: holders,
     marketCapEntry: marketCap ?? null,
     marketCapExit: null,
+    decisionContext: decisionContext || {
+      action: "BUY",
+      confidence,
+      reasoning: agentAnalysis?.reasoning || `AI Agent confidence: ${confidence}%`,
+      takeProfit: agentAnalysis?.takeProfit,
+      stopLoss: agentAnalysis?.stopLoss,
+    },
+    entrySnapshot: entrySnapshot ?? null,
+    exitSnapshot: null,
+    monitoringTrace: [],
+    postMortemStatus: "PENDING",
+    postMortemSummary: null,
+    postMortemReport: null,
+    postMortemAnalyzedAt: null,
   };
 
   // 1. JSON Persistence (Backup)
-  let trades: SimulatedTrade[] = [];
-  try {
-    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
-      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
-      trades = JSON.parse(data);
-    }
-  } catch (error) {
-    logger.error(`Error loading simulation trades:`, error);
-  }
-
+  let trades = loadSimulationTrades();
   trades.push(trade);
   if (trades.length > 1000) trades = trades.slice(-1000);
-  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
+  saveSimulationTrades(trades);
 
   // 2. SQLite Persistence (Primary for Dashboard)
   try {
     db.prepare(`
       INSERT INTO simulated_trades (
-        token_mint, token_symbol, entry_time, entry_price, entry_amount, confidence, status, reason, token_holders, market_cap_entry, market_cap_exit
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        token_mint, token_symbol, entry_time, entry_price, entry_amount, confidence, status, reason, token_holders, market_cap_entry, market_cap_exit,
+        decision_context, entry_snapshot, exit_snapshot, monitoring_trace, postmortem_status, postmortem_summary, postmortem_report, postmortem_analyzed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       trade.tokenMint,
       trade.tokenSymbol,
@@ -134,7 +209,15 @@ export async function recordSimulatedTrade(
       trade.reason,
       trade.tokenHolders,
       trade.marketCapEntry,
-      trade.marketCapExit
+      trade.marketCapExit,
+      serializeJson(trade.decisionContext),
+      serializeJson(trade.entrySnapshot),
+      serializeJson(trade.exitSnapshot),
+      serializeJson(trade.monitoringTrace),
+      trade.postMortemStatus,
+      trade.postMortemSummary,
+      serializeJson(trade.postMortemReport),
+      trade.postMortemAnalyzedAt
     );
   } catch (error) {
     logger.error(`Error persisting simulation trade to DB:`, error);
@@ -154,21 +237,13 @@ export async function updateSimulatedTradeExit(
   exitPrice: number,
   status: "CLOSED_TP" | "CLOSED_SL" | "EXPIRED",
   reason?: string,
-  marketCap?: number | null
+  marketCap?: number | null,
+  exitSnapshot?: TradeMarketSnapshot | null
 ): Promise<SimulatedTrade | null> {
   ensureSimulationDir();
 
   // 1. JSON Persistence (Backup)
-  let trades: SimulatedTrade[] = [];
-  try {
-    if (fs.existsSync(SIMULATION_TRADES_FILE)) {
-      const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
-      trades = JSON.parse(data);
-    }
-  } catch (error) {
-    logger.error(`Error loading simulation trades:`, error);
-    return null;
-  }
+  const trades = loadSimulationTrades();
 
   const tradeIndex = trades.findIndex((t) => t.tokenMint === tokenMint && t.status === "OPEN");
   if (tradeIndex === -1) {
@@ -184,14 +259,16 @@ export async function updateSimulatedTradeExit(
   trade.pnl = trade.entryAmount * (trade.pnlPercent / 100);
   trade.reason = reason || `Exited with status: ${status}`;
   trade.marketCapExit = marketCap ?? null;
+  trade.exitSnapshot = exitSnapshot ?? null;
+  trade.postMortemStatus = getPostMortemStatusForClosedTrade(trade.pnl, status);
 
-  fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
+  saveSimulationTrades(trades);
 
   // 2. SQLite Persistence (Primary for Dashboard)
   try {
     db.prepare(`
       UPDATE simulated_trades 
-      SET exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?
+      SET exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?, exit_snapshot = ?, postmortem_status = ?
       WHERE token_mint = ? AND status = 'OPEN'
     `).run(
       trade.exitTime,
@@ -201,6 +278,8 @@ export async function updateSimulatedTradeExit(
       trade.pnlPercent,
       trade.reason,
       trade.marketCapExit,
+      serializeJson(trade.exitSnapshot),
+      trade.postMortemStatus,
       tokenMint
     );
   } catch (error) {
@@ -243,6 +322,172 @@ export async function updateSimulatedTradePrice(
   }
 }
 
+export async function appendSimulatedTradeMonitoringPoint(
+  tokenMint: string,
+  point: TradeMonitoringPoint
+): Promise<void> {
+  const trades = loadSimulationTrades();
+  const tradeIndex = trades.findIndex((trade) => trade.tokenMint === tokenMint && trade.status === "OPEN");
+
+  if (tradeIndex !== -1) {
+    const trade = trades[tradeIndex];
+    trade.monitoringTrace = trade.monitoringTrace || [];
+    trade.monitoringTrace.push(point);
+    if (trade.monitoringTrace.length > 180) {
+      trade.monitoringTrace = trade.monitoringTrace.slice(-180);
+    }
+    saveSimulationTrades(trades);
+  }
+
+  try {
+    const row = db.prepare(`
+      SELECT monitoring_trace as monitoringTrace
+      FROM simulated_trades
+      WHERE token_mint = ? AND status = 'OPEN'
+    `).get(tokenMint) as any;
+    const monitoringTrace = parseJsonField<TradeMonitoringPoint[]>(row?.monitoringTrace) || [];
+    monitoringTrace.push(point);
+    const trimmed = monitoringTrace.slice(-180);
+
+    db.prepare(`
+      UPDATE simulated_trades
+      SET monitoring_trace = ?
+      WHERE token_mint = ? AND status = 'OPEN'
+    `).run(JSON.stringify(trimmed), tokenMint);
+  } catch (error) {
+    logger.error(`Error updating simulation monitoring trace in DB:`, error);
+  }
+}
+
+export function updateTradePostMortem(
+  tokenMint: string,
+  entryTime: number,
+  postMortemStatus: PostMortemStatus,
+  postMortemReport?: TradePostMortemReport | null,
+  postMortemSummary?: string | null
+): void {
+  const trades = loadSimulationTrades();
+  const tradeIndex = trades.findIndex((trade) => trade.tokenMint === tokenMint && trade.entryTime === entryTime);
+  const analyzedAt = postMortemStatus === "DONE" || postMortemStatus === "FAILED" ? Date.now() : null;
+
+  if (tradeIndex !== -1) {
+    const trade = trades[tradeIndex];
+    trade.postMortemStatus = postMortemStatus;
+    trade.postMortemSummary = postMortemSummary ?? postMortemReport?.summary ?? null;
+    trade.postMortemReport = postMortemReport ?? null;
+    trade.postMortemAnalyzedAt = analyzedAt;
+    saveSimulationTrades(trades);
+  }
+
+  try {
+    db.prepare(`
+      UPDATE simulated_trades
+      SET postmortem_status = ?, postmortem_summary = ?, postmortem_report = ?, postmortem_analyzed_at = ?
+      WHERE token_mint = ? AND entry_time = ?
+    `).run(
+      postMortemStatus,
+      postMortemSummary ?? postMortemReport?.summary ?? null,
+      serializeJson(postMortemReport),
+      analyzedAt,
+      tokenMint,
+      entryTime
+    );
+  } catch (error) {
+    logger.error(`Error updating trade post-mortem in DB:`, error);
+  }
+}
+
+export function getPendingLossTrades(limit: number = 10): SimulatedTrade[] {
+  try {
+    const rows = db.prepare(`
+      SELECT
+        token_mint as tokenMint,
+        token_symbol as tokenSymbol,
+        entry_time as entryTime,
+        entry_price as entryPrice,
+        entry_amount as entryAmount,
+        exit_time as exitTime,
+        exit_price as exitPrice,
+        pnl_sol as pnl,
+        pnl_percent as pnlPercent,
+        confidence,
+        status,
+        reason,
+        token_holders as tokenHolders,
+        market_cap_entry as marketCapEntry,
+        market_cap_exit as marketCapExit,
+        decision_context as decisionContext,
+        entry_snapshot as entrySnapshot,
+        exit_snapshot as exitSnapshot,
+        monitoring_trace as monitoringTrace,
+        postmortem_status as postMortemStatus,
+        postmortem_summary as postMortemSummary,
+        postmortem_report as postMortemReport,
+        postmortem_analyzed_at as postMortemAnalyzedAt
+      FROM simulated_trades
+      WHERE status != 'OPEN'
+        AND (pnl_sol < 0 OR status = 'CLOSED_SL')
+        AND COALESCE(postmortem_status, 'PENDING') IN ('PENDING', 'FAILED')
+      ORDER BY exit_time ASC
+      LIMIT ?
+    `).all(limit) as any[];
+
+    if (rows.length > 0) {
+      return rows.map(normalizeTradeRow);
+    }
+  } catch (error) {
+    logger.error(`Error fetching pending loss trades from DB:`, error);
+  }
+
+  return loadSimulationTrades()
+    .filter((trade) =>
+      trade.status !== "OPEN" &&
+      (trade.pnl < 0 || trade.status === "CLOSED_SL") &&
+      (!trade.postMortemStatus || trade.postMortemStatus === "PENDING" || trade.postMortemStatus === "FAILED")
+    )
+    .slice(0, limit);
+}
+
+export function getRecentPostMortemTrades(limit: number = 20): SimulatedTrade[] {
+  try {
+    const rows = db.prepare(`
+      SELECT
+        token_mint as tokenMint,
+        token_symbol as tokenSymbol,
+        entry_time as entryTime,
+        entry_price as entryPrice,
+        entry_amount as entryAmount,
+        exit_time as exitTime,
+        exit_price as exitPrice,
+        pnl_sol as pnl,
+        pnl_percent as pnlPercent,
+        confidence,
+        status,
+        reason,
+        token_holders as tokenHolders,
+        market_cap_entry as marketCapEntry,
+        market_cap_exit as marketCapExit,
+        decision_context as decisionContext,
+        entry_snapshot as entrySnapshot,
+        exit_snapshot as exitSnapshot,
+        monitoring_trace as monitoringTrace,
+        postmortem_status as postMortemStatus,
+        postmortem_summary as postMortemSummary,
+        postmortem_report as postMortemReport,
+        postmortem_analyzed_at as postMortemAnalyzedAt
+      FROM simulated_trades
+      WHERE postmortem_report IS NOT NULL
+      ORDER BY postmortem_analyzed_at DESC
+      LIMIT ?
+    `).all(limit) as any[];
+
+    return rows.map(normalizeTradeRow);
+  } catch (error) {
+    logger.error(`Error fetching post-mortem trades from DB:`, error);
+    return [];
+  }
+}
+
 /**
  * Fetch all OPEN simulated trades from the database
  */
@@ -264,16 +509,20 @@ export function getOpenTradesFromDb(): SimulatedTrade[] {
         reason,
         token_holders as tokenHolders,
         market_cap_entry as marketCapEntry,
-        market_cap_exit as marketCapExit
+        market_cap_exit as marketCapExit,
+        decision_context as decisionContext,
+        entry_snapshot as entrySnapshot,
+        exit_snapshot as exitSnapshot,
+        monitoring_trace as monitoringTrace,
+        postmortem_status as postMortemStatus,
+        postmortem_summary as postMortemSummary,
+        postmortem_report as postMortemReport,
+        postmortem_analyzed_at as postMortemAnalyzedAt
       FROM simulated_trades
       WHERE status = 'OPEN'
     `).all() as any[];
 
-    return rows.map(row => ({
-      ...row,
-      entryTime: Number(row.entryTime),
-      exitTime: row.exitTime ? Number(row.exitTime) : null,
-    }));
+    return rows.map(normalizeTradeRow);
   } catch (error) {
     logger.error(`Error fetching open trades from DB:`, error);
     return [];

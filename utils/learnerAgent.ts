@@ -101,6 +101,7 @@ async function analyzeLosses(losses: any[]): Promise<string[]> {
     }
 
     const tradesSummary = losses.map((t, i) => {
+        const postMortem = t.postMortemReport || null;
         return [
             `Trade #${i + 1}:`,
             `  Token: ${t.tokenSymbol} (${t.tokenMint})`,
@@ -110,6 +111,9 @@ async function analyzeLosses(losses: any[]): Promise<string[]> {
             `  Confidence at entry: ${t.confidence}%`,
             `  Reason: ${t.reason || "N/A"}`,
             `  Status: ${t.status}`,
+            `  PostMortem Summary: ${t.postMortemSummary || postMortem?.summary || "N/A"}`,
+            `  Root Cause: ${postMortem?.rootCause?.label || "N/A"}`,
+            `  Recommendations: ${(postMortem?.recommendations || []).join(" | ") || "N/A"}`,
         ].join("\n");
     }).join("\n\n");
 
@@ -279,12 +283,7 @@ export async function runLearningCycle(): Promise<void> {
 
 export const LearnerAgent = {
     runLearningCycle,
+    runFullLearningCycle: runLearningCycle,
     isScheduled: true, // For test verification
     lastRun: new Date().toISOString() // Initial state
 };
-
-// Initialize learning cycle - run immediately on startup, then every hour
-runLearningCycle().catch(err => logger.warn(`⚠️ Initial learning cycle failed: ${err.message}`));
-setInterval(() => runLearningCycle(), 3600_000); // repeat once per hour
-
-logger.info("✅ Learner Agent module loaded");

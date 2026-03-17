@@ -32,6 +32,7 @@ import { recordPriceSample, getLatestPrice } from './utils/volatilityMonitor';
 import { backfillTokenHistory } from './utils/pumpfunHistory';
 import { recordOrganicityTrade, loadOrganicityFromDisk, saveOrganicityToDisk } from "./utils/organicityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
+import { runPostMortemCycle } from "./utils/postMortemAgent";
 import { CONFIG, validateConfig, getRuntimeConfig } from "./utils/config";
 import { positionManager } from "./utils/positionManager";
 import { executeHybridTrade, TokenData } from "./utils/hybridExecutor";
@@ -2093,21 +2094,26 @@ setInterval(async () => {
   }
 }, 3600000); // 1 hora
 
-// Learner Agent: run self-reflection cycle every hour
+async function runLearningWorkers(): Promise<void> {
+  await runPostMortemCycle();
+  await runLearningCycle();
+}
+
+// Learning Workers: post-mortem first, then self-reflection
 setInterval(async () => {
   try {
-    await runLearningCycle();
+    await runLearningWorkers();
   } catch (error: any) {
-    logger.error(`❌ [LearnerAgent] Cycle error: ${error.message}`);
+    logger.error(`❌ [LearningWorkers] Cycle error: ${error.message}`);
   }
 }, 3600000); // 1 hora
 
 // Run first learning cycle 30 seconds after boot
 setTimeout(async () => {
   try {
-    await runLearningCycle();
+    await runLearningWorkers();
   } catch (error: any) {
-    logger.error(`❌ [LearnerAgent] Initial cycle error: ${error.message}`);
+    logger.error(`❌ [LearningWorkers] Initial cycle error: ${error.message}`);
   }
 }, 30000);
 

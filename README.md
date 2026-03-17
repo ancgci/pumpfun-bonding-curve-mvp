@@ -356,6 +356,57 @@ priority: 10
 
 ---
 
+## 🟢 Current Local Work (Mar 17, 2026)
+
+### Loss Post-Mortem Agent
+
+| Feature | Description |
+|---------|-------------|
+| **PostMortemAgent (Offline)** | New worker dedicated to autopsying losing trades outside the real-time path |
+| **Trade Context Persistence** | Simulated trades now store decision context, entry/exit snapshots and monitoring trace |
+| **Deterministic Root Cause Engine** | First-pass classification for late entry, weak momentum, artificial flow, tight SL and no follow-through |
+| **Optional LLM Enrichment** | Post-mortem can be enriched by LLM without blocking the bot |
+| **LearnerAgent Input Upgrade** | Learning loop now consumes post-mortem summaries, causes and recommendations |
+| **API Read Access** | New endpoint exposes recent loss autopsies for inspection |
+
+**What changed in practice:**
+```
+1. Trade is recorded with rich entry context
+2. Trade monitoring appends lightweight checkpoints while position is open
+3. Trade closes with enriched exit context
+4. PostMortemAgent analyzes losing trades offline
+5. LearnerAgent uses that enriched analysis to generate better rules
+6. Learned rules continue to be injected into the main prompt
+```
+
+**New Files:**
+- `utils/postMortemAgent.ts` — Offline losing-trade autopsy worker
+- `utils/postMortemContext.ts` — Snapshot builders for entry, exit and monitoring
+- `utils/postMortemTypes.ts` — Shared post-mortem data contracts
+- `docs/LOSS_POSTMORTEM_AGENT.md` — Detailed implementation status
+
+**Updated Files:**
+- `utils/simulationEngine.ts` — Persists post-mortem context and reports
+- `utils/db.ts` — Adds SQLite columns for snapshots and autopsies
+- `utils/agentOrchestrator.ts` — Captures entry/exit context in simulation flow
+- `utils/learnerAgent.ts` — Learns from enriched post-mortem summaries
+- `dashboard-api/server.ts` — Adds `GET /api/agent/postmortems`
+- `index.ts` — Runs `PostMortemAgent` before `LearnerAgent`
+
+**Validation already done:**
+- `npm run typecheck`
+- `npx jest --config jest.config.js test/ai-agent/advanced/full-learning-cycle.test.ts --runInBand`
+
+**Backup created before implementation:**
+- `backups/pre-postmortem-agent-20260317-141018.tar.gz`
+
+**See:**
+- [LOSS_POSTMORTEM_AGENT.md](docs/LOSS_POSTMORTEM_AGENT.md) for the implementation record
+- [LOSS_POSTMORTEM_VPS_DEPLOY.md](docs/LOSS_POSTMORTEM_VPS_DEPLOY.md) for the production deploy checklist
+- [LOSS_POSTMORTEM_FIRST_2H_RUNBOOK.md](docs/LOSS_POSTMORTEM_FIRST_2H_RUNBOOK.md) for the first 2 hours of VPS monitoring
+
+---
+
 ## 🔵 Previous Changes (Feb 26, 2026)
 
 ### 🔵 Jito Endpoint Auto-Selection

@@ -5,7 +5,8 @@ import { TechnicalAnalysisConfig, DEFAULT_TA_CONFIG } from "./technicalConfig";
 // TYPES
 // ============================================================
 type Sample = { t: number; p: number; v: number }; // price + volume
-interface PricePeriod {
+export interface PricePeriod {
+  open: number;
   high: number;
   low: number;
   close: number;
@@ -66,7 +67,7 @@ function updatePeriodStore(
   let cur = periods.find(p => p.timestamp === ts);
 
   if (!cur) {
-    cur = { high: price, low: price, close: price, volume, timestamp: ts };
+    cur = { open: price, high: price, low: price, close: price, volume, timestamp: ts };
     periods.push(cur);
   } else {
     cur.high = Math.max(cur.high, price);
@@ -268,6 +269,11 @@ export function getATR1s(mint: string, period: number = 7): number | null {
     ));
   }
   return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
+export function getRecentPeriods1s(mint: string, limit: number = 120): PricePeriod[] {
+  const periods = periodStore1s.get(mint) || [];
+  return periods.slice(-limit).map(period => ({ ...period }));
 }
 
 // ============================================================
@@ -526,6 +532,7 @@ export interface TASnapshotV2 {
   // Meta
   timestamp: number;
   candlesAvailable1s: number;
+  closes1s: number[];
 }
 
 export function getTASnapshotV2(
@@ -601,6 +608,7 @@ export function getTASnapshotV2(
     trend,
     timestamp: Date.now(),
     candlesAvailable1s: periods1s.length,
+    closes1s: periods1s.map(p => p.close),
   };
 }
 

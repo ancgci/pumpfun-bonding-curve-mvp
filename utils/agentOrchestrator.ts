@@ -9,6 +9,7 @@ import {
   recordSimulatedTrade,
   updateSimulatedTradeExit,
   updateSimulatedTradePrice,
+  appendSimulatedTradeMonitoringPoint,
   getOpenTradeForToken,
   getOpenTradesFromDb,
 } from "./simulationEngine";
@@ -41,6 +42,12 @@ import { getOnChainAnalysis } from "./riskEngine/onChainCheck";
 import { orchestrator } from "../.agents/orchestrator/main-orchestrator";
 import { validateTradeExecution } from "./tradeExecutionValidator";
 import { dipMonitor } from "./dipMonitor";
+import {
+  buildTradeDecisionContext,
+  buildTradeEntrySnapshot,
+  buildTradeExitSnapshot,
+  buildTradeMonitoringPoint,
+} from "./postMortemContext";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -611,6 +618,9 @@ export async function executeAgentTrade(
 
     // 2. Checar score de confluência no momento atual
     const execScore = calculateConfluenceScore(taSnapNow, taConfigExec);
+    tokenAnalysis.taSnapshot = taSnapNow;
+    tokenAnalysis.taScore = execScore.score;
+    tokenAnalysis.taScoreBreakdown = formatScoreLog(execScore);
     logger.info(
       `📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score pós-LLM: ${execScore.score}/100` +
       (execScore.invalidated ? ` ⚠️ INVÁLIDO: ${execScore.invalidReason}` : "")
@@ -790,6 +800,22 @@ export async function executeAgentTrade(
     }
 
     logger.info(`📊 [SIMULATION] Recording simulated trade...`);
+    const decisionContext = buildTradeDecisionContext(decision, agentMode);
+    const entrySnapshot = buildTradeEntrySnapshot({
+      mint: tokenAnalysis.mint,
+      price: decision.entryPrice || tokenAnalysis.price,
+      marketCap: tokenAnalysis.marketCap ?? null,
+      holders: tokenAnalysis.holders,
+      liquiditySol: tokenAnalysis.liquiditySol,
+      bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+      tokenAgeSec: tokenAnalysis.tokenAgeSec,
+      buyCount: tokenAnalysis.buyCount,
+      sellCount: tokenAnalysis.sellCount,
+      taSnapshot: tokenAnalysis.taSnapshot,
+      taScore: tokenAnalysis.taScore,
+      taScoreBreakdown: tokenAnalysis.taScoreBreakdown,
+      volatilityWindows: tokenAnalysis.volWindows,
+    });
 
     await recordSimulatedTrade(
       tokenAnalysis.mint,
@@ -802,7 +828,9 @@ export async function executeAgentTrade(
         stopLoss: decision.stopLoss,
       },
       tokenAnalysis.holders,
-      tokenAnalysis.marketCap
+      tokenAnalysis.marketCap,
+      decisionContext,
+      entrySnapshot
     );
 
     // Schedule monitoring for exit (TP/SL/timeout)
@@ -829,7 +857,17 @@ export async function executeAgentTrade(
  * Closes trade when: TP reached, SL hit, or 1 hour expires
  */
 export function scheduleSimulationExit(
-  tokenAnalysis: { mint: string, symbol: string, price: number },
+  tokenAnalysis: {
+    mint: string;
+    symbol: string;
+    price: number;
+    holders?: number;
+    liquiditySol?: number;
+    bondingCurvePercent?: number;
+    tokenAgeSec?: number;
+    buyCount?: number;
+    sellCount?: number;
+  },
   decision: AgentDecision
 ): void {
   const runtimeCfg = getRuntimeConfig();
@@ -889,6 +927,15 @@ export function scheduleSimulationExit(
         return;
       }
 
+      if (currentPrice > highWaterMark) {
+        highWaterMark = currentPrice;
+      }
+
+      await appendSimulatedTradeMonitoringPoint(
+        mint,
+        buildTradeMonitoringPoint(mint, currentPrice, entryPrice, highWaterMark, currentMarketCap)
+      );
+
       // Update price in DB for dashboard visibility (every ~30s)
       if (elapsedCount % 3 === 0) {
         await updateSimulatedTradePrice(mint, currentPrice);
@@ -934,7 +981,24 @@ export function scheduleSimulationExit(
         logger.info(
           `📈 [SIMULATION] ${symbol} HIT TAKE PROFIT: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
-        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_TP", "Take Profit hit", currentMarketCap);
+        await updateSimulatedTradeExit(
+          mint,
+          currentPrice,
+          "CLOSED_TP",
+          "Take Profit hit",
+          currentMarketCap,
+          buildTradeExitSnapshot({
+            mint,
+            price: currentPrice,
+            marketCap: currentMarketCap,
+            holders: tokenAnalysis.holders,
+            liquiditySol: tokenAnalysis.liquiditySol,
+            bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+            tokenAgeSec: tokenAnalysis.tokenAgeSec,
+            buyCount: tokenAnalysis.buyCount,
+            sellCount: tokenAnalysis.sellCount,
+          })
+        );
         return;
       }
 
@@ -945,7 +1009,24 @@ export function scheduleSimulationExit(
         logger.info(
           `📉 [SIMULATION] ${symbol} HIT ${reason.toUpperCase()}: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
-        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", reason, currentMarketCap);
+        await updateSimulatedTradeExit(
+          mint,
+          currentPrice,
+          "CLOSED_SL",
+          reason,
+          currentMarketCap,
+          buildTradeExitSnapshot({
+            mint,
+            price: currentPrice,
+            marketCap: currentMarketCap,
+            holders: tokenAnalysis.holders,
+            liquiditySol: tokenAnalysis.liquiditySol,
+            bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+            tokenAgeSec: tokenAnalysis.tokenAgeSec,
+            buyCount: tokenAnalysis.buyCount,
+            sellCount: tokenAnalysis.sellCount,
+          })
+        );
         return;
       }
 
@@ -953,7 +1034,24 @@ export function scheduleSimulationExit(
       if (elapsedCount >= maxElapsed) {
         clearInterval(exitCheckInterval);
         logger.info(`⏱️  [SIMULATION] ${symbol} EXPIRED: exit at ${currentPrice.toFixed(8)}`);
-        await updateSimulatedTradeExit(mint, currentPrice, "EXPIRED", "Timeout reached", currentMarketCap);
+        await updateSimulatedTradeExit(
+          mint,
+          currentPrice,
+          "EXPIRED",
+          "Timeout reached",
+          currentMarketCap,
+          buildTradeExitSnapshot({
+            mint,
+            price: currentPrice,
+            marketCap: currentMarketCap,
+            holders: tokenAnalysis.holders,
+            liquiditySol: tokenAnalysis.liquiditySol,
+            bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+            tokenAgeSec: tokenAnalysis.tokenAgeSec,
+            buyCount: tokenAnalysis.buyCount,
+            sellCount: tokenAnalysis.sellCount,
+          })
+        );
         return;
       }
     } catch (error: any) {

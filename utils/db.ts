@@ -2,9 +2,11 @@ import Database, { Database as DatabaseType } from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-// Database path relative to the project root
-const DB_DIR = path.join(__dirname, '../dashboard-api/db');
-const DB_PATH = path.join(DB_DIR, 'pnl_history.db');
+const defaultDbPath = process.env.NODE_ENV === 'test'
+    ? path.join('/tmp', 'pumpfun-pnl_history.test.db')
+    : path.join(__dirname, '../dashboard-api/db', 'pnl_history.db');
+const DB_PATH = process.env.SQLITE_DB_PATH || defaultDbPath;
+const DB_DIR = path.dirname(DB_PATH);
 
 // Ensure directory exists
 if (!fs.existsSync(DB_DIR)) {
@@ -40,6 +42,14 @@ db.exec(`
     token_holders INTEGER,
     market_cap_entry REAL,
     market_cap_exit REAL,
+    decision_context TEXT,
+    entry_snapshot TEXT,
+    exit_snapshot TEXT,
+    monitoring_trace TEXT,
+    postmortem_status TEXT DEFAULT 'PENDING',
+    postmortem_summary TEXT,
+    postmortem_report TEXT,
+    postmortem_analyzed_at INTEGER,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -73,6 +83,54 @@ try {
     if (!hasMcapExit) {
         db.exec("ALTER TABLE simulated_trades ADD COLUMN market_cap_exit REAL");
         console.log("Database migration: Added market_cap_exit to simulated_trades");
+    }
+
+    const hasDecisionContext = tableInfo.some(col => col.name === 'decision_context');
+    if (!hasDecisionContext) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN decision_context TEXT");
+        console.log("Database migration: Added decision_context to simulated_trades");
+    }
+
+    const hasEntrySnapshot = tableInfo.some(col => col.name === 'entry_snapshot');
+    if (!hasEntrySnapshot) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN entry_snapshot TEXT");
+        console.log("Database migration: Added entry_snapshot to simulated_trades");
+    }
+
+    const hasExitSnapshot = tableInfo.some(col => col.name === 'exit_snapshot');
+    if (!hasExitSnapshot) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN exit_snapshot TEXT");
+        console.log("Database migration: Added exit_snapshot to simulated_trades");
+    }
+
+    const hasMonitoringTrace = tableInfo.some(col => col.name === 'monitoring_trace');
+    if (!hasMonitoringTrace) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN monitoring_trace TEXT");
+        console.log("Database migration: Added monitoring_trace to simulated_trades");
+    }
+
+    const hasPostMortemStatus = tableInfo.some(col => col.name === 'postmortem_status');
+    if (!hasPostMortemStatus) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN postmortem_status TEXT DEFAULT 'PENDING'");
+        console.log("Database migration: Added postmortem_status to simulated_trades");
+    }
+
+    const hasPostMortemSummary = tableInfo.some(col => col.name === 'postmortem_summary');
+    if (!hasPostMortemSummary) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN postmortem_summary TEXT");
+        console.log("Database migration: Added postmortem_summary to simulated_trades");
+    }
+
+    const hasPostMortemReport = tableInfo.some(col => col.name === 'postmortem_report');
+    if (!hasPostMortemReport) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN postmortem_report TEXT");
+        console.log("Database migration: Added postmortem_report to simulated_trades");
+    }
+
+    const hasPostMortemAnalyzedAt = tableInfo.some(col => col.name === 'postmortem_analyzed_at');
+    if (!hasPostMortemAnalyzedAt) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN postmortem_analyzed_at INTEGER");
+        console.log("Database migration: Added postmortem_analyzed_at to simulated_trades");
     }
 } catch (e) {
     console.error("Error checking/running database migrations:", e);

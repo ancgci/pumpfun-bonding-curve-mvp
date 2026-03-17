@@ -2,6 +2,8 @@
 
 Este documento descreve o ecossistema de agentes inteligentes que compõem o motor de decisão do bot. O sistema utiliza uma abordagem de **Pipeline de 8 Etapas**, refletida diretamente nos logs do terminal (ex: `[Pipeline 4/8]`).
 
+Além do pipeline online, o bot agora possui um **ciclo offline de feedback** para trades perdedores. Esse fluxo roda fora do caminho crítico, reconstrói o contexto do trade e alimenta o aprendizado contínuo sem impactar a latência operacional.
+
 ## 🔄 Fluxo de Execução (Pipeline 8/8)
 
 Para cada token detectado via gRPC, o bot percorre as seguintes fases:
@@ -57,7 +59,33 @@ graph TD
 
 ---
 
+## Offline Feedback Loop
+
+Após o fechamento de um trade, o sistema executa uma esteira assíncrona de aprendizado:
+
+```mermaid
+graph TD
+    A[Trade Closed] --> B[Snapshot Persistence]
+    B --> C[PostMortemAgent]
+    C --> D[LearnerAgent]
+    D --> E[data/agent/patterns.json]
+    E --> F[Prompt Injection no Pipeline 4/8]
+```
+
+### PostMortemAgent
+*   **Log**: `🧠 [PostMortemAgent]`
+*   **Função**: Analisa trades perdedores com contexto rico de entrada, saída, candles de 1s, TA, organicidade e trilha de monitoramento.
+*   **Saída**: causa raiz provável, melhor janela de entrada, evidências, recomendações e regras candidatas.
+
+### LearnerAgent
+*   **Log**: `🧠 [LearnerAgent]`
+*   **Função**: Consome os post-mortems gerados, sintetiza aprendizados recorrentes e injeta regras no prompt do agente principal.
+*   **Observação**: O `PostMortemAgent` roda primeiro; o `LearnerAgent` usa essa análise enriquecida para produzir regras melhores.
+
+---
+
 ## 🔗 Veja Também
 - [Configuração de Estratégia](SCALPER_STRATEGY_OPTIMIZATION.md)
 - [Proteção contra Manipulação](ORGANICITY_PROTECTION.md)
 - [Documentação Técnica do AI Agent](AI_AGENT.md)
+- [Implementação do Loss Post-Mortem Agent](LOSS_POSTMORTEM_AGENT.md)

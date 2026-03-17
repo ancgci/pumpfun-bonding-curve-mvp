@@ -109,6 +109,9 @@ export function StatsOverview() {
                   >
                     <XAxis
                       dataKey="timestamp"
+                      type="number"
+                      domain={["dataMin", "dataMax"]}
+                      scale="time"
                       stroke="#ffffff40"
                       fontSize={12}
                       tickCount={6}
@@ -118,12 +121,18 @@ export function StatsOverview() {
                       tickLine={false}
                       axisLine={false}
                       tickFormatter={(val) => {
-                        if (typeof val === "number")
-                          return new Date(val).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          });
-                        return val;
+                        if (typeof val !== "number") return val;
+                        const d = new Date(val);
+                        const span = filteredChartData.length > 1 ? filteredChartData[filteredChartData.length - 1].timestamp - filteredChartData[0].timestamp : 0;
+                        const oneDay = 24 * 60 * 60 * 1000;
+                        const threeDays = 3 * oneDay;
+                        if (span <= oneDay || timeFilter === "1d") {
+                          return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                        } else if (span <= threeDays || timeFilter === "7d") {
+                          return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                        } else {
+                          return d.toLocaleDateString([], { month: "short", day: "numeric" });
+                        }
                       }}
                     />
                     <YAxis

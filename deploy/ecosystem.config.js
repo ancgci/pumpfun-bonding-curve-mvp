@@ -23,6 +23,9 @@ module.exports = {
             node_args: '--max-old-space-size=8192',
             env: {
                 NODE_ENV: 'production',
+                POSTMORTEM_AGENT_ENABLED: process.env.POSTMORTEM_AGENT_ENABLED || 'true',
+                POSTMORTEM_LLM_ENABLED: process.env.POSTMORTEM_LLM_ENABLED || 'false',
+                POSTMORTEM_BATCH_SIZE: process.env.POSTMORTEM_BATCH_SIZE || '5',
             },
             // Restart policy
             max_restarts: 10,
