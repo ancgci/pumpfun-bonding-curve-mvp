@@ -72,10 +72,10 @@ Tokens novos tipicamente têm:
 ### 1. Correção Imediata (Fase 1)
 ```bash
 # Copiar configuração correta para VPS
-scp ta-config.vps.bkp.json dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/data/ta-config.json
+scp ta-config.vps.bkp.json <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/data/ta-config.json
 
 # Reiniciar bot
-ssh dev@YOUR_VPS_IP "pm2 restart bot"
+ssh <VPS_USER>@<VPS_IP> "pm2 restart bot"
 ```
 
 ### 2. Prevenção de Recorrência (Fase 2)
@@ -272,13 +272,13 @@ Se fallback fosse ativo no incidente:
 
 ```bash
 # 1. Listar backups disponíveis
-ssh dev@YOUR_VPS_IP "cd /opt/agents/pumpfun-bot && ls -la data_backup_*"
+ssh <VPS_USER>@<VPS_IP> "cd /opt/agents/pumpfun-bot && ls -la data_backup_*"
 
 # 2. Parar bot
-ssh dev@YOUR_VPS_IP "pm2 stop bot"
+ssh <VPS_USER>@<VPS_IP> "pm2 stop bot"
 
 # 3. Restaurar backup
-ssh dev@YOUR_VPS_IP << 'EOF'
+ssh <VPS_USER>@<VPS_IP> << 'EOF'
   cd /opt/agents/pumpfun-bot
   rm -rf data
   cp -r data_backup_20260312_120000 data
@@ -286,7 +286,7 @@ ssh dev@YOUR_VPS_IP << 'EOF'
 EOF
 
 # 4. Validar
-ssh dev@YOUR_VPS_IP "pm2 logs bot --lines 50"
+ssh <VPS_USER>@<VPS_IP> "pm2 logs bot --lines 50"
 ```
 
 ---
@@ -296,7 +296,7 @@ ssh dev@YOUR_VPS_IP "pm2 logs bot --lines 50"
 | Função | Responsável | Contato |
 |--------|-------------|---------|
 | Dev Lead | @srant | Telegram |
-| Ops | @dev | SSH: dev@YOUR_VPS_IP |
+| Ops | @dev | SSH: <VPS_USER>@<VPS_IP> |
 | Backup | Script automático | `./deploy/backup-vps-data.sh` |
 
 ---

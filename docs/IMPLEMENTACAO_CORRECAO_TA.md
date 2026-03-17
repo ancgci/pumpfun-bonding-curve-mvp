@@ -9,16 +9,16 @@ Execute estes comandos **imediatamente** para restaurar o bot:
 cd /home/srant/projects/pumpfun-bonding-curve-Test
 
 # Copiar ta-config.json atualizado para VPS
-scp data/ta-config.json dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/data/ta-config.json
+scp data/ta-config.json <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/data/ta-config.json
 
 # Copiar patterns.json com thresholds de confiança
-scp data/agent/patterns.json dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/data/agent/patterns.json
+scp data/agent/patterns.json <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/data/agent/patterns.json
 ```
 
 ### Passo 2: Validar na VPS
 ```bash
 # Acessar VPS
-ssh dev@YOUR_VPS_IP
+ssh <VPS_USER>@<VPS_IP>
 
 # Verificar arquivos
 cd /opt/agents/pumpfun-bot
@@ -36,11 +36,11 @@ Aguarde 5-10 minutos e verifique:
 
 ```bash
 # No seu terminal local, acesse dashboard
-http://YOUR_VPS_IP
+http://<VPS_IP>
 
 # Ou via API
-curl http://YOUR_VPS_IP:3001/api/ta/config
-curl http://YOUR_VPS_IP:3001/api/blocks/last-checked
+curl http://<VPS_IP>:3001/api/ta/config
+curl http://<VPS_IP>:3001/api/blocks/last-checked
 ```
 
 **Sinais de sucesso:**
@@ -85,8 +85,8 @@ cd /home/srant/projects/pumpfun-bonding-curve-Test
 ./deploy/deploy.sh
 
 # 3. Validar
-ssh dev@YOUR_VPS_IP "pm2 status"
-ssh dev@YOUR_VPS_IP "ls -la data/*.json"
+ssh <VPS_USER>@<VPS_IP> "pm2 status"
+ssh <VPS_USER>@<VPS_IP> "ls -la data/*.json"
 ```
 
 ---
@@ -125,7 +125,7 @@ ssh dev@YOUR_VPS_IP "ls -la data/*.json"
 ### Aplicar Mudança de Modo
 ```bash
 # Na VPS
-ssh dev@YOUR_VPS_IP << 'EOF'
+ssh <VPS_USER>@<VPS_IP> << 'EOF'
   cd /opt/agents/pumpfun-bot
   # Editar ta-config.json e mudar "mode"
   nano data/ta-config.json
@@ -139,7 +139,7 @@ EOF
 ## 📊 Monitoramento Pós-Implementação
 
 ### Dashboard
-Acesse: `http://YOUR_VPS_IP`
+Acesse: `http://<VPS_IP>`
 
 **Métricas para observar:**
 - Trades executados (deve ser > 0)
@@ -150,28 +150,28 @@ Acesse: `http://YOUR_VPS_IP`
 ### API Endpoints
 ```bash
 # Configuração atual
-curl http://YOUR_VPS_IP:3001/api/ta/config
+curl http://<VPS_IP>:3001/api/ta/config
 
 # Estado do fallback
-curl http://YOUR_VPS_IP:3001/api/ta/fallback-state
+curl http://<VPS_IP>:3001/api/ta/fallback-state
 
 # Últimos bloqueios
-curl http://YOUR_VPS_IP:3001/api/blocks/last-checked
+curl http://<VPS_IP>:3001/api/blocks/last-checked
 
 # Agent stats
-curl http://YOUR_VPS_IP:3001/api/agent/stats
+curl http://<VPS_IP>:3001/api/agent/stats
 ```
 
 ### Logs PM2
 ```bash
 # Logs em tempo real
-ssh dev@YOUR_VPS_IP "pm2 logs bot"
+ssh <VPS_USER>@<VPS_IP> "pm2 logs bot"
 
 # Filtrar por TA
-ssh dev@YOUR_VPS_IP "pm2 logs bot | grep 'TA V2'"
+ssh <VPS_USER>@<VPS_IP> "pm2 logs bot | grep 'TA V2'"
 
 # Filtrar por bloqueios
-ssh dev@YOUR_VPS_IP "pm2 logs bot | grep 'BLOCK_'"
+ssh <VPS_USER>@<VPS_IP> "pm2 logs bot | grep 'BLOCK_'"
 ```
 
 ---
@@ -182,7 +182,7 @@ ssh dev@YOUR_VPS_IP "pm2 logs bot | grep 'BLOCK_'"
 
 **Verificar se ta-config.json foi carregado:**
 ```bash
-ssh dev@YOUR_VPS_IP << 'EOF'
+ssh <VPS_USER>@<VPS_IP> << 'EOF'
   cd /opt/agents/pumpfun-bot
   pm2 logs bot | grep "ta-config"
   cat data/ta-config.json | head -5
@@ -191,14 +191,14 @@ EOF
 
 **Verificar filtros ativos:**
 ```bash
-ssh dev@YOUR_VPS_IP << 'EOF'
+ssh <VPS_USER>@<VPS_IP> << 'EOF'
   pm2 logs bot | grep "BLOCK_" | tail -20
 EOF
 ```
 
 **Forçar modo AGGRESSIVE temporariamente:**
 ```bash
-ssh dev@YOUR_VPS_IP << 'EOF'
+ssh <VPS_USER>@<VPS_IP> << 'EOF'
   cd /opt/agents/pumpfun-bot
   cat > data/ta-config.json << 'TACONFIG'
 {
@@ -217,12 +217,12 @@ EOF
 
 **Verificar estado:**
 ```bash
-curl http://YOUR_VPS_IP:3001/api/ta/fallback-state
+curl http://<VPS_IP>:3001/api/ta/fallback-state
 ```
 
 **Resetar estado:**
 ```bash
-ssh dev@YOUR_VPS_IP << 'EOF'
+ssh <VPS_USER>@<VPS_IP> << 'EOF'
   cd /opt/agents/pumpfun-bot/data
   rm -f .ta-fallback-state.json
   pm2 restart bot

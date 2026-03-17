@@ -24,12 +24,11 @@ export function ActiveProtocols() {
           return (
             <div
               key={key}
-              onClick={() => toggleProtocol(key)}
-              className={`flex items-center gap-3 px-4 py-2 rounded-lg border transition-all cursor-pointer select-none
+              className={`flex items-center gap-3 px-4 py-2 rounded-lg border transition-all select-none
                 ${isActive
                   ? "glass border-primary/40 bg-primary/5 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
-                  : "bg-black/20 border-white/5 opacity-40 grayscale hover:opacity-60"
-                } hover:scale-[1.02] active:scale-95`}
+                  : "bg-black/20 border-white/5 opacity-70"
+                }`}
             >
               <span className="text-lg">{meta.icon}</span>
               <div className="flex flex-col">
@@ -37,8 +36,17 @@ export function ActiveProtocols() {
                 <span className="text-sm font-bold leading-tight mt-0.5">{meta.name}</span>
               </div>
 
-              {/* Status Indicator */}
-              <div className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-gray-600"}`} />
+              <div className="flex-1" />
+
+              {/* Switch */}
+              <button
+                onClick={() => toggleProtocol(key)}
+                className={`w-12 h-6 rounded-full transition-colors relative ${isActive ? "bg-green-500" : "bg-gray-700"}`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${isActive ? "left-7" : "left-1"}`}
+                />
+              </button>
             </div>
           );
         })}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 
@@ -7,6 +7,9 @@ export function TradingParameters() {
   const [localConfig, setLocalConfig] = useState<any>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const stopLossEnabled = localConfig.stopLossEnabled !== false;
+  const lastStopLossPctRef = useRef<number>(30);
 
   // Sync local state when the master config arrives
   useEffect(() => {
@@ -17,6 +20,54 @@ export function TradingParameters() {
 
   const handleChange = (key: string, value: any) => {
     setLocalConfig((prev: any) => ({ ...prev, [key]: value }));
+  };
+
+  const handleTogglePersist = async (key: string, next: boolean) => {
+    setSavingKey(key);
+    setLocalConfig((prev: any) => ({ ...prev, [key]: next }));
+    try {
+      await updateConfig({ [key]: next });
+      setSaveMessage("");
+    } catch (err: any) {
+      setSaveMessage(`❌ ${err.message || "Erro ao salvar"}`);
+      // rollback local toggle on failure
+      setLocalConfig((prev: any) => ({ ...prev, [key]: !next }));
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const handleStopLossToggle = async () => {
+    const nextEnabled = !stopLossEnabled;
+    const currentPct = Number(localConfig.stopLossPercent ?? 30);
+    if (Number.isFinite(currentPct) && currentPct > 0 && currentPct < 100) {
+      lastStopLossPctRef.current = currentPct;
+    }
+
+    const updates: any = { stopLossEnabled: nextEnabled };
+    if (!nextEnabled) {
+      // Persist a clear "disabled" value for backwards-compat engines.
+      updates.stopLossPercent = 100;
+    } else {
+      // If re-enabling while at a "disabled" value, restore the last sane %.
+      const pctNow = Number(localConfig.stopLossPercent ?? 100);
+      if (!Number.isFinite(pctNow) || pctNow >= 100) {
+        updates.stopLossPercent = lastStopLossPctRef.current || 30;
+      }
+    }
+
+    setSavingKey("stopLossEnabled");
+    setLocalConfig((prev: any) => ({ ...prev, ...updates }));
+    try {
+      await updateConfig(updates);
+      setSaveMessage("");
+    } catch (err: any) {
+      setSaveMessage(`❌ ${err.message || "Erro ao salvar"}`);
+      // Roll back only the enabled flag; percent stays as-is.
+      setLocalConfig((prev: any) => ({ ...prev, stopLossEnabled }));
+    } finally {
+      setSavingKey(null);
+    }
   };
 
   const handleSave = async () => {
@@ -116,32 +167,47 @@ export function TradingParameters() {
         {/* Stop Loss */}
         <Card className="glass">
           <CardContent className="p-4 space-y-2">
-            <label className="text-sm font-semibold text-muted-foreground block">
-              🛑 Stop Loss
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-muted-foreground block">
+                🛑 Stop Loss
+              </label>
+              <button
+                disabled={savingKey === "stopLossEnabled"}
+                onClick={() =>
+                  handleStopLossToggle()
+                }
+                className={`w-10 h-5 rounded-full transition-colors relative ${stopLossEnabled ? "bg-green-500" : "bg-gray-700"} ${savingKey === "stopLossEnabled" ? "opacity-60 cursor-not-allowed" : ""}`}
+              >
+                <div
+                  className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-all ${stopLossEnabled ? "left-6" : "left-1"}`}
+                />
+              </button>
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="range"
                 min="5"
-                max="80"
+                max="100"
                 step="1"
                 value={localConfig.stopLossPercent || 30}
+                disabled={!stopLossEnabled}
                 onChange={(e) =>
                   handleChange("stopLossPercent", parseFloat(e.target.value))
                 }
-                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
+                className={`w-full h-1 rounded-lg appearance-none cursor-pointer ${stopLossEnabled ? "bg-white/20" : "bg-gray-800 cursor-not-allowed"}`}
               />
               <div className="flex bg-black/40 rounded px-2 py-1 items-center border border-white/10">
                 <input
                   type="number"
                   min="5"
-                  max="80"
+                  max="100"
                   step="1"
                   value={localConfig.stopLossPercent || 30}
+                  disabled={!stopLossEnabled}
                   onChange={(e) =>
                     handleChange("stopLossPercent", parseFloat(e.target.value))
                   }
-                  className="w-16 bg-transparent text-right font-mono text-sm outline-none"
+                  className="w-16 bg-transparent text-right font-mono text-sm outline-none disabled:text-muted-foreground"
                 />
                 <span className="text-xs text-muted-foreground ml-1">%</span>
               </div>
@@ -265,13 +331,14 @@ export function TradingParameters() {
                 📈 Auto Sell TP
               </span>
               <button
+                disabled={savingKey === "autoSellTakeProfit"}
                 onClick={() =>
-                  handleChange(
+                  handleTogglePersist(
                     "autoSellTakeProfit",
-                    !localConfig.autoSellTakeProfit,
+                    !(localConfig.autoSellTakeProfit === true),
                   )
                 }
-                className={`w-10 h-5 rounded-full transition-colors relative ${localConfig.autoSellTakeProfit ? "bg-green-500" : "bg-gray-700"}`}
+                className={`w-10 h-5 rounded-full transition-colors relative ${localConfig.autoSellTakeProfit ? "bg-green-500" : "bg-gray-700"} ${savingKey === "autoSellTakeProfit" ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <div
                   className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-all ${localConfig.autoSellTakeProfit ? "left-6" : "left-1"}`}
@@ -283,13 +350,14 @@ export function TradingParameters() {
                 📉 Auto Sell SL
               </span>
               <button
+                disabled={savingKey === "autoSellStopLoss"}
                 onClick={() =>
-                  handleChange(
+                  handleTogglePersist(
                     "autoSellStopLoss",
-                    !localConfig.autoSellStopLoss,
+                    !(localConfig.autoSellStopLoss === true),
                   )
                 }
-                className={`w-10 h-5 rounded-full transition-colors relative ${localConfig.autoSellStopLoss ? "bg-green-500" : "bg-gray-700"}`}
+                className={`w-10 h-5 rounded-full transition-colors relative ${localConfig.autoSellStopLoss ? "bg-green-500" : "bg-gray-700"} ${savingKey === "autoSellStopLoss" ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <div
                   className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-all ${localConfig.autoSellStopLoss ? "left-6" : "left-1"}`}

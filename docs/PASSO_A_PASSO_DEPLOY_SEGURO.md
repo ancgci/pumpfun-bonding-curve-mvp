@@ -19,7 +19,7 @@ cat data/ta-config.json
 ```
 Se quiser comparar com o da VPS:
 ```bash
-scp dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/data/ta-config.json ta-config.vps.bkp.json
+scp <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/data/ta-config.json ta-config.vps.bkp.json
 diff data/ta-config.json ta-config.vps.bkp.json
 ```
 

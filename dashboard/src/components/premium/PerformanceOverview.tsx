@@ -34,9 +34,9 @@ export function PerformanceOverview() {
     const cutoff = limit ? Date.now() - limit : 0;
     return plChartData
       .filter((p) => !limit || p.timestamp >= cutoff)
+      .sort((a, b) => a.timestamp - b.timestamp)
       .map((p) => ({
-        time: new Date(p.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        full: new Date(p.timestamp).toLocaleString(),
+        timestamp: p.timestamp,
         pnl: p.pnl,
       }));
   }, [plChartData, period]);
@@ -129,10 +129,24 @@ export function PerformanceOverview() {
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" vertical={false} />
                   <XAxis
-                    dataKey="time"
+                    dataKey="timestamp"
+                    type="number"
+                    domain={["dataMin", "dataMax"]}
+                    scale="time"
+                    tickCount={6}
+                    interval="preserveStartEnd"
+                    minTickGap={28}
+                    tickMargin={10}
                     tickLine={false}
                     axisLine={false}
                     tick={{ fill: "rgba(255,255,255,0.5)", fontSize: 10 }}
+                    tickFormatter={(val) => {
+                      const d = new Date(val);
+                      const isShort = period === "1d";
+                      return isShort
+                        ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                        : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                    }}
                   />
                   <YAxis
                     tickLine={false}
@@ -146,10 +160,7 @@ export function PerformanceOverview() {
                       border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: 12,
                     }}
-                    labelFormatter={(label: any, payload: any) => {
-                      const idx = Array.isArray(payload) && payload.length > 0 ? payload[0].payload?.full : null;
-                      return typeof idx === "string" ? idx : label;
-                    }}
+                    labelFormatter={(label: any) => new Date(label).toLocaleString()}
                     formatter={(value: any) => [`${Number(value).toFixed(4)} SOL`, "PnL"]}
                   />
                   <Line type="monotone" dataKey="pnl" stroke="#a855f7" strokeWidth={3} dot={false} />

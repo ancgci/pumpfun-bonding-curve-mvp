@@ -828,6 +828,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         holders: riskAnalysis?.metrics?.totalHolders ?? 0,
         volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
         liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+        marketCap: tokenMetadata?.marketCap ?? null,
         top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
         protocol: "pumpfun",
         timeframe: "1s"
@@ -2352,4 +2353,3 @@ function decodeAnoncoinTxn(tx: VersionedTransactionResponse) {
   bnLayoutFormatter(result);
   return result;
 }
-

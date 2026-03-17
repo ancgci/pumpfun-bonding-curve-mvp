@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import axios from "axios";
 import Bottleneck from "bottleneck";
-import { CONFIG } from "./config";
+import { CONFIG, getRuntimeConfig } from "./config";
 import { getActiveSkillsPrompt } from "./skillRegistry";
 import {
   recordSimulatedTrade,
@@ -248,6 +248,7 @@ interface TokenAnalysis {
   holders: number;
   volumeH1: number;
   liquiditySol: number;
+  marketCap?: number;
   riskScore: number;
   honeypotRisk: boolean;
   volWindows?: { windowSec: number; pctChange: number | null; stdDev: number | null }[];
@@ -759,7 +760,7 @@ export async function executeAgentTrade(
   // DYNAMIC POSITION SIZING based on confidence
   // Higher confidence = larger position, lower = smaller
   // ══════════════════════════════════════════════════
-  const baseBuyAmount = CONFIG.BUY_AMOUNT_SOL || 0.05;
+  const baseBuyAmount = getRuntimeConfig().BUY_AMOUNT_SOL || CONFIG.BUY_AMOUNT_SOL || 0.05;
   let positionMultiplier = 1.0;
   if (decision.confidence >= 90) {
     positionMultiplier = 1.0;   // 100% of BUY_AMOUNT
@@ -800,7 +801,8 @@ export async function executeAgentTrade(
         takeProfit: decision.takeProfit,
         stopLoss: decision.stopLoss,
       },
-      tokenAnalysis.holders
+      tokenAnalysis.holders,
+      tokenAnalysis.marketCap
     );
 
     // Schedule monitoring for exit (TP/SL/timeout)
@@ -830,6 +832,8 @@ export function scheduleSimulationExit(
   tokenAnalysis: { mint: string, symbol: string, price: number },
   decision: AgentDecision
 ): void {
+  const runtimeCfg = getRuntimeConfig();
+
   const mint = tokenAnalysis.mint;
   const symbol = tokenAnalysis.symbol;
   const entryPrice = decision.entryPrice || tokenAnalysis.price;
@@ -839,12 +843,16 @@ export function scheduleSimulationExit(
   const tpRaw = Math.max(decision.takeProfit || 0, entryPrice * (1 + minTpPercent / 100));
 
   // If Stop Loss is disabled, set slRaw to 0 (ignored)
-  const isSlDisabled = CONFIG.AUTO_SELL_STOP_LOSS === false || CONFIG.STOP_LOSS_PERCENT >= 100;
+  const slPercentCfg = runtimeCfg.STOP_LOSS_PERCENT ?? CONFIG.STOP_LOSS_PERCENT;
+  const autoSlEnabled = runtimeCfg.AUTO_SELL_STOP_LOSS ?? CONFIG.AUTO_SELL_STOP_LOSS;
+  const stopLossEnabled = (runtimeCfg as any).STOP_LOSS_ENABLED ?? true;
+  const isSlDisabled = stopLossEnabled === false || autoSlEnabled === false || slPercentCfg >= 100;
   let slRaw = isSlDisabled ? 0 : Math.min(decision.stopLoss || Infinity, entryPrice * 0.99);
 
   // Cross-reference with global config for safety
-  const configTp = entryPrice * (1 + (CONFIG.TAKE_PROFIT_PERCENT || 30) / 100);
-  const configSl = isSlDisabled ? 0 : entryPrice * (1 - (CONFIG.STOP_LOSS_PERCENT || 100) / 100);
+  const tpPercentCfg = runtimeCfg.TAKE_PROFIT_PERCENT ?? CONFIG.TAKE_PROFIT_PERCENT ?? 30;
+  const configTp = entryPrice * (1 + tpPercentCfg / 100);
+  const configSl = isSlDisabled ? 0 : entryPrice * (1 - (slPercentCfg || 100) / 100);
 
   // Decidir valores finais: USAR O GLOBAL CONFIG COMO PISO (Minimum Floor)
   // O bot só usa o TP da IA se ele for MAIOR que o alvo global.
@@ -874,9 +882,9 @@ export function scheduleSimulationExit(
     elapsedCount++;
 
     try {
-      const currentPrice = await getCurrentTokenPrice(mint);
+      const { price: currentPrice, marketCap: currentMarketCap } = await getCurrentTokenPrice(mint);
 
-      if (!currentPrice) {
+      if (currentPrice === null) {
         logger.debug(`⚠️  Could not get price for ${symbol}`);
         return;
       }
@@ -915,7 +923,7 @@ export function scheduleSimulationExit(
         logger.warn(
           `🚨 [SIMULATION] ${symbol} WHALE DUMP DETECTED: -${(dropFromPeak * 100).toFixed(1)}% from peak! Emergency exit at ${currentPrice.toFixed(8)}`
         );
-        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", "Whale dump emergency exit");
+        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", "Whale dump emergency exit", currentMarketCap);
         return;
       }
       */
@@ -926,7 +934,7 @@ export function scheduleSimulationExit(
         logger.info(
           `📈 [SIMULATION] ${symbol} HIT TAKE PROFIT: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
-        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_TP", "Take Profit hit");
+        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_TP", "Take Profit hit", currentMarketCap);
         return;
       }
 
@@ -937,7 +945,7 @@ export function scheduleSimulationExit(
         logger.info(
           `📉 [SIMULATION] ${symbol} HIT ${reason.toUpperCase()}: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
-        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", reason);
+        await updateSimulatedTradeExit(mint, currentPrice, "CLOSED_SL", reason, currentMarketCap);
         return;
       }
 
@@ -945,7 +953,7 @@ export function scheduleSimulationExit(
       if (elapsedCount >= maxElapsed) {
         clearInterval(exitCheckInterval);
         logger.info(`⏱️  [SIMULATION] ${symbol} EXPIRED: exit at ${currentPrice.toFixed(8)}`);
-        await updateSimulatedTradeExit(mint, currentPrice, "EXPIRED", "Timeout reached");
+        await updateSimulatedTradeExit(mint, currentPrice, "EXPIRED", "Timeout reached", currentMarketCap);
         return;
       }
     } catch (error: any) {
@@ -986,10 +994,10 @@ export async function resumeSimulationMonitoring(): Promise<void> {
 }
 
 /**
- * Get current token price from DexScreener
+ * Get current token price + market cap from DexScreener
  * Used for real-time simulation exit monitoring
  */
-export async function getCurrentTokenPrice(mint: string): Promise<number | null> {
+export async function getCurrentTokenPrice(mint: string): Promise<{ price: number | null; marketCap: number | null }> {
   try {
     const response = await fetch(
       `https://api.dexscreener.com/latest/dex/tokens/${mint}`
@@ -1004,14 +1012,16 @@ export async function getCurrentTokenPrice(mint: string): Promise<number | null>
     if (data.pairs && data.pairs.length > 0) {
       // Get price from first DEX (usually highest liquidity)
       // Extract priceNative (SOL) instead of priceUsd for accurate PnL vs entryPrice
-      const price = parseFloat(data.pairs[0].priceNative);
-      return isNaN(price) ? null : price;
+      const pair = data.pairs[0];
+      const price = parseFloat(pair.priceNative);
+      const marketCap = pair.marketCap ? Number(pair.marketCap) : null;
+      return { price: isNaN(price) ? null : price, marketCap };
     }
 
-    return null;
+    return { price: null, marketCap: null };
   } catch (error: any) {
     logger.debug(`Error fetching price for ${mint}: ${error.message}`);
-    return null;
+    return { price: null, marketCap: null };
   }
 }
 

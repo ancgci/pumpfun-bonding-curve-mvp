@@ -111,6 +111,10 @@ export function StatsOverview() {
                       dataKey="timestamp"
                       stroke="#ffffff40"
                       fontSize={12}
+                      tickCount={6}
+                      interval="preserveStartEnd"
+                      minTickGap={24}
+                      tickMargin={10}
                       tickLine={false}
                       axisLine={false}
                       tickFormatter={(val) => {

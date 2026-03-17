@@ -223,9 +223,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const logInterval = setInterval(fetchLogs, 2000);
+    const logInterval = setInterval(fetchLogs, 5000); // 5s log poll (was 2s)
     refreshData();
-    const pollInterval = setInterval(refreshData, 10000);
+    const pollInterval = setInterval(refreshData, 20000); // 20s data poll (was 10s)
 
     return () => {
       clearInterval(logInterval);
@@ -235,16 +235,33 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const toggleAgent = async () => {
+    // Optimistic: flip locally
+    setAgentStatus((prev: any) => ({
+      ...(prev || {}),
+      enabled: !(prev?.enabled === true),
+      updatedAt: new Date().toISOString(),
+    }));
+    setStats((prev: any) => ({
+      ...(prev || {}),
+      isAgentActive: !(prev?.isAgentActive === true),
+    }));
     await apiFetch(`${API_BASE}/agent/toggle`, { method: "POST" });
     await refreshData();
   };
 
   const toggleMode = async () => {
+    setAgentStatus((prev: any) => ({
+      ...(prev || {}),
+      mode: prev?.mode === "LIVE" ? "SIMULATION" : "LIVE",
+      updatedAt: new Date().toISOString(),
+    }));
     await apiFetch(`${API_BASE}/agent/mode`, { method: "POST" });
     await refreshData();
   };
 
   const updateConfig = async (updates: any) => {
+    // Optimistic update for faster UI feedback
+    setTradingConfig((prev: any) => ({ ...(prev || {}), ...updates, updatedAt: new Date().toISOString() }));
     await apiFetch(`${API_BASE}/trading-config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

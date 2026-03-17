@@ -28,21 +28,23 @@ db.exec(`
         token_mint TEXT NOT NULL,
         token_symbol TEXT NOT NULL,
         entry_time INTEGER NOT NULL,
-        entry_price REAL NOT NULL,
-        entry_amount REAL DEFAULT 0.01,
-        exit_time INTEGER,
-        exit_price REAL,
-        pnl_sol REAL DEFAULT 0,
-        pnl_percent REAL DEFAULT 0,
-        confidence REAL NOT NULL,
-        status TEXT NOT NULL,
-        reason TEXT,
-        token_holders INTEGER,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
+    entry_price REAL NOT NULL,
+    entry_amount REAL DEFAULT 0.01,
+    exit_time INTEGER,
+    exit_price REAL,
+    pnl_sol REAL DEFAULT 0,
+    pnl_percent REAL DEFAULT 0,
+    confidence REAL NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    token_holders INTEGER,
+    market_cap_entry REAL,
+    market_cap_exit REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 
-    CREATE INDEX IF NOT EXISTS idx_sim_trades_mint ON simulated_trades(token_mint);
-    CREATE INDEX IF NOT EXISTS idx_sim_trades_status ON simulated_trades(status);
+CREATE INDEX IF NOT EXISTS idx_sim_trades_mint ON simulated_trades(token_mint);
+CREATE INDEX IF NOT EXISTS idx_sim_trades_status ON simulated_trades(status);
 `);
 
 // Add entry_amount column if it doesn't exist (migration for existing DBs)
@@ -59,6 +61,18 @@ try {
     if (!hasTokenHolders) {
         db.exec("ALTER TABLE simulated_trades ADD COLUMN token_holders INTEGER");
         console.log("Database migration: Added token_holders to simulated_trades");
+    }
+
+    const hasMcapEntry = tableInfo.some(col => col.name === 'market_cap_entry');
+    if (!hasMcapEntry) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN market_cap_entry REAL");
+        console.log("Database migration: Added market_cap_entry to simulated_trades");
+    }
+
+    const hasMcapExit = tableInfo.some(col => col.name === 'market_cap_exit');
+    if (!hasMcapExit) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN market_cap_exit REAL");
+        console.log("Database migration: Added market_cap_exit to simulated_trades");
     }
 } catch (e) {
     console.error("Error checking/running database migrations:", e);

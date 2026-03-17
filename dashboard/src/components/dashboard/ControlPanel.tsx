@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { ShieldAlert, RefreshCcw, Zap, Bot, Target } from "lucide-react";
+import { ShieldAlert, RefreshCcw, Zap, Bot, Target, Power } from "lucide-react";
 
 export function ControlPanel() {
   const {
@@ -14,10 +15,38 @@ export function ControlPanel() {
     resetCircuitBreaker,
   } = useDashboardData();
 
-  const isSim = agentStatus?.mode === "SIMULATION";
-  const isAgentOn = agentStatus?.enabled === true;
-  const autoBuy = tradingConfig?.autoBuyEnabled ?? false;
-  const singleTrade = tradingConfig?.singleTradeMode ?? true;
+  const [optimistic, setOptimistic] = useState<{
+    agent?: boolean;
+    mode?: "SIMULATION" | "LIVE";
+    autoBuy?: boolean;
+    singleTrade?: boolean;
+  }>({});
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+
+  const isSim = (optimistic.mode ?? agentStatus?.mode) === "SIMULATION";
+  const isAgentOn = optimistic.agent ?? (agentStatus?.enabled === true);
+  const autoBuy = optimistic.autoBuy ?? (tradingConfig?.autoBuyEnabled ?? false);
+  const singleTrade = optimistic.singleTrade ?? (tradingConfig?.singleTradeMode ?? true);
+
+  const runOptimistic = async (
+    key: keyof typeof optimistic,
+    nextValue: any,
+    action: () => Promise<void>,
+  ) => {
+    setOptimistic((prev) => ({ ...prev, [key]: nextValue }));
+    setPending((p) => ({ ...p, [key]: true }));
+    try {
+      await action();
+    } finally {
+      setPending((p) => ({ ...p, [key]: false }));
+      setTimeout(() =>
+        setOptimistic((prev) => {
+          const copy = { ...prev };
+          delete (copy as any)[key];
+          return copy;
+        }), 300);
+    }
+  };
 
   return (
     <section className="space-y-4">
@@ -38,7 +67,38 @@ export function ControlPanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* Bot Power */}
+        <Card className="glass relative overflow-hidden group">
+          <CardContent className="p-5 flex flex-col justify-between h-full space-y-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Power className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-semibold text-lg">Bot Power</h3>
+              </div>
+              <p className="text-xs text-muted-foreground leading-tight">
+                Start or stop the trading bot
+              </p>
+            </div>
+            <div className="flex items-center justify-between mt-auto">
+              <span
+                className={`font-mono text-sm font-bold ${isAgentOn ? "text-green-400" : "text-muted-foreground"}`}
+              >
+                {isAgentOn ? "RUNNING" : "STOPPED"}
+              </span>
+              <button
+                disabled={pending.agent}
+                onClick={() => runOptimistic("agent", !isAgentOn, toggleAgent)}
+                className={`w-12 h-6 rounded-full transition-colors relative ${isAgentOn ? "bg-green-500" : "bg-gray-700"} ${pending.agent ? "opacity-60 cursor-not-allowed" : ""}`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${isAgentOn ? "left-7" : "left-1"}`}
+                />
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Agent Toggle */}
         <Card className="glass relative overflow-hidden group">
           <CardContent className="p-5 flex flex-col justify-between h-full space-y-4">
@@ -48,7 +108,7 @@ export function ControlPanel() {
                 <h3 className="font-semibold text-lg">AI Agent</h3>
               </div>
               <p className="text-xs text-muted-foreground leading-tight">
-                Enable or disable the AI Trading Agent
+                Status indicator for the AI Trading Agent
               </p>
             </div>
             <div className="flex items-center justify-between mt-auto">
@@ -57,14 +117,9 @@ export function ControlPanel() {
               >
                 {isAgentOn ? "ON" : "OFF"}
               </span>
-              <button
-                onClick={toggleAgent}
-                className={`w-12 h-6 rounded-full transition-colors relative ${isAgentOn ? "bg-green-500" : "bg-gray-700"}`}
-              >
-                <div
-                  className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${isAgentOn ? "left-7" : "left-1"}`}
-                />
-              </button>
+              <span className="text-[11px] uppercase text-muted-foreground">
+                Controlled by Bot Power
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -90,8 +145,9 @@ export function ControlPanel() {
                 {isSim ? "SIMULATION" : "LIVE"}
               </span>
               <button
-                onClick={toggleMode}
-                className={`w-12 h-6 rounded-full transition-colors relative ${isSim ? "bg-purple-500" : "bg-red-500"}`}
+                disabled={pending.mode}
+                onClick={() => runOptimistic("mode", isSim ? "LIVE" : "SIMULATION", toggleMode)}
+                className={`w-12 h-6 rounded-full transition-colors relative ${isSim ? "bg-purple-500" : "bg-red-500"} ${pending.mode ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <div
                   className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${isSim ? "left-1" : "left-7"}`}
@@ -120,8 +176,15 @@ export function ControlPanel() {
                 {autoBuy ? "ON" : "OFF"}
               </span>
               <button
-                onClick={() => updateConfig({ autoBuyEnabled: !autoBuy })}
-                className={`w-12 h-6 rounded-full transition-colors relative ${autoBuy ? "bg-green-500" : "bg-gray-700"}`}
+                disabled={pending.autoBuy}
+                onClick={() =>
+                  runOptimistic(
+                    "autoBuy",
+                    !autoBuy,
+                    () => updateConfig({ autoBuyEnabled: !autoBuy }),
+                  )
+                }
+                className={`w-12 h-6 rounded-full transition-colors relative ${autoBuy ? "bg-green-500" : "bg-gray-700"} ${pending.autoBuy ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <div
                   className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${autoBuy ? "left-7" : "left-1"}`}
@@ -150,8 +213,15 @@ export function ControlPanel() {
                 {singleTrade ? "ON" : "OFF"}
               </span>
               <button
-                onClick={() => updateConfig({ singleTradeMode: !singleTrade })}
-                className={`w-12 h-6 rounded-full transition-colors relative ${singleTrade ? "bg-orange-500" : "bg-gray-700"}`}
+                disabled={pending.singleTrade}
+                onClick={() =>
+                  runOptimistic(
+                    "singleTrade",
+                    !singleTrade,
+                    () => updateConfig({ singleTradeMode: !singleTrade }),
+                  )
+                }
+                className={`w-12 h-6 rounded-full transition-colors relative ${singleTrade ? "bg-orange-500" : "bg-gray-700"} ${pending.singleTrade ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <div
                   className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all ${singleTrade ? "left-7" : "left-1"}`}

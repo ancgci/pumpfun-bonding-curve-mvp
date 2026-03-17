@@ -2,6 +2,8 @@
 
 Complete reference for the AI-powered trading agent integrated into the PumpFun Bot.
 
+- **Detailed Pipeline Guide**: For a full breakdown of all 8 execution stages, see the [AI Agents Architecture](AI_AGENTS_ARCHITECTURE.md).
+
 ---
 
 ## Architecture Overview (Multi-Agent 2026)
@@ -12,7 +14,7 @@ graph TD
     B -->|REJECT| Z[Skip]
     B -->|PASS| C[MainOrchestrator]
     
-    subgraph Agent Team
+    subgraph AI Agent Stage (Pipeline 4/8)
       C --> D[RiskAgent]
       D -->|BLOCK| Z
       D -->|PASS| E[ScalperAgent 5s]
@@ -24,9 +26,10 @@ graph TD
     
     H -->|SKIP| Z
     H -->|BUY| I[Position Sizing]
-    I --> J{Mode}
-    J -->|SIMULATION| K[Record Trade]
-    J -->|LIVE| L[Execute on Blockchain]
+    I --> J[Post-LLM Revalidation (5-7/8)]
+    J --> K{Mode}
+    K -->|SIMULATION| L[Record Trade]
+    K -->|LIVE| M[Execute on Blockchain]
 ```
 
 ---

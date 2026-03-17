@@ -1,3 +1,31 @@
+# Changelog
+
+## [1.4.3] - 2026-03-17
+### Fixed
+- **Dashboard Stability**: Implemented 500ms debounce on file watchers to prevent "blinking" UI caused by race conditions during bot writes.
+- **Rate Limiting (429)**: Implemented server-side caching (60s) for wallet balances and tokens to reduce RPC load.
+- **API Optimization**: Reduced frontend polling frequency and optimized background log fetching.
+- **Security**: Sanitized log retrieval to eliminate shell execution vulnerabilities.
+
+### [1.4.2] - 2026-03-16
+#### 🛡️ Added
+- **Advanced Security Hardening (Level 3)**:
+  - **SSH Key-Only Authentication**: Ed25519 key enforcement; passwords disabled globally in `sshd_config`.
+  - **Cold Extraction (Secure API)**: Replaced `child_process.exec` with native `fs` module in Dashboard API to prevent command injection.
+  - **PM2 Sandbox**: Migration of application runtime to isolated `anto` user (Non-privileged).
+  - **Directory Lockdown**: Restricted project ownership and permissions to the `anto` service account.
+
+### [1.4.1] - 2026-03-16
+#### 🛡️ Added
+- **VPS Security Hardening Protocol**: Complete system audit and lockdown following a clean reinstall (Ubuntu 24.04).
+  - **New Admin User**: Migration to non-root administrative user (`anto`).
+  - **SSH Infrastructure**: Disabled root login and password-based authentication.
+  - **Intrusion Prevention**: Enabled `fail2ban` with persistent SSH jails.
+  - **Firewall (UFW)**: Implemented strict "deny by default" inbound policy (Allow 22, 80, 443 only).
+  - **Automated Security**: Enabled `unattended-upgrades` for real-time security patching.
+
+---
+
 ### [1.4.0] - 2026-03-16
 #### 🚀 Added
 - **Integrated Premium Dashboard**: The new high-fidelity interface is now fully functional and feature-complete.

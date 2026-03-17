@@ -82,7 +82,7 @@ const httpServer = http.createServer(app);
 const PORT = 3001;
 
 const io = new Server(httpServer, {
-    cors: { origin: [FRONTEND_ORIGIN, "http://meu.listadecompras.shop", "https://meu.listadecompras.shop", "http://YOUR_VPS_IP:3001", "http://YOUR_VPS_IP", "http://localhost:5174", "http://localhost:3001"], credentials: true }
+    cors: { origin: [FRONTEND_ORIGIN, "http://meu.listadecompras.shop", "https://meu.listadecompras.shop", "http://localhost:5174", "http://localhost:3001"], credentials: true }
 });
 
 // ── Custom CORS Middleware ────────────────────────────────────
@@ -396,10 +396,18 @@ app.get("/api/wallet/export", (req, res) => {
 });
 
 /**
- * GET /api/wallet/balances - Retorna saldo de SOL e tokens SPL reais
+ * GET /api/wallet/balances - Retorna saldo de SOL e tokens SPL reais (Cachê de 60s)
  */
+let cachedBalances: any = null;
+let lastBalanceFetch = 0;
+const BALANCE_CACHE_TTL = 60_000;
+
 app.get("/api/wallet/balances", async (req, res) => {
     try {
+        if (cachedBalances && Date.now() - lastBalanceFetch < BALANCE_CACHE_TTL) {
+            return res.json(cachedBalances);
+        }
+
         const walletInfo = loadBotWallet();
         const address = WALLET_ADDRESS_ENV || walletInfo?.publicKey;
         if (!address) return res.status(400).json({ error: "Wallet address not configured" });
@@ -426,8 +434,13 @@ app.get("/api/wallet/balances", async (req, res) => {
             })
             .filter(Boolean);
 
-        res.json({ address, solBalance, tokens });
+        cachedBalances = { address, solBalance, tokens, cachedAt: new Date().toISOString() };
+        lastBalanceFetch = Date.now();
+
+        res.json(cachedBalances);
     } catch (error: any) {
+        // If it fails (e.g. 429), return cached if available, else error
+        if (cachedBalances) return res.json(cachedBalances);
         res.status(500).json({ error: error.message });
     }
 });
@@ -454,16 +467,24 @@ app.get("/api/agent/logs", (req, res) => {
 
             if (logFiles.length === 0) return res.json([]);
 
-            // Usamos spawn ou escapamos os nomes dos arquivos para segurança máxima.
-            const cmd = `grep -hE "\\[Agent\\]|\\[RiskEngine\\]|\\[WHALE ALERT\\]|\\[Pipeline" "${logFiles.join('" "')}" | grep -v "ALLOW_TRADE" | tail -n 60`;
+            try {
+                const patterns = [/\[Agent\]/, /\[RiskEngine\]/, /\[WHALE ALERT\]/, /\[Pipeline/];
+                const excludePattern = /ALLOW_TRADE/;
+                let allLines: string[] = [];
 
-            exec(cmd, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
-                if (error) {
-                    if (error.code === 1) return res.json([]);
-                    return res.status(500).json({ error: "Failed to read logs: " + error.message });
+                for (const filePath of logFiles) {
+                    const content = fs.readFileSync(filePath, "utf-8");
+                    const lines = content.split('\n');
+                    const filtered = lines.filter(line =>
+                        patterns.some(p => p.test(line)) && !excludePattern.test(line)
+                    );
+                    allLines = allLines.concat(filtered);
                 }
-                const rawLines = stdout.trim().split('\n').filter(Boolean);
-                const parsedLogs = rawLines.map(line => {
+
+                // Get last 60 lines
+                const tailLines = allLines.slice(-60);
+
+                const parsedLogs = tailLines.map(line => {
                     try {
                         const parsed = JSON.parse(line);
                         return {
@@ -476,7 +497,9 @@ app.get("/api/agent/logs", (req, res) => {
                     }
                 });
                 res.json(parsedLogs);
-            });
+            } catch (err: any) {
+                res.status(500).json({ error: "Failed to read logs: " + err.message });
+            }
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -710,7 +733,9 @@ app.get("/api/simulation/trades", (req, res) => {
                 confidence,
                 status,
                 reason,
-                token_holders as tokenHolders
+                token_holders as tokenHolders,
+                market_cap_entry as marketCapEntry,
+                market_cap_exit as marketCapExit
             FROM simulated_trades
             ORDER BY entry_time DESC
             LIMIT ?
@@ -910,6 +935,7 @@ app.get("/api/trading-config", (req, res) => {
             buyAmountSol: parseFloat(process.env.BUY_AMOUNT_SOL || "0.01"),
             takeProfitPercent: parseFloat(process.env.TAKE_PROFIT_PERCENT || "100"),
             stopLossPercent: parseFloat(process.env.STOP_LOSS_PERCENT || "30"),
+            stopLossEnabled: true,
             slippageBps: parseInt(process.env.SLIPPAGE_BPS || "300"),
             agentMinConfidence: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
             jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
@@ -953,6 +979,7 @@ app.post("/api/trading-config", (req, res) => {
             copyTradeEnabled,
             copyTradeAmountSol,
             followWallets,
+            stopLossEnabled,
             volatilityAdjustedTpSl,
             atrMultiplierTp,
             atrMultiplierSl,
@@ -979,6 +1006,7 @@ app.post("/api/trading-config", (req, res) => {
             ...(buyAmountSol !== undefined && { buyAmountSol }),
             ...(takeProfitPercent !== undefined && { takeProfitPercent }),
             ...(stopLossPercent !== undefined && { stopLossPercent }),
+            ...(stopLossEnabled !== undefined && { stopLossEnabled }),
             ...(slippageBps !== undefined && { slippageBps }),
             ...(agentMinConfidence !== undefined && { agentMinConfidence }),
             ...(jitoTipAmount !== undefined && { jitoTipAmount }),
@@ -1258,24 +1286,44 @@ function getStats() {
     };
 }
 
-// WebSocket Broadcast
+// WebSocket Broadcast with Debounce
+let broadcastTimeout: NodeJS.Timeout | null = null;
+
 export function broadcastDashboardUpdate() {
-    const stats = getStats();
-    const trades = loadAgentTrades();
-    const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
-    recordPnLPoint(totalPnl, stats.activePositions);
+    if (broadcastTimeout) clearTimeout(broadcastTimeout);
 
-    const plHistory = getPnLHistory(30);
+    broadcastTimeout = setTimeout(() => {
+        const stats = getStats();
+        const trades = loadAgentTrades();
 
-    // Recent simulation trades
-    const simTrades = db.prepare(`SELECT * FROM simulated_trades ORDER BY entry_time DESC LIMIT 20`).all();
+        // Prevent recording corrupted P&L points if stats are temporarily empty due to race conditions
+        if (stats.activePositions === 0 && stats.totalPositions === 0) {
+            // Check if it's really empty or just a read error
+            const rawData = fs.readFileSync(POSITIONS_FILE, "utf-8");
+            if (rawData.length > 10 && rawData.includes('"mint"')) {
+                // Suspiciously empty but file has content, retry once in 200ms
+                setTimeout(broadcastDashboardUpdate, 200);
+                return;
+            }
+        }
 
-    io.emit("dashboardUpdate", {
-        stats,
-        plHistory,
-        simTrades,
-        timestamp: Date.now()
-    });
+        const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+        recordPnLPoint(totalPnl, stats.activePositions);
+
+        const plHistory = getPnLHistory(30);
+
+        // Recent simulation trades
+        const simTrades = db.prepare(`SELECT * FROM simulated_trades ORDER BY entry_time DESC LIMIT 20`).all();
+
+        io.emit("dashboardUpdate", {
+            stats,
+            plHistory,
+            simTrades,
+            timestamp: Date.now()
+        });
+
+        broadcastTimeout = null;
+    }, 500); // 500ms debounce
 }
 
 // Persistência de P&L
@@ -1353,13 +1401,13 @@ io.on("connection", (socket) => {
 if (require.main === module) {
     fs.watch(POSITIONS_FILE, (event) => {
         if (event === 'change') {
-            setTimeout(broadcastDashboardUpdate, 100); // Small delay to let file write finish
+            broadcastDashboardUpdate();
         }
     });
 
     fs.watch(AGENT_TRADES_FILE, (event) => {
         if (event === 'change') {
-            setTimeout(broadcastDashboardUpdate, 100);
+            broadcastDashboardUpdate();
         }
     });
 }

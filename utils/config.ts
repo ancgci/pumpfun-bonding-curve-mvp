@@ -134,6 +134,7 @@ export function getRuntimeConfig() {
       if (saved.buyAmountSol !== undefined) runtimeConfig.BUY_AMOUNT_SOL = saved.buyAmountSol;
       if (saved.takeProfitPercent !== undefined) runtimeConfig.TAKE_PROFIT_PERCENT = saved.takeProfitPercent;
       if (saved.stopLossPercent !== undefined) runtimeConfig.STOP_LOSS_PERCENT = saved.stopLossPercent;
+      if (saved.stopLossEnabled !== undefined) (runtimeConfig as any).STOP_LOSS_ENABLED = saved.stopLossEnabled;
       if (saved.slippageBps !== undefined) runtimeConfig.SLIPPAGE_BPS = saved.slippageBps;
       if (saved.autoBuyEnabled !== undefined) runtimeConfig.AUTO_BUY_ENABLED = saved.autoBuyEnabled;
       if (saved.singleTradeMode !== undefined) runtimeConfig.SINGLE_TRADE_MODE = saved.singleTradeMode;

@@ -1,5 +1,7 @@
 # 🧠 Sistema Multi-Agentes PRO (Orquestração de IA)
 
+Este sistema atua como o **Estágio 4 (Pipeline 4/8)** do fluxo de decisão do bot. Veja a [Arquitetura Geral](AI_AGENTS_ARCHITECTURE.md) para o contexto completo.
+
 O bot evoluiu de uma IA de decisão única para um ecossistema de **5 agentes especializados** que trabalham em paralelo para analisar cada oportunidade de trade.
 
 ## 🏗️ Arquitetura de Agentes

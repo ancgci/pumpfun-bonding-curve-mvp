@@ -9,16 +9,17 @@ Você tem duas formas principais de interagir com a sua VPS:
 ### Opção A: Acesso via XRDP (Interface Gráfica)
 Se você já configurou o acesso remoto para ver a "área de trabalho" da VPS:
 1. Abra o aplicativo de **Conexão de Área de Trabalho Remota** no Windows.
-2. Digite o IP da VPS: `YOUR_VPS_IP`
-3. Entre com as credenciais do usuário `dev`.
+2. Digite o IP da VPS: `<VPS_IP>`
+3. Entre com as credenciais do usuário `anto` (conforme configurado no Hardening).
 4. Abra o terminal (janela preta) para digitar os comandos.
 
 ### Opção B: Acesso via SSH (Terminal)
-Você pode acessar o terminal da VPS diretamente da sua máquina local:
+Você deve acessar o terminal da VPS usando o usuário administrativo seguro com sua chave SSH autorizada:
 ```bash
-ssh dev@YOUR_VPS_IP
+ssh <VPS_USER>@<VPS_IP>
 ```
-*(Digite a senha quando solicitada).*
+*(Login de root e autenticação por senha estão desativados por segurança).*
+*(Sua chave ED25519 deve estar configurada no seu computador local).*
 
 ---
 
@@ -105,4 +106,17 @@ http://meu.listadecompras.shop/login
 *(Se o Nginx ainda não estiver configurado, você pode tentar acessar via porta 3001: http://meu.listadecompras.shop:3001/login)*.
 
 **⚠️ Importante:** O acesso na VPS requer autenticação via Google OAuth e é estritamente limitado aos e-mails autorizados configurados no `.env`.
+
+---
+
+## 5. Segurança (Hardening)
+
+A VPS opera sob o **Protocolo de Hardening Nível 3**:
+- **Acesso**: Restrito a chaves SSH (Senhas desativadas no `/etc/ssh/sshd_config`).
+- **Fail2Ban**: Monitora e bane IPs suspeitos automaticamente.
+- **UFW Firewall**: Apenas portas 22 (SSH), 80 (HTTP) e 443 (HTTPS) abertas.
+- **Runtime**: Aplicação executada pelo usuário isolado `anto` via PM2.
+- **Patches**: Atualizações de segurança críticas automáticas.
+
+Para detalhes técnicos completos, veja [SECURITY_HARDENING.md](./SECURITY_HARDENING.md).
 

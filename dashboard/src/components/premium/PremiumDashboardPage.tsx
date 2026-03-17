@@ -37,7 +37,7 @@ export const PremiumDashboardPage = () => {
         agentStatus,
         tradingConfig,
         isAgentActive,
-        tradeHistory
+        tradeHistory,
     } = useDashboardData();
 
     const { user } = useAuthStore();
@@ -279,16 +279,16 @@ export const PremiumDashboardPage = () => {
                     <PremiumCard
                         key="automation"
                         id="automation"
-                        draggable
-                        onDragStart={() => handleDragStart('trading', 'automation')}
-                        onDragOver={handleDragOver}
-                        onDrop={() => handleDrop('trading', 'automation')}
-                        title="Control Center"
-                        icon={Power}
-                    >
-                        <ControlPanel />
-                    </PremiumCard>
-                );
+                    draggable
+                    onDragStart={() => handleDragStart('trading', 'automation')}
+                    onDragOver={handleDragOver}
+                    onDrop={() => handleDrop('trading', 'automation')}
+                    title="Control Center"
+                    icon={Power}
+                >
+                    <ControlPanel />
+                </PremiumCard>
+            );
             case 'protocols':
                 return (
                     <PremiumCard

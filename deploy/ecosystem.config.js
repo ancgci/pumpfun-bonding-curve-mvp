@@ -9,7 +9,8 @@
  *   pm2 logs
  */
 
-const PROJECT_DIR = '/home/srant/projects/pumpfun-bonding-curve-Test';
+const path = require('path');
+const PROJECT_DIR = __dirname;
 
 module.exports = {
     apps: [

@@ -116,11 +116,11 @@ Restaurar capacidade de trading do bot e prevenir recorrência do incidente de 1
 ### Emergência (Imediato)
 ```bash
 # 1. Copiar configs
-scp data/ta-config.json dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/data/
-scp data/agent/patterns.json dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/data/agent/
+scp data/ta-config.json <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/data/
+scp data/agent/patterns.json <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/data/agent/
 
 # 2. Reiniciar bot
-ssh dev@YOUR_VPS_IP "pm2 restart bot"
+ssh <VPS_USER>@<VPS_IP> "pm2 restart bot"
 ```
 
 ### Completo (Após estabilizar)
@@ -165,9 +165,9 @@ Tokens bloqueados: 80-90%
 
 Se problemas persistirem:
 
-1. Verificar logs: `ssh dev@YOUR_VPS_IP "pm2 logs bot"`
-2. Checar configs: `curl http://YOUR_VPS_IP:3001/api/ta/config`
-3. Ver fallback: `curl http://YOUR_VPS_IP:3001/api/ta/fallback-state`
+1. Verificar logs: `ssh <VPS_USER>@<VPS_IP> "pm2 logs bot"`
+2. Checar configs: `curl http://<VPS_IP>:3001/api/ta/config`
+3. Ver fallback: `curl http://<VPS_IP>:3001/api/ta/fallback-state`
 4. Consultar POSTMORTEM para troubleshooting
 
 ---

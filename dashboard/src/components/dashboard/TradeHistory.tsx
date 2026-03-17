@@ -59,6 +59,8 @@ export function TradeHistory() {
     exitReason: t.exitReason || t.reason || null,
     pnl: Number(t.pnl || 0),
     buyAmountSol: Number(t.buyAmountSol || t.entryAmount || t.invested || 0.1),
+    marketCapEntry: t.marketCapEntry || t.mcEntry || null,
+    marketCapExit: t.marketCapExit || t.mcExit || null,
   }));
 
   return (
@@ -82,13 +84,15 @@ export function TradeHistory() {
                   <th className="px-4 py-3">Mode</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Date</th>
-                  <th className="px-4 py-3">Entry Time</th>
-                  <th className="px-4 py-3">Exit Time</th>
-                  <th className="px-4 py-3 text-right">P&L</th>
-                  <th className="px-4 py-3 text-right">P&L %</th>
-                  <th className="px-4 py-3 text-right w-1/4">Reason</th>
-                </tr>
-              </thead>
+              <th className="px-4 py-3">Entry Time</th>
+              <th className="px-4 py-3">Exit Time</th>
+              <th className="px-4 py-3 text-right">MC Entry</th>
+              <th className="px-4 py-3 text-right">MC Exit</th>
+              <th className="px-4 py-3 text-right">P&L</th>
+              <th className="px-4 py-3 text-right">P&L %</th>
+              <th className="px-4 py-3 text-right w-1/4">Reason</th>
+            </tr>
+          </thead>
               <tbody>
                 {trades.map((trade, i) => {
                   const pnlClass = trade.pnl > 0
@@ -173,22 +177,30 @@ export function TradeHistory() {
                           })()
                           : "--"}
                       </td>
-                      {/* P&L Amount */}
-                      <td className={`px-4 py-3 text-right font-medium font-mono whitespace-nowrap ${pnlClass}`}>
-                        {trade.pnl > 0 ? "+" : ""}
-                        {trade.pnl.toFixed(4)} SOL
-                      </td>
-                      {/* P&L Percentage */}
-                      <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${pnlClass}`}>
-                        {(() => {
-                          const pnl = Number(trade.pnl) || 0;
-                          // Use buyAmountSol if available to calculate accurate %, otherwise fallback to a static visual or just show N/A
-                          const invest = Number(trade.buyAmountSol || 0.1);
-                          if (invest === 0) return "--";
-                          const percent = (pnl / invest) * 100;
-                          return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
-                        })()}
-                      </td>
+              {/* MC Entry */}
+              <td className="px-4 py-3 text-right font-mono text-xs text-muted-foreground whitespace-nowrap">
+                {trade.marketCapEntry ? `${Number(trade.marketCapEntry).toLocaleString()} MC` : "--"}
+              </td>
+              {/* MC Exit */}
+              <td className="px-4 py-3 text-right font-mono text-xs text-muted-foreground whitespace-nowrap">
+                {trade.marketCapExit ? `${Number(trade.marketCapExit).toLocaleString()} MC` : "--"}
+              </td>
+              {/* P&L Amount */}
+              <td className={`px-4 py-3 text-right font-medium font-mono whitespace-nowrap ${pnlClass}`}>
+                {trade.pnl > 0 ? "+" : ""}
+                {trade.pnl.toFixed(4)} SOL
+              </td>
+              {/* P&L Percentage */}
+              <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${pnlClass}`}>
+                {(() => {
+                  const pnl = Number(trade.pnl) || 0;
+                  // Use buyAmountSol if available to calculate accurate %, otherwise fallback to a static visual or just show N/A
+                  const invest = Number(trade.buyAmountSol || 0.1);
+                  if (invest === 0) return "--";
+                  const percent = (pnl / invest) * 100;
+                  return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
+                })()}
+              </td>
                       {/* Reason (Moved to end) */}
                       <td className="px-4 py-3 text-right text-muted-foreground text-xs whitespace-normal min-w-[120px]">
                         {trade.exitReason === "TAKE_PROFIT" ? (

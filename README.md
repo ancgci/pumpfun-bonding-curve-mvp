@@ -14,16 +14,19 @@ All project documentation is in the `/docs` folder:
 - **[DIP_SNIPER](docs/DIP_SNIPER.md)** - Technical logic for RSI & EMA Sniper crossovers
 - **[DEVELOPMENT_PROTOCOL](docs/DEVELOPMENT_PROTOCOL.md)** - Mandatory steps for bot maintenance
 - **[AI_AGENT](docs/AI_AGENT.md)** - AI Agent architecture, learning loop, and precision trading
+- **[🤖 AI_AGENTS_ARCHITECTURE](docs/AI_AGENTS_ARCHITECTURE.md)** - **Entenda o Pipeline de 8 Etapas dos Agentes**
+- **[🧠 MULTI_AGENT](docs/MULTI_AGENT_ORCHESTRATION.md)** - Orquestração de múltiplos agentes e consenso
 - **[DIP_SNIPER](docs/DIP_SNIPER.md)** - Pre-Execution Guard and RSI Pullback trading
-- **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system: create, import, and manage agent skills
+- **[🛡️ SECURITY_HARDENING](docs/SECURITY_HARDENING.md)** - Protocolo avançado de proteção Nível 3
+- **[📚 VPS_DEPLOYMENT](docs/VPS_DEPLOYMENT.md)** - Guia de instalação e acesso à VPS
+- **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
-- **[VPS_DEPLOYMENT](docs/VPS_DEPLOYMENT.md)** - Passo a passo para acessar e atualizar a VPS
-- **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - High-res Technical Analysis scalping guide
+- **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - Technical Analysis scalping guide
 - **[QA](docs/QA.md)** - QAgent testing infrastructure
-- **[ORGANICITY](docs/ORGANICITY_PROTECTION.md)** - Anti-manipulation detection, bot filters and seller churn modeling
-- **[MULTI_AGENT](docs/MULTI_AGENT_ORCHESTRATION.md)** - PRO Multi-Agent intelligence, orchestration and consensus consensus
-- **[CHANGELOG](docs/CHANGELOG.md)** - Improvement history
+- **[ORGANICITY](docs/ORGANICITY_PROTECTION.md)** - Anti-manipulation detection
+- **[📊 P&L_HISTORY](docs/PNL_HISTORY.md)** - Documentação do SQLite P&L
+- **[CHANGELOG](docs/CHANGELOG.md)** - Histórico de melhorias
 
 ## 🚀 Quick Start
 
@@ -108,6 +111,20 @@ O dashboard foi elevado a um patamar profissional com uma interface de alto dese
 | **Integrated Terminal** | Terminal de logs em tempo real portado diretamente para a aba "Logs". |
 
 **Arquivos:** `dashboard/src/components/premium/*`, `dashboard/src/components/dashboard/AgentStatus.tsx`.
+
+### 🛡️ VPS Security Hardening (Mar 16, 2026)
+Após um incidente de segurança, a VPS foi totalmente reinstalada (Ubuntu 24.04) e protegida com um novo protocolo de hardening.
+
+| Feature | Description |
+|---------|-------------|
+| **Novo Usuário Sudo** | Removido acesso direto como `root`. Novo usuário `anto` configurado para administração. |
+| **SSH Key-Only** | Login por senha desabilitado. Autenticação restrita a chaves Ed25519 autorizadas. |
+| **Fail2Ban** | Proteção ativa contra força bruta com banimento automático de IPs suspeitos. |
+| **UFW Firewall** | Configuração "Deny by Default", liberando apenas Portas 22, 80 e 443. |
+| **Cold Extraction** | Dash API limpa: remoção de `exec()` para prevenir injeção de comandos. |
+| **PM2 Sandbox** | Robô e API rodando isoladamente como usuário `anto` (Non-root). |
+
+**Arquivos:** `vps_hardening.sh`, `docs/VPS_DEPLOYMENT.md`.
 
 ### 🛠️ Estabilização e QA
 - **Auth Session Fix**: Implementado estado de `checkingSession` para evitar redirects indesejados para o login durante a restauração da sessão.

@@ -1,5 +1,5 @@
 import logger from "./logger";
-import { CONFIG } from "./config";
+import { CONFIG, getRuntimeConfig } from "./config";
 import * as fs from "fs";
 import * as path from "path";
 import db from "./db";
@@ -31,6 +31,8 @@ interface SimulatedTrade {
   status: "OPEN" | "CLOSED_TP" | "CLOSED_SL" | "EXPIRED";
   reason?: string;
   tokenHolders?: number;
+  marketCapEntry?: number | null;
+  marketCapExit?: number | null;
 }
 
 interface SimulationMetrics {
@@ -50,6 +52,14 @@ interface SimulationMetrics {
 const SIMULATION_DATA_DIR = path.join(__dirname, "../data/simulation");
 const SIMULATION_TRADES_FILE = path.join(SIMULATION_DATA_DIR, "trades.json");
 const SIMULATION_METRICS_FILE = path.join(SIMULATION_DATA_DIR, "metrics.json");
+const getBuyAmountSol = () => {
+  try {
+    const cfg = getRuntimeConfig();
+    return cfg.BUY_AMOUNT_SOL || CONFIG.BUY_AMOUNT_SOL;
+  } catch {
+    return CONFIG.BUY_AMOUNT_SOL;
+  }
+};
 
 // Ensure simulation data directory exists
 function ensureSimulationDir() {
@@ -68,16 +78,18 @@ export async function recordSimulatedTrade(
   entryPrice: number,
   confidence: number,
   agentAnalysis: any,
-  holders?: number
+  holders?: number,
+  marketCap?: number
 ): Promise<void> {
   ensureSimulationDir();
+  const entryAmount = getBuyAmountSol();
 
   const trade: SimulatedTrade = {
     tokenMint,
     tokenSymbol,
     entryTime: Date.now(),
     entryPrice,
-    entryAmount: CONFIG.BUY_AMOUNT_SOL,
+    entryAmount,
     exitTime: null,
     exitPrice: null,
     pnl: 0,
@@ -86,6 +98,8 @@ export async function recordSimulatedTrade(
     status: "OPEN",
     reason: `AI Agent confidence: ${confidence}%`,
     tokenHolders: holders,
+    marketCapEntry: marketCap ?? null,
+    marketCapExit: null,
   };
 
   // 1. JSON Persistence (Backup)
@@ -107,8 +121,8 @@ export async function recordSimulatedTrade(
   try {
     db.prepare(`
       INSERT INTO simulated_trades (
-        token_mint, token_symbol, entry_time, entry_price, entry_amount, confidence, status, reason, token_holders
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        token_mint, token_symbol, entry_time, entry_price, entry_amount, confidence, status, reason, token_holders, market_cap_entry, market_cap_exit
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       trade.tokenMint,
       trade.tokenSymbol,
@@ -118,7 +132,9 @@ export async function recordSimulatedTrade(
       trade.confidence,
       trade.status,
       trade.reason,
-      trade.tokenHolders
+      trade.tokenHolders,
+      trade.marketCapEntry,
+      trade.marketCapExit
     );
   } catch (error) {
     logger.error(`Error persisting simulation trade to DB:`, error);
@@ -137,7 +153,8 @@ export async function updateSimulatedTradeExit(
   tokenMint: string,
   exitPrice: number,
   status: "CLOSED_TP" | "CLOSED_SL" | "EXPIRED",
-  reason?: string
+  reason?: string,
+  marketCap?: number | null
 ): Promise<SimulatedTrade | null> {
   ensureSimulationDir();
 
@@ -164,8 +181,9 @@ export async function updateSimulatedTradeExit(
   trade.exitPrice = exitPrice;
   trade.status = status;
   trade.pnlPercent = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
-  trade.pnl = CONFIG.BUY_AMOUNT_SOL * (trade.pnlPercent / 100);
+  trade.pnl = trade.entryAmount * (trade.pnlPercent / 100);
   trade.reason = reason || `Exited with status: ${status}`;
+  trade.marketCapExit = marketCap ?? null;
 
   fs.writeFileSync(SIMULATION_TRADES_FILE, JSON.stringify(trades, null, 2));
 
@@ -173,7 +191,7 @@ export async function updateSimulatedTradeExit(
   try {
     db.prepare(`
       UPDATE simulated_trades 
-      SET exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?
+      SET exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?
       WHERE token_mint = ? AND status = 'OPEN'
     `).run(
       trade.exitTime,
@@ -182,6 +200,7 @@ export async function updateSimulatedTradeExit(
       trade.pnl,
       trade.pnlPercent,
       trade.reason,
+      trade.marketCapExit,
       tokenMint
     );
   } catch (error) {
@@ -208,10 +227,10 @@ export async function updateSimulatedTradePrice(
   currentPrice: number
 ): Promise<void> {
   try {
-    const entry = db.prepare(`SELECT entry_price FROM simulated_trades WHERE token_mint = ? AND status = 'OPEN'`).get(tokenMint) as any;
+    const entry = db.prepare(`SELECT entry_price, entry_amount FROM simulated_trades WHERE token_mint = ? AND status = 'OPEN'`).get(tokenMint) as any;
     if (entry) {
       const pnlPercent = ((currentPrice - entry.entry_price) / entry.entry_price) * 100;
-      const pnlSol = CONFIG.BUY_AMOUNT_SOL * (pnlPercent / 100);
+      const pnlSol = entry.entry_amount * (pnlPercent / 100);
 
       db.prepare(`
         UPDATE simulated_trades 
@@ -243,7 +262,9 @@ export function getOpenTradesFromDb(): SimulatedTrade[] {
         confidence,
         status,
         reason,
-        token_holders as tokenHolders
+        token_holders as tokenHolders,
+        market_cap_entry as marketCapEntry,
+        market_cap_exit as marketCapExit
       FROM simulated_trades
       WHERE status = 'OPEN'
     `).all() as any[];

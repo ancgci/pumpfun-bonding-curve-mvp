@@ -123,10 +123,10 @@ cd /home/srant/projects/pumpfun-bonding-curve-Test/dashboard
 npm run build
 
 # 2. Upload do build para VPS
-scp -r dist/ dev@YOUR_VPS_IP:/opt/agents/pumpfun-bot/dashboard/dist
+scp -r dist/ <VPS_USER>@<VPS_IP>:/opt/agents/pumpfun-bot/dashboard/dist
 
 # 3. Reiniciar dashboard API na VPS
-ssh dev@YOUR_VPS_IP "pm2 restart dashboard-api"
+ssh <VPS_USER>@<VPS_IP> "pm2 restart dashboard-api"
 ```
 
 ### Opção 2: Deploy via Script
@@ -152,10 +152,10 @@ Após deploy, testar:
 
 **Verificar API:**
 ```bash
-curl http://YOUR_VPS_IP:3001/api/agent/trades
-curl http://YOUR_VPS_IP:3001/api/agent/learned-rules
-curl http://YOUR_VPS_IP:3001/api/agent/logs
-curl http://YOUR_VPS_IP:3001/api/positions
+curl http://<VPS_IP>:3001/api/agent/trades
+curl http://<VPS_IP>:3001/api/agent/learned-rules
+curl http://<VPS_IP>:3001/api/agent/logs
+curl http://<VPS_IP>:3001/api/positions
 ```
 
 ---
