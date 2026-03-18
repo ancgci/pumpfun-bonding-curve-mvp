@@ -411,3 +411,26 @@ export function updateUserRole(userId: number, role: UserRole) {
     db.prepare(`UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(role, userId);
     return getUserById(userId);
 }
+
+export function deleteUser(userId: number) {
+    const user = getUserById(userId);
+    if (!user) throw new Error('User not found');
+
+    const adminCount = db.prepare(`SELECT COUNT(*) as c FROM users WHERE role = 'ADMIN'`).get() as { c: number };
+    if (user.role === 'ADMIN' && adminCount.c <= 1) {
+        throw new Error('Cannot delete the last admin');
+    }
+
+    const tx = db.transaction(() => {
+        db.prepare(`UPDATE users SET invited_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE invited_by_user_id = ?`).run(userId);
+        db.prepare(`DELETE FROM user_trading_configs WHERE user_id = ?`).run(userId);
+        db.prepare(`DELETE FROM user_trades WHERE user_id = ?`).run(userId);
+        db.prepare(`DELETE FROM user_positions WHERE user_id = ?`).run(userId);
+        db.prepare(`DELETE FROM user_wallets WHERE user_id = ?`).run(userId);
+        db.prepare(`DELETE FROM users WHERE id = ?`).run(userId);
+    });
+
+    tx();
+
+    return user;
+}

@@ -11,6 +11,7 @@ import {
     RefreshCcw,
     ShieldCheck,
     Sparkles,
+    Trash2,
     UserRound,
     Users,
     Wallet
@@ -162,6 +163,7 @@ export const UserAccountArea = () => {
     const [adminError, setAdminError] = useState<string | null>(null);
     const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
     const [roleLoadingId, setRoleLoadingId] = useState<number | null>(null);
+    const [deleteLoadingId, setDeleteLoadingId] = useState<number | null>(null);
     const [createUserLoading, setCreateUserLoading] = useState(false);
     const [newUserEmail, setNewUserEmail] = useState('');
     const [newUserName, setNewUserName] = useState('');
@@ -232,6 +234,26 @@ export const UserAccountArea = () => {
             setAdminError(error.response?.data?.error || error.message || 'Failed to update role');
         } finally {
             setRoleLoadingId(null);
+        }
+    };
+
+    const handleDeleteUser = async (managedUser: AdminOverview['users'][number]) => {
+        if (!isAdmin || user?.id === managedUser.id) return;
+
+        const confirmed = window.confirm(
+            `Delete ${managedUser.email}? This permanently removes the account, wallets, scoped trades, positions and config data.`
+        );
+        if (!confirmed) return;
+
+        setDeleteLoadingId(managedUser.id);
+        setAdminError(null);
+        try {
+            await api.delete(`${API_BASE}/admin/users/${managedUser.id}`);
+            await fetchAdminOverview();
+        } catch (error: any) {
+            setAdminError(error.response?.data?.error || error.message || 'Failed to delete user');
+        } finally {
+            setDeleteLoadingId(null);
         }
     };
 
@@ -604,6 +626,10 @@ export const UserAccountArea = () => {
                                             const isSelf = user?.id === managedUser.id;
                                             const nextStatus: ManagedStatus = managedUser.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
                                             const selectedRole = roleDrafts[managedUser.id] || managedUser.role;
+                                            const isStatusLoading = actionLoadingId === managedUser.id;
+                                            const isRoleLoading = roleLoadingId === managedUser.id;
+                                            const isDeleteLoading = deleteLoadingId === managedUser.id;
+                                            const isBusy = isStatusLoading || isRoleLoading || isDeleteLoading;
                                             return (
                                                 <div key={managedUser.id} className="rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 space-y-3">
                                                     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -643,30 +669,44 @@ export const UserAccountArea = () => {
                                                     <div className="flex flex-wrap gap-2">
                                                         <button
                                                             type="button"
-                                                            disabled={actionLoadingId === managedUser.id || isSelf}
+                                                            disabled={isBusy || isSelf}
+                                                            onClick={() => void handleDeleteUser(managedUser)}
+                                                            className={cn(
+                                                                "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium transition-colors",
+                                                                "border-red-500/30 text-red-200 hover:bg-red-500/10",
+                                                                (isBusy || isSelf) && "opacity-60 cursor-not-allowed"
+                                                            )}
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                            {isDeleteLoading ? 'Deleting...' : 'Delete'}
+                                                        </button>
+
+                                                        <button
+                                                            type="button"
+                                                            disabled={isBusy || isSelf}
                                                             onClick={() => void handleUpdateStatus(managedUser.id, nextStatus)}
                                                             className={cn(
                                                                 "px-3 py-2 rounded-xl border text-sm font-medium transition-colors",
                                                                 managedUser.status === 'ACTIVE'
                                                                     ? "border-red-400/30 text-red-200 hover:bg-red-500/10"
                                                                     : "border-green-400/30 text-green-200 hover:bg-green-500/10",
-                                                                isSelf && "opacity-60 cursor-not-allowed"
+                                                                (isBusy || isSelf) && "opacity-60 cursor-not-allowed"
                                                             )}
                                                         >
-                                                            {actionLoadingId === managedUser.id ? 'Updating...' :
+                                                            {isStatusLoading ? 'Updating...' :
                                                                 managedUser.status === 'ACTIVE' ? 'Suspend' : 'Activate'}
                                                         </button>
 
                                                         <select
                                                             value={selectedRole}
-                                                            disabled={isSelf || roleLoadingId === managedUser.id}
+                                                            disabled={isSelf || isBusy}
                                                             onChange={(event) => {
                                                                 const role = event.target.value as ManagedRole;
                                                                 setRoleDrafts((prev) => ({ ...prev, [managedUser.id]: role }));
                                                             }}
                                                             className={cn(
                                                                 "px-3 py-2 rounded-xl border border-white/10 bg-black/20 text-sm text-foreground",
-                                                                isSelf && "opacity-60 cursor-not-allowed"
+                                                                (isBusy || isSelf) && "opacity-60 cursor-not-allowed"
                                                             )}
                                                         >
                                                             <option value="USER">USER</option>
@@ -676,14 +716,14 @@ export const UserAccountArea = () => {
 
                                                         <button
                                                             type="button"
-                                                            disabled={isSelf || roleLoadingId === managedUser.id || selectedRole === managedUser.role}
+                                                            disabled={isSelf || isBusy || selectedRole === managedUser.role}
                                                             onClick={() => void handleUpdateRole(managedUser.id, selectedRole)}
                                                             className={cn(
                                                                 "px-3 py-2 rounded-xl border border-primary/30 text-primary text-sm font-medium transition-colors hover:bg-primary/10",
-                                                                (isSelf || selectedRole === managedUser.role) && "opacity-60 cursor-not-allowed"
+                                                                (isSelf || isBusy || selectedRole === managedUser.role) && "opacity-60 cursor-not-allowed"
                                                             )}
                                                         >
-                                                            {roleLoadingId === managedUser.id ? 'Applying...' : 'Apply role'}
+                                                            {isRoleLoading ? 'Applying...' : 'Apply role'}
                                                         </button>
                                                     </div>
                                                 </div>

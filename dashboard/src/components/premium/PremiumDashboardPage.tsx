@@ -359,7 +359,7 @@ export const PremiumDashboardPage = () => {
                         onDrop={() => handleDrop('logs', 'history')}
                         title="Full Trade History"
                     >
-                        <TradeHistory />
+                        <TradeHistory expanded />
                     </PremiumCard>
                 );
             default:

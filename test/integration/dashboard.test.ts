@@ -123,4 +123,30 @@ describe('Dashboard API Integration Tests', () => {
         expect(res.status).toBe(200);
         expect(res.body).toHaveProperty('status', 'SUSPENDED');
     });
+
+    it('DELETE /api/admin/users/:id should remove a managed user', async () => {
+        const email = uniqueEmail("delete.user");
+        const created = await request(app)
+            .post('/api/admin/users')
+            .set('Authorization', `Bearer ${mockToken}`)
+            .send({ email, name: "Delete User" });
+
+        const userId = created.body?.id;
+        expect(userId).toBeTruthy();
+
+        const deleted = await request(app)
+            .delete(`/api/admin/users/${userId}`)
+            .set('Authorization', `Bearer ${mockToken}`);
+
+        expect(deleted.status).toBe(200);
+        expect(deleted.body).toHaveProperty('success', true);
+        expect(deleted.body.user).toHaveProperty('email', email);
+
+        const users = await request(app)
+            .get('/api/admin/users')
+            .set('Authorization', `Bearer ${mockToken}`);
+
+        expect(users.status).toBe(200);
+        expect(users.body.find((user: any) => user.id === userId)).toBeUndefined();
+    });
 });

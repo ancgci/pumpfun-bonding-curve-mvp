@@ -20,6 +20,7 @@ import bs58 from "bs58";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
     buildClientUser,
+    deleteUser,
     ensureBootstrapAdminUser,
     getUserByEmail,
     getUserById,
@@ -48,6 +49,9 @@ const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "sr.antoniocarlos@gmail.com";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5174";
 const BOT_WALLET_FILE = path.join(__dirname, "../bot-wallet.json");
 const WALLET_ADDRESS_ENV = process.env.WALLET_PUBLIC_ADDRESS || process.env.WALLET_ADDRESS || null;
+const DEFAULT_HISTORY_LIMIT = 20;
+const MAX_HISTORY_LIMIT = 300;
+const EXPANDED_HISTORY_LIMIT = 150;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 const connection = new Connection(CONFIG.RPC_URL, "confirmed");
 
@@ -519,7 +523,7 @@ app.get("/api/me/trades", (req: Request, res: Response) => {
         if (!context) return res.status(401).json({ error: "Account not found" });
         syncLegacyScopeDataIfNeeded(context);
 
-        const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
+        const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, parseInt(req.query.limit as string || String(DEFAULT_HISTORY_LIMIT))));
         const trades = getScopedTrades({
             userId: context.user.id,
             walletId: context.walletId,
@@ -728,6 +732,22 @@ app.patch("/api/admin/users/:id/role", requireAdmin, (req: Request, res: Respons
 
         const updated = updateUserRole(userId, role);
         return res.json(updated);
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+app.delete("/api/admin/users/:id", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const userId = Number(req.params.id);
+        const authUser = getRequestUser(req);
+
+        if (authUser && authUser.id === userId) {
+            return res.status(400).json({ error: "Cannot delete your own account" });
+        }
+
+        const deleted = deleteUser(userId);
+        return res.json({ success: true, user: deleted });
     } catch (error: any) {
         return res.status(400).json({ error: error.message });
     }
@@ -1298,7 +1318,7 @@ app.get("/api/simulation/status", (req, res) => {
  */
 app.get("/api/simulation/trades", (req, res) => {
     try {
-        const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
+        const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, parseInt(req.query.limit as string || String(DEFAULT_HISTORY_LIMIT))));
         const rows = db.prepare(`
             SELECT 
                 token_mint as tokenMint,
@@ -1897,7 +1917,27 @@ export function broadcastDashboardUpdate() {
         const plHistory = getPnLHistory(30);
 
         // Recent simulation trades
-        const simTrades = db.prepare(`SELECT * FROM simulated_trades ORDER BY entry_time DESC LIMIT 20`).all();
+        const simTrades = db.prepare(`
+            SELECT
+                token_mint as tokenMint,
+                token_symbol as tokenSymbol,
+                entry_time as entryTime,
+                entry_price as entryPrice,
+                entry_amount as entryAmount,
+                exit_time as exitTime,
+                exit_price as exitPrice,
+                pnl_sol as pnl,
+                pnl_percent as pnlPercent,
+                confidence,
+                status,
+                reason,
+                token_holders as tokenHolders,
+                market_cap_entry as marketCapEntry,
+                market_cap_exit as marketCapExit
+            FROM simulated_trades
+            ORDER BY entry_time DESC
+            LIMIT ?
+        `).all(EXPANDED_HISTORY_LIMIT);
 
         io.emit("dashboardUpdate", {
             stats,

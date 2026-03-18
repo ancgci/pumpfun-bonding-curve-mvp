@@ -3,6 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { History, ExternalLink } from "lucide-react";
 
+interface TradeHistoryProps {
+  expanded?: boolean;
+}
+
 function getTrojanLink(mint: string): string {
   // Using the web terminal interface as requested
   return `https://trojan.com/terminal?token=${mint}&ref=juniocarlosbr`;
@@ -25,8 +29,9 @@ function getStatusBadge(status: string, pnl: number) {
   return <Badge variant="secondary">{status}</Badge>;
 }
 
-export function TradeHistory() {
+export function TradeHistory({ expanded = false }: TradeHistoryProps) {
   const { tradeHistory, simTrades } = useDashboardData();
+  const viewportHeightClass = expanded ? "max-h-[1500px]" : "max-h-[500px]";
 
   const rawTrades =
     simTrades && simTrades.length > 0 ? simTrades : tradeHistory || [];
@@ -76,7 +81,7 @@ export function TradeHistory() {
             No recent trades found.
           </div>
         ) : (
-          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+          <div className={`overflow-x-auto overflow-y-auto ${viewportHeightClass}`}>
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-muted-foreground uppercase bg-black/20 sticky top-0">
                 <tr>

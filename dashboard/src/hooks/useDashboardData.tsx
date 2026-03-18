@@ -5,6 +5,7 @@ import api, { API_BASE } from "@/lib/axios";
 const SOCKET_URL = window.location.hostname === "localhost"
   ? "http://localhost:3001"
   : window.location.origin;
+const DASHBOARD_HISTORY_LIMIT = 150;
 
 export interface DashboardData {
   stats: any;
@@ -139,9 +140,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         apiFetch(`${API_BASE}/me/stats`).catch(() => null),
         apiFetch(`${API_BASE}/me/positions`).catch(() => []),
         apiFetch(`${API_BASE}/agent/stats`).catch(() => null),
-        apiFetch(`${API_BASE}/me/trades?limit=50`).catch(() => []),
+        apiFetch(`${API_BASE}/me/trades?limit=${DASHBOARD_HISTORY_LIMIT}`).catch(() => []),
         apiFetch(`${API_BASE}/simulation/status`).catch(() => null),
-        apiFetch(`${API_BASE}/simulation/trades?limit=50`).catch(() => []),
+        apiFetch(`${API_BASE}/simulation/trades?limit=${DASHBOARD_HISTORY_LIMIT}`).catch(() => []),
         apiFetch(`${API_BASE}/agent/patterns`).catch(() => null),
         apiFetch(`${API_BASE}/bot-health`).catch(() => null),
         apiFetch(`${API_BASE}/me/trading-config`).catch(() => null),
