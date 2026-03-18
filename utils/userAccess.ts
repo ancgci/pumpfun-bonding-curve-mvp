@@ -142,6 +142,7 @@ export function ensureBootstrapAdminUser(params: {
     name?: string | null;
     picture?: string | null;
     walletPublicKey?: string | null;
+    walletSecretRef?: string | null;
 }) {
     const email = normalizeEmail(params.email);
     const displayName = params.name?.trim() || 'Admin';
@@ -188,6 +189,7 @@ export function ensureBootstrapAdminUser(params: {
             label: 'Primary Bot Wallet',
             status: 'ACTIVE',
             isDefault: true,
+            secretRef: params.walletSecretRef || null,
         });
     }
 
@@ -223,25 +225,35 @@ export function ensureUserWallet(params: {
 }) {
     const normalizedPublicKey = params.publicKey.trim();
     const existing = db.prepare(`SELECT ${selectWalletColumns} FROM user_wallets WHERE user_id = ? AND public_key = ?`).get(params.userId, normalizedPublicKey) as RawWalletRow | undefined;
+    const tx = db.transaction(() => {
+        if (params.isDefault) {
+            db.prepare(`
+                UPDATE user_wallets
+                SET is_default = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            `).run(params.userId);
+        }
 
-    if (existing) {
-        db.prepare(`
-            UPDATE user_wallets
-            SET
-                label = ?,
-                status = ?,
-                is_default = ?,
-                secret_ref = COALESCE(?, secret_ref),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `).run(
-            params.label || existing.label,
-            params.status || existing.status,
-            params.isDefault ? 1 : existing.isDefault,
-            params.secretRef || null,
-            existing.id
-        );
-    } else {
+        if (existing) {
+            db.prepare(`
+                UPDATE user_wallets
+                SET
+                    label = ?,
+                    status = ?,
+                    is_default = ?,
+                    secret_ref = COALESCE(?, secret_ref),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `).run(
+                params.label || existing.label,
+                params.status || existing.status,
+                params.isDefault ? 1 : existing.isDefault,
+                params.secretRef || null,
+                existing.id
+            );
+            return;
+        }
+
         db.prepare(`
             INSERT INTO user_wallets (
                 user_id,
@@ -259,7 +271,9 @@ export function ensureUserWallet(params: {
             params.status || 'ACTIVE',
             params.isDefault ? 1 : 0
         );
-    }
+    });
+
+    tx();
 
     const row = db.prepare(`SELECT ${selectWalletColumns} FROM user_wallets WHERE user_id = ? AND public_key = ?`).get(params.userId, normalizedPublicKey) as RawWalletRow | undefined;
     const wallet = mapWalletRow(row);
@@ -280,6 +294,39 @@ export function listUserWallets(userId: number) {
     `).all(userId) as RawWalletRow[];
 
     return rows.map((row) => mapWalletRow(row)).filter(Boolean) as UserWalletRecord[];
+}
+
+export function getUserWalletById(userId: number, walletId: number) {
+    const row = db.prepare(`
+        SELECT ${selectWalletColumns}
+        FROM user_wallets
+        WHERE user_id = ? AND id = ?
+        LIMIT 1
+    `).get(userId, walletId) as RawWalletRow | undefined;
+
+    return mapWalletRow(row);
+}
+
+export function setUserWalletDefault(userId: number, walletId: number) {
+    const wallet = getUserWalletById(userId, walletId);
+    if (!wallet) throw new Error('Wallet not found');
+
+    const tx = db.transaction(() => {
+        db.prepare(`
+            UPDATE user_wallets
+            SET is_default = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `).run(userId);
+
+        db.prepare(`
+            UPDATE user_wallets
+            SET is_default = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND id = ?
+        `).run(userId, walletId);
+    });
+
+    tx();
+    return getUserWalletById(userId, walletId);
 }
 
 export function listAllWalletsWithOwners() {

@@ -28,6 +28,7 @@ import { positionManager } from "./positionManager";
 import type { Position } from "./positionManager";
 import { getRuntimeConfig } from "./config";
 import { notifyDashboardUpdate } from "./broadcastOptimizer";
+import { getActiveTradingWallet } from "./walletStore";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -84,6 +85,14 @@ const jupiterApi = createJupiterApiClient({
   apiKey: JUPITER_API_KEY,
 });
 
+function getTradingKeypair(): Keypair {
+  const activeWallet = getActiveTradingWallet();
+  if (activeWallet?.keypair) {
+    return activeWallet.keypair;
+  }
+  throw new Error("No active trading wallet with private key configured");
+}
+
 async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 500): Promise<T> {
   let lastError: any;
   for (let i = 0; i < attempts; i++) {
@@ -109,7 +118,8 @@ async function getTokenPrice(tokenMint: string): Promise<PriceInfo | null> {
   try {
     const connection = await getConnection();
     const mintPublicKey = new PublicKey(tokenMint);
-    const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, keypair!.publicKey);
+    const signer = getTradingKeypair();
+    const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, signer.publicKey);
 
     const accountInfo = await connection.getParsedAccountInfo(userTokenAccount);
     if (!accountInfo.value || !accountInfo.value.data) {
@@ -239,26 +249,11 @@ export function checkTakeProfitStopLoss(
     profitLossPercent: pl
   };
 }
-// Load wallet
-let keypair: Keypair | null = null;
-logger.info(`SECRET_KEY_JSON present: ${!!process.env.SECRET_KEY_JSON}`);
-if (process.env.SECRET_KEY_JSON) {
-  try {
-    const secretKeyArray = JSON.parse(process.env.SECRET_KEY_JSON);
-    logger.info(`Key array size: ${secretKeyArray.length}`);
-    if (Array.isArray(secretKeyArray) && secretKeyArray.length === 64) {
-      const secretKey = Uint8Array.from(secretKeyArray);
-      keypair = Keypair.fromSecretKey(secretKey);
-      logger.info("Private key loaded successfully");
-      logger.info(`Bot Wallet: ${keypair.publicKey.toBase58()}`);
-    } else {
-      logger.error("Invalid SECRET_KEY_JSON format - must be an array with 64 elements");
-    }
-  } catch (error: any) {
-    logger.error("Error loading private key:", error.message);
-  }
+const initialActiveWallet = getActiveTradingWallet();
+if (initialActiveWallet?.publicKey) {
+  logger.info(`Active trading wallet: ${initialActiveWallet.publicKey} (${initialActiveWallet.source})`);
 } else {
-  logger.warn("SECRET_KEY_JSON not configured - trading operations will be simulated");
+  logger.warn("No active trading wallet configured - trading operations will be simulated");
 }
 
 // Usar PositionManager para persistência de posições
@@ -304,13 +299,10 @@ export function isTradeTypeAllowed(tradeType: string): boolean {
  * @returns Assinatura da transação
  */
 export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promise<string> {
-  if (!keypair) {
-    throw new Error("Keypair não disponível para executar trade");
-  }
-
   logger.info(`🛒 Iniciando compra do token ${tokenMint} na PumpFun`);
 
   try {
+    const signer = getTradingKeypair();
     // OTIMIZAÇÃO: Obter conexão do pool de RPCs
     const connection = await getConnection();
 
@@ -339,7 +331,7 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
 
     const associatedUser = await getAssociatedTokenAddress(
       mintPublicKey,
-      keypair.publicKey
+      signer.publicKey
     );
 
     // OTIMIZAÇÃO: Slippage adaptativo baseado na liquidez do token
@@ -358,7 +350,7 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
         { pubkey: bondingCurve, isSigner: false, isWritable: true },
         { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
         { pubkey: associatedUser, isSigner: false, isWritable: true },
-        { pubkey: keypair.publicKey, isSigner: true, isWritable: true },
+        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
@@ -379,7 +371,7 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
 
     // Preparar mensagem da transação (v0 para Jito, legacy para fallback)
     const messageV0 = new TransactionMessage({
-      payerKey: keypair.publicKey,
+      payerKey: signer.publicKey,
       recentBlockhash: latestBlockhash.blockhash,
       instructions: [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
@@ -389,12 +381,12 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
     }).compileToV0Message();
 
     const versionedTransaction = new VersionedTransaction(messageV0);
-    versionedTransaction.sign([keypair]);
+    versionedTransaction.sign([signer]);
 
     // Tentar enviar via Jito primeiro
     try {
       logger.info("⚡ Tentando enviar via Jito Bundle...");
-      const signature = await sendJitoBundle([versionedTransaction], keypair, connection);
+      const signature = await sendJitoBundle([versionedTransaction], signer, connection);
       logger.info(`✅ Compra realizada com sucesso via Jito: ${signature}`);
       return signature;
     } catch (jitoError) {
@@ -407,7 +399,7 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
         buyInstruction
       );
 
-      const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+      const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
         commitment: "confirmed",
         skipPreflight: false,
       });
@@ -428,13 +420,10 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
  * @returns Assinatura da transação
  */
 export async function sellOnPumpFun(tokenMint: string, amountToken: number): Promise<string> {
-  if (!keypair) {
-    throw new Error("Keypair não disponível para executar trade");
-  }
-
   logger.info(`📉 Iniciando venda do token ${tokenMint} na PumpFun`);
 
   try {
+    const signer = getTradingKeypair();
     // OTIMIZAÇÃO: Obter conexão do pool de RPCs
     const connection = await getConnection();
 
@@ -478,7 +467,7 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
 
     const associatedUser = await getAssociatedTokenAddress(
       mintPublicKey,
-      keypair.publicKey
+      signer.publicKey
     );
 
     const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
@@ -495,7 +484,7 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
         { pubkey: bondingCurve, isSigner: false, isWritable: true },
         { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
         { pubkey: associatedUser, isSigner: false, isWritable: true },
-        { pubkey: keypair.publicKey, isSigner: true, isWritable: true },
+        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
@@ -515,7 +504,7 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
 
     // Preparar mensagem da transação (v0 para Jito, legacy para fallback)
     const messageV0 = new TransactionMessage({
-      payerKey: keypair.publicKey,
+      payerKey: signer.publicKey,
       recentBlockhash: latestBlockhash.blockhash,
       instructions: [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
@@ -525,12 +514,12 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
     }).compileToV0Message();
 
     const versionedTransaction = new VersionedTransaction(messageV0);
-    versionedTransaction.sign([keypair]);
+    versionedTransaction.sign([signer]);
 
     // Tentar enviar via Jito primeiro
     try {
       logger.info("⚡ Tentando enviar VENDA via Jito Bundle...");
-      const signature = await sendJitoBundle([versionedTransaction], keypair, connection);
+      const signature = await sendJitoBundle([versionedTransaction], signer, connection);
       logger.info(`✅ Venda realizada com sucesso via Jito: ${signature}`);
       return signature;
     } catch (jitoError) {
@@ -543,7 +532,7 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
         sellInstruction
       );
 
-      const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+      const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
         commitment: "confirmed",
         skipPreflight: false,
       });
@@ -565,13 +554,10 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
  * @returns Assinatura da transação
  */
 export async function sellViaJupiter(tokenMint: string, amountToken: number): Promise<string> {
-  if (!keypair) {
-    throw new Error("Keypair não disponível para executar trade");
-  }
-
   logger.info(`🔁 Iniciando venda do token ${tokenMint} via Jupiter`);
 
   try {
+    const signer = getTradingKeypair();
     const currentConfig = getRuntimeConfig();
     const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
 
@@ -594,7 +580,7 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
     const mintPublicKey = new PublicKey(tokenMint);
     const userTokenAccount = await getAssociatedTokenAddress(
       mintPublicKey,
-      keypair.publicKey
+      signer.publicKey
     );
 
     // Obter cotação da Jupiter API (token -> SOL)
@@ -621,7 +607,7 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
       return await jupiterApi.swapInstructionsPost({
         swapRequest: {
           quoteResponse: quote,
-          userPublicKey: keypair.publicKey.toString(),
+          userPublicKey: signer.publicKey.toString(),
           wrapAndUnwrapSol: true,
         },
       });
@@ -681,7 +667,7 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
     );
 
     // Enviar e confirmar transação
-    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair], {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
       commitment: "confirmed",
       skipPreflight: false,
     });

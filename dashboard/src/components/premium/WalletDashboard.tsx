@@ -16,17 +16,26 @@ import { useDashboardData } from '../../hooks/useDashboardData';
 import api, { API_BASE } from '@/lib/axios';
 
 type WalletTab = 'saldo' | 'depositar' | 'sacar' | 'historico' | 'configuracoes';
+type ManagedWallet = {
+    id: number;
+    label: string;
+    publicKey: string;
+    status: string;
+    isDefault: boolean;
+};
 
 export const WalletDashboard = () => {
     const [activeTab, setActiveTab] = useState<WalletTab>('saldo');
-    const { stats, tradeHistory, walletBalances } = useDashboardData();
+    const { stats, tradeHistory, walletBalances, refreshData } = useDashboardData();
     const [copied, setCopied] = useState(false);
     const [exportedSecret, setExportedSecret] = useState<string>('');
     const [walletAddressState, setWalletAddressState] = useState<string>((stats as any)?.walletAddress || "");
     const [loadingWallet, setLoadingWallet] = useState(false);
+    const [managedWallets, setManagedWallets] = useState<ManagedWallet[]>([]);
 
     const solBalance = Number(walletBalances?.solBalance ?? (stats as any)?.walletSol ?? stats?.totalPnL ?? 0);
-    const walletAddress = walletAddressState || walletBalances?.address || (stats as any)?.walletAddress || "";
+    const activeWallet = managedWallets.find((wallet) => wallet.isDefault) || null;
+    const walletAddress = walletAddressState || activeWallet?.publicKey || walletBalances?.address || (stats as any)?.walletAddress || "";
 
     const copyAddress = () => {
         if (!walletAddress) return;
@@ -41,6 +50,24 @@ export const WalletDashboard = () => {
         }
     }, [walletBalances]);
 
+    const loadAccountWallets = async () => {
+        try {
+            const { data } = await api.get(`${API_BASE}/me/account`);
+            const wallets = Array.isArray(data?.wallets) ? data.wallets : [];
+            setManagedWallets(wallets);
+            const defaultWallet = wallets.find((wallet: ManagedWallet) => wallet.isDefault) || wallets[0];
+            if (defaultWallet?.publicKey) {
+                setWalletAddressState(defaultWallet.publicKey);
+            }
+        } catch (err) {
+            console.error('Load account wallets failed', err);
+        }
+    };
+
+    useEffect(() => {
+        void loadAccountWallets();
+    }, []);
+
     const copySecret = () => {
         if (!exportedSecret) return;
         navigator.clipboard.writeText(exportedSecret);
@@ -48,10 +75,12 @@ export const WalletDashboard = () => {
         setTimeout(() => setCopied(false), 2000);
     };
 
-    const handleExportWallet = async () => {
+    const handleExportWallet = async (walletId?: number) => {
         try {
             setLoadingWallet(true);
-            const { data } = await api.get(`${API_BASE}/wallet/export`);
+            const { data } = await api.get(`${API_BASE}/wallet/export`, {
+                params: walletId ? { walletId } : undefined,
+            });
             setExportedSecret(data.secretBase58 || '');
             if (data.publicKey) setWalletAddressState(data.publicKey);
         } catch (err) {
@@ -63,15 +92,33 @@ export const WalletDashboard = () => {
     };
 
     const handleCreateWallet = async () => {
-        if (!confirm('Gerar nova carteira irá sobrescrever a chave atual do bot. Deseja continuar?')) return;
         try {
             setLoadingWallet(true);
-            const { data } = await api.post(`${API_BASE}/wallet/new`);
+            const suggestedLabel = `Trading Wallet ${managedWallets.length + 1}`;
+            const label = window.prompt('Nome da nova wallet', suggestedLabel)?.trim() || suggestedLabel;
+            const { data } = await api.post(`${API_BASE}/wallet/new`, { label });
             setExportedSecret(data.secretBase58 || '');
             if (data.publicKey) setWalletAddressState(data.publicKey);
+            await loadAccountWallets();
+            await refreshData();
         } catch (err) {
             console.error('Create wallet failed', err);
             alert('Erro ao criar carteira. Verifique logs do backend.');
+        } finally {
+            setLoadingWallet(false);
+        }
+    };
+
+    const handleActivateWallet = async (walletId: number) => {
+        try {
+            setLoadingWallet(true);
+            await api.post(`${API_BASE}/wallet/select/${walletId}`);
+            await loadAccountWallets();
+            await refreshData();
+            setExportedSecret('');
+        } catch (err) {
+            console.error('Select wallet failed', err);
+            alert('Erro ao ativar carteira. Verifique o backend.');
         } finally {
             setLoadingWallet(false);
         }
@@ -105,6 +152,58 @@ export const WalletDashboard = () => {
                                 </button>
                             </div>
                         </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-bold text-primary uppercase tracking-widest">Managed Wallets</h4>
+                                <span className="text-xs text-muted-foreground">{managedWallets.length} wallet(s)</span>
+                            </div>
+
+                            <div className="space-y-3">
+                                {managedWallets.map((wallet) => (
+                                    <div key={wallet.id} className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-3">
+                                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2">
+                                                    <p className="font-bold text-foreground">{wallet.label}</p>
+                                                    {wallet.isDefault && (
+                                                        <span className="px-2 py-1 rounded-full bg-primary/15 text-primary text-[10px] font-bold uppercase tracking-wider">
+                                                            Ativa no bot
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-muted-foreground font-mono break-all">{wallet.publicKey}</p>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                {!wallet.isDefault && (
+                                                    <button
+                                                        onClick={() => { void handleActivateWallet(wallet.id); }}
+                                                        disabled={loadingWallet}
+                                                        className="px-3 py-2 rounded-xl text-xs font-bold bg-primary/15 text-primary hover:bg-primary/25 border border-primary/20 disabled:opacity-50"
+                                                    >
+                                                        Ativar
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={() => { void handleExportWallet(wallet.id); }}
+                                                    disabled={loadingWallet}
+                                                    className="px-3 py-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
+                                                >
+                                                    Exportar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {managedWallets.length === 0 && (
+                                    <div className="p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-muted-foreground">
+                                        Nenhuma wallet cadastrada ainda.
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         <PremiumCard title="Asset Portfolio">
@@ -346,7 +445,7 @@ export const WalletDashboard = () => {
                 actions={
                     <div className="flex items-center gap-2">
                         <button
-                            onClick={handleExportWallet}
+                            onClick={() => { void handleExportWallet(activeWallet?.id); }}
                             disabled={loadingWallet}
                             className="px-3 py-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
                         >
@@ -355,9 +454,9 @@ export const WalletDashboard = () => {
                         <button
                             onClick={handleCreateWallet}
                             disabled={loadingWallet}
-                            className="px-3 py-2 rounded-xl text-xs font-bold bg-red-500/20 text-red-200 hover:bg-red-500/30 border border-red-500/30 disabled:opacity-50"
+                            className="px-3 py-2 rounded-xl text-xs font-bold bg-primary/15 text-primary hover:bg-primary/25 border border-primary/20 disabled:opacity-50"
                         >
-                            {loadingWallet ? '...' : 'Criar nova carteira'}
+                            {loadingWallet ? '...' : 'Criar wallet'}
                         </button>
                     </div>
                 }

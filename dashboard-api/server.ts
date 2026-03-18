@@ -16,17 +16,19 @@ import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import bs58 from "bs58";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
     buildClientUser,
     deleteUser,
     ensureBootstrapAdminUser,
+    ensureUserWallet,
     getUserByEmail,
     getUserById,
+    getUserWalletById,
     listAllWalletsWithOwners,
     listUserWallets,
     listUsersWithWalletCounts,
+    setUserWalletDefault,
     touchUserLogin,
     createUser,
     updateUserStatus,
@@ -41,14 +43,18 @@ import {
     resolvePrimaryWalletId,
     upsertScopedTradingConfig,
 } from "../utils/userScopedData";
+import {
+    createManagedWalletSecret,
+    exportWalletSecretBase58,
+    getActiveTradingWalletAddress,
+    loadConfiguredFallbackWallet,
+} from "../utils/walletStore";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
 const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "sr.antoniocarlos@gmail.com";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5174";
-const BOT_WALLET_FILE = path.join(__dirname, "../bot-wallet.json");
-const WALLET_ADDRESS_ENV = process.env.WALLET_PUBLIC_ADDRESS || process.env.WALLET_ADDRESS || null;
 const DEFAULT_HISTORY_LIMIT = 20;
 const MAX_HISTORY_LIMIT = 300;
 const EXPANDED_HISTORY_LIMIT = 150;
@@ -60,19 +66,6 @@ function signAccessToken(payload: object) {
 }
 function signRefreshToken(payload: object) {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
-}
-
-function loadBotWallet() {
-    try {
-        if (!fs.existsSync(BOT_WALLET_FILE)) return null;
-        const raw = JSON.parse(fs.readFileSync(BOT_WALLET_FILE, "utf-8"));
-        const secretKey = Uint8Array.from(raw);
-        const kp = Keypair.fromSecretKey(secretKey);
-        return { publicKey: kp.publicKey.toBase58(), secretKey };
-    } catch (err) {
-        console.error("Erro ao carregar bot-wallet.json", err);
-        return null;
-    }
 }
 
 function loadSimTradesFallback(limit: number) {
@@ -87,16 +80,18 @@ function loadSimTradesFallback(limit: number) {
     }
 }
 
-function getBootstrapWalletAddress() {
-    return WALLET_ADDRESS_ENV || loadBotWallet()?.publicKey || null;
+function getBootstrapWalletInfo() {
+    return loadConfiguredFallbackWallet();
 }
 
 function syncBootstrapAdminUser(profile?: { name?: string | null; picture?: string | null }) {
+    const bootstrapWallet = getBootstrapWalletInfo();
     return ensureBootstrapAdminUser({
         email: ALLOWED_EMAIL,
         name: profile?.name || "Admin",
         picture: profile?.picture || null,
-        walletPublicKey: getBootstrapWalletAddress(),
+        walletPublicKey: bootstrapWallet?.publicKey || null,
+        walletSecretRef: bootstrapWallet?.secretRef || null,
     });
 }
 
@@ -200,7 +195,7 @@ function getScopedRequestContext(req: Request) {
 
 function shouldSyncLegacyScope(context: { user: any; wallet: any | null }) {
     if (!context.wallet) return false;
-    const bootstrapWalletAddress = getBootstrapWalletAddress();
+    const bootstrapWalletAddress = getActiveTradingWalletAddress();
     if (!bootstrapWalletAddress) return false;
     return context.wallet.publicKey === bootstrapWalletAddress;
 }
@@ -603,7 +598,7 @@ app.get("/api/admin/overview", requireAdmin, (req: Request, res: Response) => {
         };
         const trades = loadAgentTrades();
         const totalPnl = trades.reduce((sum: number, trade: any) => sum + Number(trade.pnl || trade.pnl_sol || 0), 0);
-        const currentWalletAddress = getBootstrapWalletAddress();
+        const currentWalletAddress = getActiveTradingWalletAddress();
 
         const users = listUsersWithWalletCounts().map((row) => ({
             id: Number(row.id),
@@ -779,6 +774,72 @@ const TRADING_CONFIG_FILE = path.join(__dirname, "../data/trading-config.json");
 const EMERGENCY_STOP_FILE = path.join(__dirname, "../data/emergency-stop.json");
 const PROTOCOL_CONFIG_FILE = path.join(__dirname, "../data/protocol-config.json");
 
+function invalidateWalletBalanceCache() {
+    cachedBalances = null;
+    lastBalanceFetch = 0;
+}
+
+function readTradingConfigFile() {
+    try {
+        if (!fs.existsSync(TRADING_CONFIG_FILE)) return {};
+        return JSON.parse(fs.readFileSync(TRADING_CONFIG_FILE, "utf-8"));
+    } catch {
+        return {};
+    }
+}
+
+function writeJsonFile(filePath: string, value: unknown) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function switchRuntimeWalletContext(userId: number, nextWalletId: number, previousWalletId?: number | null) {
+    const currentPositions = loadPositions();
+    const currentTrades = loadAgentTrades();
+    const currentTradingConfig = readTradingConfigFile();
+
+    if (previousWalletId && previousWalletId !== nextWalletId) {
+        replaceScopedPositions({
+            userId,
+            walletId: previousWalletId,
+            positions: currentPositions,
+        });
+        replaceScopedTrades({
+            userId,
+            walletId: previousWalletId,
+            trades: currentTrades,
+        });
+        upsertScopedTradingConfig({
+            userId,
+            walletId: previousWalletId,
+            config: currentTradingConfig,
+        });
+    }
+
+    const nextPositions = getScopedPositions({
+        userId,
+        walletId: nextWalletId,
+    });
+    const nextTrades = getScopedTrades({
+        userId,
+        walletId: nextWalletId,
+        limit: 500,
+    });
+    const nextTradingConfig = getScopedTradingConfig({
+        userId,
+        walletId: nextWalletId,
+    }) || {};
+    const runtimeTradingConfig = {
+        ...getTradingConfigDefaults(),
+        ...nextTradingConfig,
+    };
+
+    writeJsonFile(POSITIONS_FILE, nextPositions);
+    writeJsonFile(AGENT_TRADES_FILE, nextTrades);
+    writeJsonFile(TRADING_CONFIG_FILE, runtimeTradingConfig);
+    invalidateWalletBalanceCache();
+}
+
 /**
  * GET /api/stats - Estatísticas gerais
  */
@@ -802,8 +863,7 @@ app.get("/api/stats", (req, res) => {
             return p.buyTimestamp && Date.now() - p.buyTimestamp < 3600000;
         }).length;
         const losses = closed.length - wins;
-        const walletInfo = loadBotWallet();
-        const walletAddress = WALLET_ADDRESS_ENV || walletInfo?.publicKey || null;
+        const walletAddress = getActiveTradingWalletAddress();
 
         res.json({
             totalPositions: positions.length,
@@ -922,36 +982,104 @@ app.get("/api/agent/trades", (req, res) => {
 });
 
 /**
- * POST /api/wallet/new - Gera uma nova carteira (sobrescreve bot-wallet.json)
+ * POST /api/wallet/new - Cria uma nova wallet gerenciada para a conta logada
  */
 app.post("/api/wallet/new", (req, res) => {
     try {
+        const user = getRequestUser(req);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+
+        const existingWallets = listUserWallets(user.id);
+        const nextIndex = existingWallets.length + 1;
+        const makeDefault = req.body?.makeDefault === true || existingWallets.length === 0;
+        const label = String(req.body?.label || `Trading Wallet ${nextIndex}`).trim();
+        const previousDefaultWallet = existingWallets.find((wallet) => wallet.isDefault) || existingWallets[0] || null;
+
         const kp = Keypair.generate();
-        const secretArray = Array.from(kp.secretKey);
-        fs.writeFileSync(BOT_WALLET_FILE, JSON.stringify(secretArray, null, 2));
-        res.json({
-            publicKey: kp.publicKey.toBase58(),
-            secretBase58: bs58.encode(kp.secretKey),
+        const storedSecret = createManagedWalletSecret(kp);
+        const wallet = ensureUserWallet({
+            userId: user.id,
+            publicKey: storedSecret.publicKey,
+            secretRef: storedSecret.secretRef,
+            label,
+            status: "ACTIVE",
+            isDefault: makeDefault,
+        });
+
+        if (makeDefault) {
+            switchRuntimeWalletContext(user.id, wallet.id, previousDefaultWallet?.id || null);
+        }
+
+        return res.status(201).json({
+            id: wallet.id,
+            label: wallet.label,
+            publicKey: wallet.publicKey,
+            status: wallet.status,
+            isDefault: wallet.isDefault,
+            secretBase58: storedSecret.secretBase58,
             savedAt: new Date().toISOString(),
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: error.message });
     }
 });
 
 /**
- * GET /api/wallet/export - Exporta carteira atual (pública + privada base58)
+ * POST /api/wallet/select/:id - Define a wallet ativa/default do bot
+ */
+app.post("/api/wallet/select/:id", (req, res) => {
+    try {
+        const user = getRequestUser(req);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+
+        const walletId = Number(req.params.id);
+        const previousDefaultWallet = listUserWallets(user.id).find((wallet) => wallet.isDefault) || null;
+        const selected = setUserWalletDefault(user.id, walletId);
+
+        switchRuntimeWalletContext(user.id, selected.id, previousDefaultWallet?.id || null);
+
+        return res.json({
+            success: true,
+            wallet: selected,
+        });
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/wallet/export - Exporta a wallet atual ou uma wallet específica da conta
  */
 app.get("/api/wallet/export", (req, res) => {
     try {
-        const wallet = loadBotWallet();
+        const user = getRequestUser(req);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+
+        const requestedWalletId = Number(req.query.walletId || 0);
+        const wallet = requestedWalletId > 0
+            ? getUserWalletById(user.id, requestedWalletId)
+            : listUserWallets(user.id).find((item) => item.isDefault) || listUserWallets(user.id)[0] || null;
+
         if (!wallet) return res.status(404).json({ error: "Wallet not found" });
+
+        const fallbackConfiguredWallet = loadConfiguredFallbackWallet();
+        const secretBase58 = exportWalletSecretBase58(wallet.secretRef)
+            || (fallbackConfiguredWallet?.publicKey === wallet.publicKey && fallbackConfiguredWallet.secretRef
+                ? exportWalletSecretBase58(fallbackConfiguredWallet.secretRef)
+                : null);
+
+        if (!secretBase58) {
+            return res.status(404).json({ error: "Wallet secret not available" });
+        }
+
         return res.json({
+            id: wallet.id,
+            label: wallet.label,
             publicKey: wallet.publicKey,
-            secretBase58: bs58.encode(wallet.secretKey),
+            secretBase58,
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: error.message });
     }
 });
 
@@ -968,8 +1096,7 @@ app.get("/api/wallet/balances", async (req, res) => {
             return res.json(cachedBalances);
         }
 
-        const walletInfo = loadBotWallet();
-        const address = WALLET_ADDRESS_ENV || walletInfo?.publicKey;
+        const address = getActiveTradingWalletAddress();
         if (!address) return res.status(400).json({ error: "Wallet address not configured" });
 
         const owner = new PublicKey(address);

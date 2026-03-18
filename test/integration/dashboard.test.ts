@@ -149,4 +149,42 @@ describe('Dashboard API Integration Tests', () => {
         expect(users.status).toBe(200);
         expect(users.body.find((user: any) => user.id === userId)).toBeUndefined();
     });
+
+    it('POST /api/wallet/new and POST /api/wallet/select/:id should manage admin wallets', async () => {
+        const created = await request(app)
+            .post('/api/wallet/new')
+            .set('Authorization', `Bearer ${mockToken}`)
+            .send({ label: 'Ops Wallet' });
+
+        expect(created.status).toBe(201);
+        expect(created.body).toHaveProperty('label', 'Ops Wallet');
+        expect(created.body).toHaveProperty('publicKey');
+        expect(created.body).toHaveProperty('secretBase58');
+
+        const walletId = created.body?.id;
+        expect(walletId).toBeTruthy();
+
+        const accountAfterCreate = await request(app)
+            .get('/api/me/account')
+            .set('Authorization', `Bearer ${mockToken}`);
+
+        expect(accountAfterCreate.status).toBe(200);
+        expect(accountAfterCreate.body.wallets.some((wallet: any) => wallet.id === walletId)).toBe(true);
+
+        const selected = await request(app)
+            .post(`/api/wallet/select/${walletId}`)
+            .set('Authorization', `Bearer ${mockToken}`);
+
+        expect(selected.status).toBe(200);
+        expect(selected.body.wallet).toHaveProperty('id', walletId);
+        expect(selected.body.wallet).toHaveProperty('isDefault', true);
+
+        const exported = await request(app)
+            .get(`/api/wallet/export?walletId=${walletId}`)
+            .set('Authorization', `Bearer ${mockToken}`);
+
+        expect(exported.status).toBe(200);
+        expect(exported.body).toHaveProperty('publicKey', created.body.publicKey);
+        expect(exported.body).toHaveProperty('secretBase58');
+    });
 });
