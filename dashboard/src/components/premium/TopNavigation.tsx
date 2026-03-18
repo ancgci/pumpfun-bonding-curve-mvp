@@ -3,11 +3,18 @@ import {
     Bell,
     Settings,
     Sun,
-    Moon
+    Moon,
+    ChevronRight
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 
-export const TopNavigation = () => {
+interface TopNavigationProps {
+    isAccountActive?: boolean;
+    onOpenAccount: () => void;
+}
+
+export const TopNavigation = ({ isAccountActive = false, onOpenAccount }: TopNavigationProps) => {
     const { user } = useAuthStore();
 
     return (
@@ -45,8 +52,16 @@ export const TopNavigation = () => {
                 </button>
 
                 {/* User Profile */}
-                <div className="flex items-center gap-4 pl-4 ml-2 border-l border-white/10">
+                <button
+                    type="button"
+                    onClick={onOpenAccount}
+                    className={cn(
+                        "flex items-center gap-4 pl-4 ml-2 border-l border-white/10 text-left transition-all rounded-2xl pr-3 py-2 hover:bg-white/5",
+                        isAccountActive && "bg-white/5 border-white/10 shadow-[0_0_24px_rgba(162,255,218,0.08)]"
+                    )}
+                >
                     <div className="text-right hidden sm:block">
+                        <p className="text-[10px] uppercase tracking-[0.28em] text-primary/80 mb-1">User Area</p>
                         <p className="text-sm font-semibold text-foreground">{user?.name || "Premium User"}</p>
                         <p className="text-xs text-muted-foreground">{user?.email || "bot.owner@pumpfun.io"}</p>
                     </div>
@@ -58,7 +73,11 @@ export const TopNavigation = () => {
                         />
                         <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${user ? 'bg-green-500' : 'bg-gray-500'}`}></div>
                     </div>
-                </div>
+                    <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-2xl bg-white/5 border border-white/10 text-xs font-medium text-muted-foreground">
+                        <span>{isAccountActive ? "Viewing account" : "Open account"}</span>
+                        <ChevronRight className="w-4 h-4" />
+                    </div>
+                </button>
             </div>
         </header>
     );

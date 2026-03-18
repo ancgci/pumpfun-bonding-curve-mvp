@@ -35,10 +35,47 @@ Quando uma nova funcionalidade estiver pronta e você quiser enviá-la para a pr
 ```
 
 ### O que esse script faz?
-1. Sincroniza (copia) os arquivos locais modificados para a VPS.
-2. Faz login na VPS e roda `npm install` (se houver novas dependências).
-3. Cria um novo "build" do painel de controle (Dashboard).
-4. **Reinicia automaticamente** o bot e a API na VPS para que o novo código entre em vigor imediatamente.
+1. Cria backup remoto dos dados persistentes da VPS antes do envio.
+2. Sincroniza o código local para a VPS via `rsync`.
+3. Faz login na VPS e roda `npm install` (se houver novas dependências).
+4. Cria um novo "build" do painel de controle (Dashboard).
+5. **Reinicia automaticamente** o bot e a API na VPS para que o novo código entre em vigor imediatamente.
+6. Valida a saúde básica da API após o restart.
+
+### Dados persistentes preservados no deploy
+O deploy envia código, mas **não deve sobrescrever arquivos de runtime da VPS**. Os principais itens preservados são:
+
+- `logs/`
+- `data/*.db`
+- `dashboard-api/db/pnl_history.db`
+- `dashboard-api/db/pnl_history.db-shm`
+- `dashboard-api/db/pnl_history.db-wal`
+
+### Backups criados automaticamente na VPS
+Antes de cada deploy, o script cria:
+
+- backup de `data/` em `data_backup_<timestamp>/`
+- backup do histórico do dashboard em `dashboard-api/db/backups/pnl_history_<timestamp>.db`
+
+Para listar esses backups na VPS:
+
+```bash
+cd /home/anto/pumpfun-bot
+ls -lah data_backup_*
+ls -lah dashboard-api/db/backups/
+```
+
+### Restore rápido do banco do histórico
+Se for necessário restaurar manualmente o histórico do dashboard na VPS:
+
+```bash
+cd /home/anto/pumpfun-bot
+cp dashboard-api/db/backups/pnl_history_<timestamp>.db dashboard-api/db/pnl_history.db
+pm2 restart dashboard-api
+```
+
+### Regra operacional importante
+`dashboard-api/db/pnl_history.db` é banco de runtime da VPS. Ele **não deve** ser versionado como fonte de verdade nem enviado do ambiente local para produção.
 
 ---
 
@@ -119,4 +156,3 @@ A VPS opera sob o **Protocolo de Hardening Nível 3**:
 - **Patches**: Atualizações de segurança críticas automáticas.
 
 Para detalhes técnicos completos, veja [SECURITY_HARDENING.md](./SECURITY_HARDENING.md).
-

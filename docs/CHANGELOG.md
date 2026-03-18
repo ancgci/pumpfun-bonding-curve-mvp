@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.4.4] - 2026-03-18
+### 🚀 Added
+- **Multiuser Admin Endpoints**: Introduced full CRUD capabilities in `dashboard-api` for User Management (`GET /api/admin/users`, `POST /api/admin/users`, `PATCH /api/admin/users/:id/status`, `PATCH /api/admin/users/:id/role`, `GET /api/admin/users/:id/wallets`).
+
+### 🔧 Changed
+- **RPC Providers**: Replaced failing GetBlock and NowNodes fallback endpoints with SubQuery (`solana.rpc.subquery.network`) and Infura (`solana-mainnet.infura.io`) for improved connection stability.
+
+### ⚡ Fixed
+- **Bandwidth & CPU Leak**: Resolved a critical issue in `dashboard-api` where polling the entire 76MB `bot.log` file caused 200 Mbit/s bandwidth spikes and 200% CPU usage on the VPS. Replaced synchronous `readFileSync` with efficient `tail` logic (fetching only the last 500 lines).
+- **Rate Limit Loop**: Relaxed aggressive RPC retry polling to prevent continuous 429 floods when rate limited.
+
 ## [1.4.3] - 2026-03-17
 ### Fixed
 - **Dashboard Stability**: Implemented 500ms debounce on file watchers to prevent "blinking" UI caused by race conditions during bot writes.

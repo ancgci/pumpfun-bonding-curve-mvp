@@ -25,7 +25,9 @@ module.exports = {
                 NODE_ENV: 'production',
                 POSTMORTEM_AGENT_ENABLED: process.env.POSTMORTEM_AGENT_ENABLED || 'true',
                 POSTMORTEM_LLM_ENABLED: process.env.POSTMORTEM_LLM_ENABLED || 'false',
-                POSTMORTEM_BATCH_SIZE: process.env.POSTMORTEM_BATCH_SIZE || '5',
+                POSTMORTEM_BATCH_SIZE: process.env.POSTMORTEM_BATCH_SIZE || '20',
+                POSTMORTEM_INTERVAL_MS: process.env.POSTMORTEM_INTERVAL_MS || '300000',
+                LEARNER_INTERVAL_MS: process.env.LEARNER_INTERVAL_MS || '3600000',
             },
             // Restart policy
             max_restarts: 10,

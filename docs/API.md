@@ -4,6 +4,150 @@ Base URL: `http://localhost:3001/api`
 
 ## Endpoints
 
+### GET `/api/me/account`
+
+Retorna a conta autenticada, wallets vinculadas e permissões derivadas do role.
+
+**Response:**
+```json
+{
+  "user": {
+    "id": 1,
+    "email": "admin@example.com",
+    "name": "Admin",
+    "role": "ADMIN",
+    "accessOrigin": "allowlist",
+    "accessStatus": "active",
+    "billingStatus": "not-required",
+    "plan": "Admin Console Access",
+    "joinedAt": "2026-03-18 10:00:00"
+  },
+  "wallets": [
+    {
+      "id": 1,
+      "label": "Primary Bot Wallet",
+      "publicKey": "AbC123...",
+      "status": "ACTIVE",
+      "isDefault": true
+    }
+  ],
+  "permissions": {
+    "isAdmin": true,
+    "canViewAdmin": true,
+    "canManageUsers": true
+  }
+}
+```
+
+---
+
+### GET `/api/admin/overview`
+
+Retorna a visão administrativa agregada do sistema.
+
+**Response:**
+```json
+{
+  "summary": {
+    "totalUsers": 1,
+    "activeUsers": 1,
+    "totalWallets": 1,
+    "totalPnlSol": 0.42,
+    "activePositions": 2,
+    "botMode": "SIMULATION"
+  },
+  "users": [],
+  "wallets": []
+}
+```
+
+**Notas:**
+- Requer role `ADMIN`
+- Nesta primeira fase, a wallet atualmente conectada ao bot aparece como `LIVE`
+- Wallets futuras entram como `PENDING_WALLET_ISOLATION` até a execução multiwallet ser conectada
+
+---
+
+### GET `/api/admin/users`
+
+Lista operacional de usuários para o painel Admin.
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "email": "admin@example.com",
+    "name": "Admin",
+    "role": "ADMIN",
+    "status": "ACTIVE",
+    "accessOrigin": "allowlist",
+    "billingStatus": "not-required",
+    "walletCount": 1,
+    "lastLoginAt": "2026-03-18T10:00:00.000Z",
+    "createdAt": "2026-03-16T10:00:00.000Z"
+  }
+]
+```
+
+---
+
+### POST `/api/admin/users`
+
+Cria um novo usuário na base (via painel administrativo).
+
+**Body exemplo:**
+```json
+{
+  "email": "new.user@example.com",
+  "name": "New User",
+  "role": "USER",
+  "status": "ACTIVE",
+  "accessOrigin": "invite",
+  "billingStatus": "pending",
+  "invitedByUserId": 1
+}
+```
+
+**Response (201):**
+Retorna o objeto do usuário recém-criado.
+
+---
+
+### PATCH `/api/admin/users/:id/status`
+
+Atualiza status da conta informada.
+
+**Body exemplo:**
+```json
+{
+  "status": "SUSPENDED"
+}
+```
+*Valores aceitos*: `ACTIVE`, `PENDING`, `SUSPENDED`.
+
+---
+
+### PATCH `/api/admin/users/:id/role`
+
+Atualiza a permissão (role) da conta. Um administrador não pode rebaixar a si próprio.
+
+**Body exemplo:**
+```json
+{
+  "role": "SUPPORT"
+}
+```
+*Valores aceitos*: `ADMIN`, `USER`, `SUPPORT`.
+
+---
+
+### GET `/api/admin/users/:id/wallets`
+
+Retorna as wallets vinculadas exclusivamente ao usuário informado.
+
+---
+
 ### GET `/api/stats`
 
 Retorna estatísticas gerais do bot.

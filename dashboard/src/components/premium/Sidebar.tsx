@@ -3,14 +3,14 @@ import {
     BarChart3,
     Wallet,
     Hexagon,
-    Target,
     Terminal,
     Brain,
+    UserRound,
     Headphones
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type PremiumTab = 'overview' | 'trading' | 'logs' | 'ai' | 'wallet';
+export type PremiumTab = 'overview' | 'trading' | 'logs' | 'ai' | 'wallet' | 'account';
 
 const SidebarItem = ({ icon: Icon, active = false, onClick }: { icon: any; active?: boolean; onClick?: () => void }) => (
     <div
@@ -43,7 +43,7 @@ export const Sidebar = ({ activeTab, onTabChange }: { activeTab: PremiumTab; onT
                 <SidebarItem icon={Terminal} active={activeTab === 'logs'} onClick={() => onTabChange('logs')} />
                 <SidebarItem icon={Brain} active={activeTab === 'ai'} onClick={() => onTabChange('ai')} />
                 <SidebarItem icon={Wallet} active={activeTab === 'wallet'} onClick={() => onTabChange('wallet')} />
-                <SidebarItem icon={Target} />
+                <SidebarItem icon={UserRound} active={activeTab === 'account'} onClick={() => onTabChange('account')} />
             </nav>
 
             {/* Bottom Actions */}

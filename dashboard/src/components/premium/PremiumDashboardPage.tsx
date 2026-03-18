@@ -16,6 +16,7 @@ import { WalletDashboard } from './WalletDashboard';
 import { PerformanceOverview } from './PerformanceOverview';
 import { LearningBlocks } from './LearningBlocks';
 import { SimulationReadiness } from './SimulationReadiness';
+import { UserAccountArea } from './UserAccountArea';
 
 // Classic component imports
 import { TradingParameters } from '../dashboard/TradingParameters';
@@ -41,6 +42,15 @@ export const PremiumDashboardPage = () => {
     } = useDashboardData();
 
     const { user } = useAuthStore();
+
+    const tabTitles: Record<PremiumTab, string> = {
+        overview: 'Overview',
+        trading: 'Trading',
+        logs: 'Logs',
+        ai: 'AI',
+        wallet: 'Wallet',
+        account: 'Account',
+    };
 
     const [cardOrders, setCardOrders] = useState<Record<string, string[]>>({
         overview: ['performance', 'accuracy', 'activity', 'health', 'positions'],
@@ -427,6 +437,8 @@ export const PremiumDashboardPage = () => {
                 );
             case 'wallet':
                 return <WalletDashboard />;
+            case 'account':
+                return <UserAccountArea />;
             default:
                 return (
                     <div className="grid grid-cols-1 xl:grid-cols-3 gap-10">
@@ -452,7 +464,7 @@ export const PremiumDashboardPage = () => {
                             👋 Welcome In, {user?.name?.split(' ')[0] || "Trader"}!
                         </p>
                         <h1 className="text-4xl md:text-5xl font-bold text-foreground tracking-tight">
-                            {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+                            {tabTitles[activeTab]}
                         </h1>
                     </div>
 

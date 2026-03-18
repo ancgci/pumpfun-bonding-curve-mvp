@@ -2094,28 +2094,54 @@ setInterval(async () => {
   }
 }, 3600000); // 1 hora
 
-async function runLearningWorkers(): Promise<void> {
-  await runPostMortemCycle();
-  await runLearningCycle();
+function getWorkerIntervalMs(envVar: string, fallbackMs: number): number {
+  const raw = process.env[envVar];
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
 }
 
-// Learning Workers: post-mortem first, then self-reflection
+const POSTMORTEM_INTERVAL_MS = getWorkerIntervalMs("POSTMORTEM_INTERVAL_MS", 5 * 60 * 1000);
+const LEARNER_INTERVAL_MS = getWorkerIntervalMs("LEARNER_INTERVAL_MS", 60 * 60 * 1000);
+
+logger.info(
+  `🧠 [LearningWorkers] Configured post-mortem interval=${POSTMORTEM_INTERVAL_MS}ms learner interval=${LEARNER_INTERVAL_MS}ms`
+);
+
+// Post-mortem worker: runs frequently to drain losing-trade backlog.
 setInterval(async () => {
   try {
-    await runLearningWorkers();
+    await runPostMortemCycle();
   } catch (error: any) {
-    logger.error(`❌ [LearningWorkers] Cycle error: ${error.message}`);
+    logger.error(`❌ [PostMortemWorker] Cycle error: ${error.message}`);
   }
-}, 3600000); // 1 hora
+}, POSTMORTEM_INTERVAL_MS);
 
-// Run first learning cycle 30 seconds after boot
+// Learner worker: stays slower to avoid excess LLM churn.
+setInterval(async () => {
+  try {
+    await runLearningCycle();
+  } catch (error: any) {
+    logger.error(`❌ [LearnerWorker] Cycle error: ${error.message}`);
+  }
+}, LEARNER_INTERVAL_MS);
+
+// Run first post-mortem pass shortly after boot so backlog starts draining immediately.
 setTimeout(async () => {
   try {
-    await runLearningWorkers();
+    await runPostMortemCycle();
   } catch (error: any) {
-    logger.error(`❌ [LearningWorkers] Initial cycle error: ${error.message}`);
+    logger.error(`❌ [PostMortemWorker] Initial cycle error: ${error.message}`);
   }
 }, 30000);
+
+// Run first learner cycle after boot, but on a separate cadence from post-mortem.
+setTimeout(async () => {
+  try {
+    await runLearningCycle();
+  } catch (error: any) {
+    logger.error(`❌ [LearnerWorker] Initial cycle error: ${error.message}`);
+  }
+}, 60000);
 
 // Testar o envio imediatamente ao iniciar
 setTimeout(async () => {

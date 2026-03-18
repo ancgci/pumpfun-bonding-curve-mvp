@@ -3,9 +3,23 @@ import jwt from 'jsonwebtoken';
 import { app } from '../../dashboard-api/server';
 
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
-const mockToken = jwt.sign({ email: "test@example.com", name: "Test User" }, JWT_SECRET);
+const adminEmail = process.env.ALLOWED_EMAIL || "sr.antoniocarlos@gmail.com";
+const mockToken = jwt.sign(
+    {
+        userId: 1,
+        email: adminEmail,
+        name: "Admin User",
+        role: "ADMIN",
+        accessStatus: "active",
+        accessOrigin: "allowlist",
+        billingStatus: "not-required",
+    },
+    JWT_SECRET
+);
 
 describe('Dashboard API Integration Tests', () => {
+    const uniqueEmail = (prefix: string) => `${prefix}.${Date.now()}.${Math.floor(Math.random() * 100000)}@example.com`;
+
     it('GET /api/stats should return basic stats', async () => {
         const res = await request(app)
             .get('/api/stats')
@@ -37,5 +51,55 @@ describe('Dashboard API Integration Tests', () => {
             .set('Authorization', `Bearer ${mockToken}`);
         expect(res.status).toBe(200);
         expect(res.body).toHaveProperty('status');
+    });
+
+    it('GET /api/me/account should return account info and wallets', async () => {
+        const res = await request(app)
+            .get('/api/me/account')
+            .set('Authorization', `Bearer ${mockToken}`);
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveProperty('user');
+        expect(res.body.user).toHaveProperty('email', adminEmail);
+        expect(res.body).toHaveProperty('wallets');
+        expect(Array.isArray(res.body.wallets)).toBe(true);
+        expect(res.body).toHaveProperty('permissions');
+    });
+
+    it('GET /api/admin/overview should return admin summary', async () => {
+        const res = await request(app)
+            .get('/api/admin/overview')
+            .set('Authorization', `Bearer ${mockToken}`);
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveProperty('summary');
+        expect(res.body.summary).toHaveProperty('totalUsers');
+        expect(res.body).toHaveProperty('users');
+        expect(res.body).toHaveProperty('wallets');
+        expect(Array.isArray(res.body.users)).toBe(true);
+        expect(Array.isArray(res.body.wallets)).toBe(true);
+    });
+
+    it('POST /api/admin/users should create a user allowlist entry', async () => {
+        const email = uniqueEmail("new.user");
+        const res = await request(app)
+            .post('/api/admin/users')
+            .set('Authorization', `Bearer ${mockToken}`)
+            .send({ email, name: "New User", role: "USER", status: "ACTIVE" });
+        expect([200, 201]).toContain(res.status);
+        expect(res.body).toHaveProperty('email', email);
+    });
+
+    it('PATCH /api/admin/users/:id/status should update status', async () => {
+        const email = uniqueEmail("status.user");
+        const created = await request(app)
+            .post('/api/admin/users')
+            .set('Authorization', `Bearer ${mockToken}`)
+            .send({ email, name: "Status User" });
+        const userId = created.body?.id;
+        const res = await request(app)
+            .patch(`/api/admin/users/${userId}/status`)
+            .set('Authorization', `Bearer ${mockToken}`)
+            .send({ status: "SUSPENDED" });
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveProperty('status', 'SUSPENDED');
     });
 });

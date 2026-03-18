@@ -18,6 +18,19 @@ import rateLimit from "express-rate-limit";
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import bs58 from "bs58";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+    buildClientUser,
+    ensureBootstrapAdminUser,
+    getUserByEmail,
+    getUserById,
+    listAllWalletsWithOwners,
+    listUserWallets,
+    listUsersWithWalletCounts,
+    touchUserLogin,
+    createUser,
+    updateUserStatus,
+    updateUserRole,
+} from "../utils/userAccess";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -60,6 +73,103 @@ function loadSimTradesFallback(limit: number) {
         return [];
     }
 }
+
+function getBootstrapWalletAddress() {
+    return WALLET_ADDRESS_ENV || loadBotWallet()?.publicKey || null;
+}
+
+function syncBootstrapAdminUser(profile?: { name?: string | null; picture?: string | null }) {
+    return ensureBootstrapAdminUser({
+        email: ALLOWED_EMAIL,
+        name: profile?.name || "Admin",
+        picture: profile?.picture || null,
+        walletPublicKey: getBootstrapWalletAddress(),
+    });
+}
+
+function buildAuthSession(userRecord: ReturnType<typeof syncBootstrapAdminUser>) {
+    const user = buildClientUser(userRecord);
+    const tokenPayload = {
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture || null,
+        role: user.role,
+        accessStatus: user.accessStatus,
+        accessOrigin: user.accessOrigin,
+        billingStatus: user.billingStatus,
+    };
+
+    return {
+        user,
+        accessToken: signAccessToken(tokenPayload),
+        refreshToken: signRefreshToken(tokenPayload),
+    };
+}
+
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 1000): Promise<T> {
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (i < attempts - 1) {
+                const delay = baseDelayMs * Math.pow(2, i) + Math.random() * 100;
+                console.warn(`Attempt ${i + 1} failed. Retrying in ${delay.toFixed(0)}ms...`, error);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                throw error;
+            }
+        }
+    }
+    // This line should theoretically not be reached if attempts > 0
+    // but TypeScript needs a return here.
+    throw new Error("withRetry failed after all attempts.");
+}
+
+function setRefreshCookie(res: Response, refreshToken: string) {
+    res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        path: "/",
+    });
+}
+
+function resolveUserFromTokenPayload(decoded: any) {
+    const userId = Number(decoded?.userId || decoded?.id || 0);
+    let user = userId ? getUserById(userId) : null;
+    const email = typeof decoded?.email === "string" ? decoded.email.trim().toLowerCase() : null;
+
+    if (!user && email) {
+        if (email === ALLOWED_EMAIL.trim().toLowerCase()) {
+            syncBootstrapAdminUser({ name: decoded?.name, picture: decoded?.picture });
+        }
+        user = getUserByEmail(email);
+    }
+
+    return user;
+}
+
+function getRequestUser(req: Request) {
+    const decoded = (req as any).user;
+    if (!decoded) return null;
+    return resolveUserFromTokenPayload(decoded);
+}
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+    const user = getRequestUser(req);
+    if (!user) {
+        return res.status(401).json({ error: "Account not found" });
+    }
+    if (user.role !== "ADMIN") {
+        return res.status(403).json({ error: "Admin access required" });
+    }
+    (req as any).dbUser = user;
+    next();
+}
+
+syncBootstrapAdminUser();
 
 // ── Auth Middleware ───────────────────────────────────────────
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -145,20 +255,34 @@ app.post("/api/auth/google", authLimiter, async (req: Request, res: Response) =>
         });
         const payload = ticket.getPayload();
         if (!payload?.email) return res.status(401).json({ error: "Invalid token" });
-        if (payload.email !== ALLOWED_EMAIL) {
+        const normalizedEmail = payload.email.trim().toLowerCase();
+
+        if (normalizedEmail === ALLOWED_EMAIL.trim().toLowerCase()) {
+            syncBootstrapAdminUser({ name: payload.name, picture: payload.picture });
+        }
+
+        const existingUser = getUserByEmail(normalizedEmail);
+        if (!existingUser) {
             return res.status(403).json({ error: `Email not authorized: ${payload.email}` });
         }
-        const user = { email: payload.email, name: payload.name, picture: payload.picture };
-        const accessToken = signAccessToken(user);
-        const refreshToken = signRefreshToken(user);
-        res.cookie("refreshToken", refreshToken, {
-            httpOnly: true,
-            secure: false, // Set to false to allow persistent sessions on HTTP (before HTTPS is configured)
-            sameSite: "lax",
-            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-            path: "/",
+        if (existingUser.status !== "ACTIVE") {
+            return res.status(403).json({ error: `Account is ${existingUser.status.toLowerCase()}` });
+        }
+
+        const updatedUser = touchUserLogin({
+            email: normalizedEmail,
+            name: payload.name,
+            picture: payload.picture,
         });
-        return res.json({ accessToken, user });
+
+        if (!updatedUser) {
+            return res.status(500).json({ error: "Failed to update account session" });
+        }
+
+        const session = buildAuthSession(updatedUser);
+        setRefreshCookie(res, session.refreshToken);
+
+        return res.json({ accessToken: session.accessToken, user: session.user });
     } catch (err: any) {
         return res.status(401).json({ error: err.message || "Authentication failed" });
     }
@@ -170,9 +294,15 @@ app.post("/api/auth/refresh", (req: Request, res: Response) => {
     if (!token) return res.status(401).json({ error: "No refresh token" });
     try {
         const decoded = jwt.verify(token, JWT_SECRET) as any;
-        const user = { email: decoded.email, name: decoded.name, picture: decoded.picture };
-        const accessToken = signAccessToken(user);
-        return res.json({ accessToken });
+        const user = resolveUserFromTokenPayload(decoded);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+        if (user.status !== "ACTIVE") {
+            return res.status(403).json({ error: `Account is ${user.status.toLowerCase()}` });
+        }
+
+        const session = buildAuthSession(user);
+        setRefreshCookie(res, session.refreshToken);
+        return res.json({ accessToken: session.accessToken, user: session.user });
     } catch {
         return res.status(401).json({ error: "Refresh token expired" });
     }
@@ -184,9 +314,15 @@ app.get("/api/auth/me", (req: Request, res: Response) => {
     if (!token) return res.status(401).json({ error: "No session" });
     try {
         const decoded = jwt.verify(token, JWT_SECRET) as any;
-        const user = { email: decoded.email, name: decoded.name, picture: decoded.picture };
-        const accessToken = signAccessToken(user);
-        return res.json({ accessToken, user });
+        const user = resolveUserFromTokenPayload(decoded);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+        if (user.status !== "ACTIVE") {
+            return res.status(403).json({ error: `Account is ${user.status.toLowerCase()}` });
+        }
+
+        const session = buildAuthSession(user);
+        setRefreshCookie(res, session.refreshToken);
+        return res.json({ accessToken: session.accessToken, user: session.user });
     } catch {
         return res.status(401).json({ error: "Session expired" });
     }
@@ -203,6 +339,190 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
     // Skip protection for auth routes and public assets if any under /api
     if (req.path.startsWith("/auth")) return next();
     return authMiddleware(req, res, next);
+});
+
+app.get("/api/me/account", (req: Request, res: Response) => {
+    try {
+        const user = getRequestUser(req);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+
+        const wallets = listUserWallets(user.id).map((wallet) => ({
+            id: wallet.id,
+            label: wallet.label,
+            publicKey: wallet.publicKey,
+            status: wallet.status,
+            isDefault: wallet.isDefault,
+            createdAt: wallet.createdAt,
+            updatedAt: wallet.updatedAt,
+        }));
+
+        res.json({
+            user: buildClientUser(user),
+            wallets,
+            permissions: {
+                isAdmin: user.role === "ADMIN",
+                canViewAdmin: user.role === "ADMIN",
+                canManageUsers: user.role === "ADMIN",
+            },
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get("/api/admin/overview", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const stats = getStats();
+        const botHealth = {
+            cbState: loadCBState(),
+            agentStatus: loadAgentStatus(),
+        };
+        const trades = loadAgentTrades();
+        const totalPnl = trades.reduce((sum: number, trade: any) => sum + Number(trade.pnl || trade.pnl_sol || 0), 0);
+        const currentWalletAddress = getBootstrapWalletAddress();
+
+        const users = listUsersWithWalletCounts().map((row) => ({
+            id: Number(row.id),
+            email: row.email,
+            name: row.name || row.email.split("@")[0],
+            role: row.role,
+            status: row.status,
+            accessOrigin: row.accessOrigin,
+            billingStatus: row.billingStatus,
+            walletCount: Number(row.walletCount || 0),
+            lastLoginAt: row.lastLoginAt,
+            createdAt: row.createdAt,
+        }));
+
+        const wallets = listAllWalletsWithOwners().map((wallet) => {
+            const isLiveWallet = Boolean(currentWalletAddress && wallet.publicKey === currentWalletAddress);
+
+            return {
+                id: wallet.id,
+                userId: wallet.userId,
+                ownerEmail: wallet.ownerEmail,
+                ownerName: wallet.ownerName || wallet.ownerEmail.split("@")[0],
+                ownerRole: wallet.ownerRole,
+                ownerStatus: wallet.ownerStatus,
+                label: wallet.label,
+                publicKey: wallet.publicKey,
+                status: wallet.status,
+                isDefault: wallet.isDefault,
+                trackingStatus: isLiveWallet ? "LIVE" : "PENDING_WALLET_ISOLATION",
+                performance: {
+                    totalPnlSol: isLiveWallet ? parseFloat(totalPnl.toFixed(4)) : 0,
+                    totalPositions: isLiveWallet ? stats.totalPositions : 0,
+                    activePositions: isLiveWallet ? stats.activePositions : 0,
+                    winRate: isLiveWallet ? stats.winRate : "0.0",
+                },
+            };
+        });
+
+        res.json({
+            summary: {
+                totalUsers: users.length,
+                activeUsers: users.filter((user) => user.status === "ACTIVE").length,
+                suspendedUsers: users.filter((user) => user.status === "SUSPENDED").length,
+                adminUsers: users.filter((user) => user.role === "ADMIN").length,
+                totalWallets: wallets.length,
+                activeWallets: wallets.filter((wallet) => wallet.status === "ACTIVE").length,
+                totalPnlSol: parseFloat(totalPnl.toFixed(4)),
+                activePositions: stats.activePositions,
+                botMode: stats.agent.mode,
+                botRateLimited: botHealth.agentStatus.rateLimited || false,
+                circuitBreakerTripped: botHealth.cbState.isTripped || false,
+            },
+            users,
+            wallets,
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get("/api/admin/users", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const users = listUsersWithWalletCounts().map((row) => ({
+            id: Number(row.id),
+            email: row.email,
+            name: row.name || row.email.split("@")[0],
+            role: row.role,
+            status: row.status,
+            accessOrigin: row.accessOrigin,
+            billingStatus: row.billingStatus,
+            walletCount: Number(row.walletCount || 0),
+            lastLoginAt: row.lastLoginAt,
+            createdAt: row.createdAt,
+        }));
+        res.json(users);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post("/api/admin/users", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const { email, name, role, status, accessOrigin, billingStatus, invitedByUserId } = req.body || {};
+        if (!email) return res.status(400).json({ error: "email is required" });
+        const user = createUser({
+            email,
+            name,
+            role,
+            status,
+            accessOrigin,
+            billingStatus,
+            invitedByUserId,
+        });
+        return res.status(201).json(user);
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+app.patch("/api/admin/users/:id/status", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const userId = Number(req.params.id);
+        const { status } = req.body || {};
+        if (!["ACTIVE", "PENDING", "SUSPENDED"].includes(status)) {
+            return res.status(400).json({ error: "Invalid status" });
+        }
+        const updated = updateUserStatus(userId, status);
+        return res.json(updated);
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+app.patch("/api/admin/users/:id/role", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const userId = Number(req.params.id);
+        const { role } = req.body || {};
+        if (!["ADMIN", "USER", "SUPPORT"].includes(role)) {
+            return res.status(400).json({ error: "Invalid role" });
+        }
+
+        const authUser = getRequestUser(req);
+        if (authUser && authUser.id === userId && role !== "ADMIN") {
+            return res.status(400).json({ error: "Cannot remove admin role from yourself" });
+        }
+
+        const updated = updateUserRole(userId, role);
+        return res.json(updated);
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+app.get("/api/admin/users/:id/wallets", requireAdmin, (req: Request, res: Response) => {
+    try {
+        const userId = Number(req.params.id);
+        const user = getUserById(userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+        const wallets = listUserWallets(userId);
+        return res.json(wallets);
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
 });
 
 // Paths dos arquivos de dados
@@ -463,7 +783,8 @@ app.get("/api/agent/logs", (req, res) => {
                     const statB = fs.statSync(path.join(logsDir, b));
                     return statA.mtime.getTime() - statB.mtime.getTime();
                 })
-                .map(f => path.join(logsDir, f));
+                .map(f => path.join(logsDir, f))
+                .slice(-3); // Limit to the 3 most recent files to save CPU/Banda
 
             if (logFiles.length === 0) return res.json([]);
 
@@ -471,14 +792,22 @@ app.get("/api/agent/logs", (req, res) => {
                 const patterns = [/\[Agent\]/, /\[RiskEngine\]/, /\[WHALE ALERT\]/, /\[Pipeline/];
                 const excludePattern = /ALLOW_TRADE/;
                 let allLines: string[] = [];
+                const { execSync } = require('child_process');
 
                 for (const filePath of logFiles) {
-                    const content = fs.readFileSync(filePath, "utf-8");
-                    const lines = content.split('\n');
-                    const filtered = lines.filter(line =>
-                        patterns.some(p => p.test(line)) && !excludePattern.test(line)
-                    );
-                    allLines = allLines.concat(filtered);
+                    try {
+                        // Otimização Crítica: Usar 'tail' para ler apenas as últimas 500 linhas 
+                        // em vez de ler o arquivo inteiro (76MB+) para a memória.
+                        const lastLinesBuffer = execSync(`tail -n 500 "${filePath}"`);
+                        const content = lastLinesBuffer.toString('utf-8');
+                        const lines = content.split('\n');
+                        const filtered = lines.filter(line =>
+                            patterns.some(p => p.test(line)) && !excludePattern.test(line)
+                        );
+                        allLines = allLines.concat(filtered);
+                    } catch (readErr) {
+                        console.error(`Error tailing ${filePath}:`, readErr);
+                    }
                 }
 
                 // Get last 60 lines
@@ -1335,7 +1664,7 @@ export function broadcastDashboardUpdate() {
         });
 
         broadcastTimeout = null;
-    }, 500); // 500ms debounce
+    }, 2000); // Optimized: 2000ms debounce to save bandwidth and CPU
 }
 
 // Persistência de P&L

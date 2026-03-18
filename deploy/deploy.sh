@@ -31,18 +31,27 @@ echo ""
 # ── Step 1: Sync project files (excludes heavy/local dirs) ─────
 echo "Syncing project files to ${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}..."
 
-# Backup data directory on VPS before syncing
-echo "Creating backup of data directory on VPS..."
+# Backup persistent runtime data on VPS before syncing
+echo "Creating backup of persistent runtime data on VPS..."
 ssh "${VPS_USER}@${VPS_HOST}" << BACKUP_CMD
   set -e
   mkdir -p "$REMOTE_DIR"
   cd "$REMOTE_DIR"
+  TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
+
   if [ -d "data" ]; then
-    TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
     cp -r data "data_backup_\${TIMESTAMP}"
     echo "Backup created: data_backup_\${TIMESTAMP}"
     # Keep only last 3 backups
     ls -dt data_backup_* 2>/dev/null | tail -n +4 | xargs -r rm -rf
+  fi
+
+  if [ -f "dashboard-api/db/pnl_history.db" ]; then
+    mkdir -p "dashboard-api/db/backups"
+    cp "dashboard-api/db/pnl_history.db" "dashboard-api/db/backups/pnl_history_\${TIMESTAMP}.db"
+    echo "Backup created: dashboard-api/db/backups/pnl_history_\${TIMESTAMP}.db"
+    # Keep only last 5 DB backups
+    ls -dt dashboard-api/db/backups/pnl_history_*.db 2>/dev/null | tail -n +6 | xargs -r rm -f
   fi
 BACKUP_CMD
 
@@ -60,6 +69,9 @@ rsync -avz --progress \
   --exclude 'test-results/' \
   --exclude '*.log' \
   --exclude 'data/*.db' \
+  --exclude 'dashboard-api/db/pnl_history.db' \
+  --exclude 'dashboard-api/db/pnl_history.db-shm' \
+  --exclude 'dashboard-api/db/pnl_history.db-wal' \
   --exclude 'positionManagerV2.db' \
   --exclude 'sent_addresses.json' \
   --include 'data/trading-config.json' \

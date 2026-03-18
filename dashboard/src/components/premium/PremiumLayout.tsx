@@ -15,7 +15,10 @@ export const PremiumLayout = ({ children, activeTab, onTabChange }: PremiumLayou
             <Sidebar activeTab={activeTab} onTabChange={onTabChange} />
 
             <div className="pl-20 min-h-screen flex flex-col">
-                <TopNavigation />
+                <TopNavigation
+                    isAccountActive={activeTab === 'account'}
+                    onOpenAccount={() => onTabChange('account')}
+                />
 
                 <main className="flex-1 p-10 overflow-x-hidden">
                     {children}

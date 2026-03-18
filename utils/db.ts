@@ -30,31 +30,65 @@ db.exec(`
         token_mint TEXT NOT NULL,
         token_symbol TEXT NOT NULL,
         entry_time INTEGER NOT NULL,
-    entry_price REAL NOT NULL,
-    entry_amount REAL DEFAULT 0.01,
-    exit_time INTEGER,
-    exit_price REAL,
-    pnl_sol REAL DEFAULT 0,
-    pnl_percent REAL DEFAULT 0,
-    confidence REAL NOT NULL,
-    status TEXT NOT NULL,
-    reason TEXT,
-    token_holders INTEGER,
-    market_cap_entry REAL,
-    market_cap_exit REAL,
-    decision_context TEXT,
-    entry_snapshot TEXT,
-    exit_snapshot TEXT,
-    monitoring_trace TEXT,
-    postmortem_status TEXT DEFAULT 'PENDING',
-    postmortem_summary TEXT,
-    postmortem_report TEXT,
-    postmortem_analyzed_at INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+        entry_price REAL NOT NULL,
+        entry_amount REAL DEFAULT 0.01,
+        exit_time INTEGER,
+        exit_price REAL,
+        pnl_sol REAL DEFAULT 0,
+        pnl_percent REAL DEFAULT 0,
+        confidence REAL NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT,
+        token_holders INTEGER,
+        market_cap_entry REAL,
+        market_cap_exit REAL,
+        decision_context TEXT,
+        entry_snapshot TEXT,
+        exit_snapshot TEXT,
+        monitoring_trace TEXT,
+        postmortem_status TEXT DEFAULT 'PENDING',
+        postmortem_summary TEXT,
+        postmortem_report TEXT,
+        postmortem_analyzed_at INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
 
-CREATE INDEX IF NOT EXISTS idx_sim_trades_mint ON simulated_trades(token_mint);
-CREATE INDEX IF NOT EXISTS idx_sim_trades_status ON simulated_trades(status);
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        picture TEXT,
+        role TEXT NOT NULL DEFAULT 'USER',
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        access_origin TEXT NOT NULL DEFAULT 'ALLOWLIST',
+        billing_status TEXT NOT NULL DEFAULT 'NOT_REQUIRED',
+        invited_by_user_id INTEGER,
+        last_login_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(invited_by_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_wallets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        label TEXT NOT NULL DEFAULT 'Primary Wallet',
+        public_key TEXT NOT NULL,
+        secret_ref TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        is_default INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, public_key),
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sim_trades_mint ON simulated_trades(token_mint);
+    CREATE INDEX IF NOT EXISTS idx_sim_trades_status ON simulated_trades(status);
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+    CREATE INDEX IF NOT EXISTS idx_user_wallets_user_id ON user_wallets(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_wallets_public_key ON user_wallets(public_key);
 `);
 
 // Add entry_amount column if it doesn't exist (migration for existing DBs)
