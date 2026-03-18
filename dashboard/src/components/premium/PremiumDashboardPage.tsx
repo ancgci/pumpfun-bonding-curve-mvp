@@ -414,7 +414,7 @@ export const PremiumDashboardPage = () => {
         switch (activeTab) {
             case 'trading':
                 return (
-                    <div className="space-y-10">
+                    <div className="space-y-6 lg:space-y-10">
                         <div className="space-y-6">
                             {renderTradingCard('settings')}
                             {renderTradingCard('automation')}
@@ -425,13 +425,13 @@ export const PremiumDashboardPage = () => {
                 );
             case 'logs':
                 return (
-                    <div className="space-y-10">
+                    <div className="space-y-6 lg:space-y-10">
                         {cardOrders.logs.map(renderLogsCard)}
                     </div>
                 );
             case 'ai':
                 return (
-                    <div className="space-y-10">
+                    <div className="space-y-6 lg:space-y-10">
                         {[ 'learning', 'readiness', ...cardOrders.ai ].map(renderAiCard)}
                     </div>
                 );
@@ -441,12 +441,12 @@ export const PremiumDashboardPage = () => {
                 return <UserAccountArea />;
             default:
                 return (
-                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-10">
-                        <div className="xl:col-span-2 space-y-10">
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-10">
+                        <div className="xl:col-span-2 space-y-6 lg:space-y-10">
                             {cardOrders.overview.filter(id => ['performance', 'accuracy', 'activity', 'health'].includes(id)).map(id => renderCard(id))}
                         </div>
 
-                        <div className="space-y-10">
+                        <div className="space-y-6 lg:space-y-10">
                             {cardOrders.overview.filter(id => ['score', 'converter', 'positions'].includes(id)).map(id => renderCard(id))}
                         </div>
                     </div>
@@ -456,21 +456,21 @@ export const PremiumDashboardPage = () => {
 
     return (
         <PremiumLayout activeTab={activeTab} onTabChange={setActiveTab}>
-            <div className="space-y-10">
+            <div className="space-y-6 lg:space-y-10">
                 {/* Welcome Header */}
-                <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 lg:gap-6">
                     <div className="space-y-2">
                         <p className="text-primary font-medium flex items-center gap-2">
                             👋 Welcome In, {user?.name?.split(' ')[0] || "Trader"}!
                         </p>
-                        <h1 className="text-4xl md:text-5xl font-bold text-foreground tracking-tight">
+                        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground tracking-tight">
                             {tabTitles[activeTab]}
                         </h1>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                         <div
-                            className={`flex items-center gap-2 px-5 py-3 border border-white/10 rounded-2xl font-medium transition-all ${agentStatus?.mode === "SIMULATION"
+                            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 border border-white/10 rounded-2xl text-sm font-medium transition-all ${agentStatus?.mode === "SIMULATION"
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "bg-red-500/20 text-red-300"
                                 }`}
@@ -479,7 +479,7 @@ export const PremiumDashboardPage = () => {
                         </div>
 
                         <div
-                            className={`flex items-center gap-2 px-5 py-3 border border-white/10 rounded-2xl font-medium transition-all ${isAgentActive
+                            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 border border-white/10 rounded-2xl text-sm font-medium transition-all ${isAgentActive
                                 ? "bg-green-500/20 text-green-200"
                                 : "bg-white/10 text-muted-foreground"
                                 }`}

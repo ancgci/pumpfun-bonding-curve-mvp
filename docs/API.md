@@ -41,6 +41,54 @@ Retorna a conta autenticada, wallets vinculadas e permissões derivadas do role.
 
 ---
 
+### GET `/api/me/stats`
+
+Retorna estatísticas **somente do escopo da conta logada** (`user_id` + `wallet_id` efetiva).
+
+**Response:**
+```json
+{
+  "totalPositions": 12,
+  "activePositions": 2,
+  "closedPositions": 10,
+  "totalInvested": 0.05,
+  "totalPnL": 0.0134,
+  "wins": 7,
+  "losses": 3,
+  "winRate": "70.0",
+  "walletAddress": "AbC123..."
+}
+```
+
+---
+
+### GET `/api/me/positions`
+
+Retorna posições ativas apenas da conta logada.
+
+---
+
+### GET `/api/me/trades`
+
+Retorna histórico de trades apenas da conta logada.
+
+**Query params:**
+- `limit` (opcional, default `20`, máx `100`)
+
+---
+
+### GET `/api/me/trading-config`
+
+Retorna configuração de trading da conta logada (defaults + override do escopo do usuário).
+
+---
+
+### POST `/api/me/trading-config`
+
+Salva configuração de trading da conta logada.
+
+---
+
 ### GET `/api/admin/overview`
 
 Retorna a visão administrativa agregada do sistema.

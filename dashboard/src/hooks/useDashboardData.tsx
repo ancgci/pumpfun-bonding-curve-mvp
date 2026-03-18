@@ -136,15 +136,15 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         walletData,
         plHistoryData,
       ] = await Promise.all([
-        apiFetch(`${API_BASE}/stats`).catch(() => null),
-        apiFetch(`${API_BASE}/positions`).catch(() => []),
+        apiFetch(`${API_BASE}/me/stats`).catch(() => null),
+        apiFetch(`${API_BASE}/me/positions`).catch(() => []),
         apiFetch(`${API_BASE}/agent/stats`).catch(() => null),
-        apiFetch(`${API_BASE}/agent/trades`).catch(() => []),
+        apiFetch(`${API_BASE}/me/trades?limit=50`).catch(() => []),
         apiFetch(`${API_BASE}/simulation/status`).catch(() => null),
         apiFetch(`${API_BASE}/simulation/trades?limit=50`).catch(() => []),
         apiFetch(`${API_BASE}/agent/patterns`).catch(() => null),
         apiFetch(`${API_BASE}/bot-health`).catch(() => null),
-        apiFetch(`${API_BASE}/trading-config`).catch(() => null),
+        apiFetch(`${API_BASE}/me/trading-config`).catch(() => null),
         apiFetch(`${API_BASE}/protocol-config`).catch(() => null),
         apiFetch(`${API_BASE}/emergency-stop`).catch(() => ({ active: false })),
         apiFetch(`${API_BASE}/agent/learned-rules`).catch(() => []),
@@ -269,7 +269,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const updateConfig = async (updates: any) => {
     // Optimistic update for faster UI feedback
     setTradingConfig((prev: any) => ({ ...(prev || {}), ...updates, updatedAt: new Date().toISOString() }));
-    await apiFetch(`${API_BASE}/trading-config`, {
+    await apiFetch(`${API_BASE}/me/trading-config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),

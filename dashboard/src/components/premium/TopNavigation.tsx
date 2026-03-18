@@ -18,9 +18,9 @@ export const TopNavigation = ({ isAccountActive = false, onOpenAccount }: TopNav
     const { user } = useAuthStore();
 
     return (
-        <header className="flex items-center justify-between py-6 px-10 bg-transparent">
+        <header className="flex items-center justify-between gap-3 py-4 md:py-6 px-4 sm:px-6 lg:px-10 bg-transparent">
             {/* Search Bar */}
-            <div className="relative group w-96">
+            <div className="relative group hidden lg:block w-96">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <Search className="h-5 w-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
                 </div>
@@ -32,8 +32,12 @@ export const TopNavigation = ({ isAccountActive = false, onOpenAccount }: TopNav
             </div>
 
             {/* Right Actions */}
-            <div className="flex items-center gap-4">
-                <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">
+            <div className="flex items-center gap-2 sm:gap-4 ml-auto">
+                <button className="lg:hidden p-2.5 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
+                    <Search className="h-4 w-4" />
+                </button>
+
+                <div className="hidden md:flex bg-white/5 p-1 rounded-2xl border border-white/10">
                     <button className="p-2 text-muted-foreground hover:text-foreground transition-colors">
                         <Sun className="h-5 w-5" />
                     </button>
@@ -42,11 +46,11 @@ export const TopNavigation = ({ isAccountActive = false, onOpenAccount }: TopNav
                     </button>
                 </div>
 
-                <button className="p-3 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
+                <button className="hidden md:flex p-3 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
                     <Settings className="h-5 w-5" />
                 </button>
 
-                <button className="relative p-3 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
+                <button className="relative p-2.5 sm:p-3 bg-white/5 rounded-2xl border border-white/10 text-muted-foreground hover:text-foreground transition-all hover:bg-white/10">
                     <Bell className="h-5 w-5" />
                     <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full border border-background"></span>
                 </button>
@@ -56,7 +60,7 @@ export const TopNavigation = ({ isAccountActive = false, onOpenAccount }: TopNav
                     type="button"
                     onClick={onOpenAccount}
                     className={cn(
-                        "flex items-center gap-4 pl-4 ml-2 border-l border-white/10 text-left transition-all rounded-2xl pr-3 py-2 hover:bg-white/5",
+                        "flex items-center gap-2 sm:gap-4 pl-0 md:pl-4 ml-0 md:ml-2 md:border-l border-white/10 text-left transition-all rounded-2xl pr-2 sm:pr-3 py-2 hover:bg-white/5 min-w-0",
                         isAccountActive && "bg-white/5 border-white/10 shadow-[0_0_24px_rgba(162,255,218,0.08)]"
                     )}
                 >
@@ -69,7 +73,7 @@ export const TopNavigation = ({ isAccountActive = false, onOpenAccount }: TopNav
                         <img
                             src={user?.picture || "https://api.dicebear.com/7.x/avataaars/svg?seed=John"}
                             alt="Avatar"
-                            className="w-12 h-12 rounded-2xl border border-white/20 object-cover"
+                            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl border border-white/20 object-cover shrink-0"
                         />
                         <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${user ? 'bg-green-500' : 'bg-gray-500'}`}></div>
                     </div>

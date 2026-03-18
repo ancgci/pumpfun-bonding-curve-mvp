@@ -78,26 +78,26 @@ export function AgentLiveTerminal() {
   const safeLogs = logs && Array.isArray(logs) ? logs : [];
 
   return (
-    <Card className="glass flex flex-col pt-4 overflow-hidden border-orange-500/20" style={{ minHeight: "600px" }}>
-      <div className="px-4 pb-2 border-b border-orange-500/10 flex items-center justify-between">
-        <h2 className="text-lg font-bold flex items-center gap-2 text-orange-200">
-          <Terminal className="w-5 h-5 text-orange-400" /> Live Terminal Logs
-          <span className="text-xs font-normal text-muted-foreground ml-2">
+    <Card className="glass flex flex-col pt-4 overflow-hidden border-orange-500/20 min-h-[360px] md:min-h-[520px] lg:min-h-[600px]">
+      <div className="px-3 sm:px-4 pb-2 border-b border-orange-500/10 flex items-center justify-between gap-3">
+        <h2 className="text-base sm:text-lg font-bold flex items-center gap-2 text-orange-200 min-w-0">
+          <Terminal className="w-5 h-5 text-orange-400 shrink-0" /> Live Terminal Logs
+          <span className="hidden sm:inline text-xs font-normal text-muted-foreground ml-1">
             pumpfun-agent-v2.0
           </span>
           <span className="ml-2 w-2 h-2 rounded-full bg-green-500 animate-pulse" />
         </h2>
-        <div className="flex gap-2">
+        <div className="hidden sm:flex gap-2">
           <div className="w-3 h-3 rounded-full bg-red-500" />
           <div className="w-3 h-3 rounded-full bg-yellow-500" />
           <div className="w-3 h-3 rounded-full bg-green-500" />
         </div>
       </div>
-      <CardContent className="flex-1 p-0 relative">
-        <ScrollArea className="h-full w-full bg-black/80 font-mono text-xs" style={{ height: "540px" }}>
-          <div className="p-4 space-y-1">
+      <CardContent className="flex-1 p-0 relative min-h-0">
+        <ScrollArea className="w-full bg-black/80 font-mono text-[11px] sm:text-xs h-[300px] sm:h-[380px] md:h-[460px] lg:h-[540px]">
+          <div className="p-3 sm:p-4 space-y-1">
             {safeLogs.length === 0 ? (
-              <div className="text-muted-foreground animate-pulse py-8 text-center">
+              <div className="text-muted-foreground animate-pulse py-8 text-center text-xs sm:text-sm">
                 ⏳ Waiting for terminal logs...
               </div>
             ) : (
@@ -111,7 +111,7 @@ export function AgentLiveTerminal() {
                       : "text-slate-300" // neutral base color
                     }`}
                 >
-                  <span className="text-slate-500 shrink-0 w-20 text-right opacity-70">
+                  <span className="text-slate-500 shrink-0 w-16 sm:w-20 text-right opacity-70">
                     [{formatLogTime(log.time || log.timestamp)}]
                   </span>
                   <span

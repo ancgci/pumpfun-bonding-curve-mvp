@@ -126,7 +126,6 @@ sudo ufw allow 22/tcp   comment 'SSH'
 sudo ufw allow 80/tcp   comment 'HTTP'
 sudo ufw allow 443/tcp  comment 'HTTPS'
 sudo ufw allow 3389/tcp comment 'XRDP Remote Desktop'
-sudo ufw allow 3001/tcp comment 'Dashboard API'
 
 # Enable UFW (non-interactive)
 echo "y" | sudo ufw enable

@@ -65,6 +65,27 @@ describe('Dashboard API Integration Tests', () => {
         expect(res.body).toHaveProperty('permissions');
     });
 
+    it('GET /api/me/* endpoints should return scoped payloads', async () => {
+        const [statsRes, positionsRes, tradesRes, configRes] = await Promise.all([
+            request(app).get('/api/me/stats').set('Authorization', `Bearer ${mockToken}`),
+            request(app).get('/api/me/positions').set('Authorization', `Bearer ${mockToken}`),
+            request(app).get('/api/me/trades').set('Authorization', `Bearer ${mockToken}`),
+            request(app).get('/api/me/trading-config').set('Authorization', `Bearer ${mockToken}`),
+        ]);
+
+        expect(statsRes.status).toBe(200);
+        expect(statsRes.body).toHaveProperty('totalPositions');
+
+        expect(positionsRes.status).toBe(200);
+        expect(Array.isArray(positionsRes.body)).toBe(true);
+
+        expect(tradesRes.status).toBe(200);
+        expect(Array.isArray(tradesRes.body)).toBe(true);
+
+        expect(configRes.status).toBe(200);
+        expect(configRes.body).toHaveProperty('buyAmountSol');
+    });
+
     it('GET /api/admin/overview should return admin summary', async () => {
         const res = await request(app)
             .get('/api/admin/overview')

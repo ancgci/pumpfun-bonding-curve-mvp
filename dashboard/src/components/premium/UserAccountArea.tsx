@@ -290,12 +290,12 @@ export const UserAccountArea = () => {
     };
 
     return (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-10">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-10">
             <PremiumCard className="xl:col-span-2 relative overflow-hidden">
                 <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_right,rgba(162,255,218,0.16),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(56,189,248,0.10),transparent_28%)]" />
 
                 <div className="relative flex flex-col xl:flex-row xl:items-center xl:justify-between gap-8">
-                    <div className="flex items-start gap-5">
+                    <div className="flex items-start gap-5 min-w-0">
                         {user?.picture ? (
                             <img
                                 src={user.picture}
@@ -308,7 +308,7 @@ export const UserAccountArea = () => {
                             </div>
                         )}
 
-                        <div className="space-y-4">
+                        <div className="space-y-4 min-w-0">
                             <div className="space-y-2">
                                 <p className="text-xs uppercase tracking-[0.35em] text-primary/80">Account Center</p>
                                 <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-foreground">
@@ -316,7 +316,7 @@ export const UserAccountArea = () => {
                                 </h2>
                                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                     <Mail className="w-4 h-4 text-primary" />
-                                    <span>{user?.email || 'No session email loaded'}</span>
+                                    <span className="break-all">{user?.email || 'No session email loaded'}</span>
                                 </div>
                             </div>
 
@@ -338,7 +338,7 @@ export const UserAccountArea = () => {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 xl:max-w-sm">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 xl:max-w-sm">
                         {[
                             { label: 'Access', value: accessStatus },
                             { label: 'Provider', value: provider },
@@ -519,7 +519,7 @@ export const UserAccountArea = () => {
                         </div>
                     ) : adminOverview ? (
                         <>
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 lg:gap-6">
                                 {[
                                     {
                                         label: 'Active Users',
@@ -550,7 +550,7 @@ export const UserAccountArea = () => {
                                 ))}
                             </div>
 
-                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 lg:gap-8">
                                 <PremiumCard title="Managed Users" icon={Users}>
                                     <div className="space-y-4">
                                         <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4 space-y-3">
@@ -606,7 +606,7 @@ export const UserAccountArea = () => {
                                             const selectedRole = roleDrafts[managedUser.id] || managedUser.role;
                                             return (
                                                 <div key={managedUser.id} className="rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 space-y-3">
-                                                    <div className="flex items-start justify-between gap-4">
+                                                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                                                         <div className="space-y-1">
                                                             <p className="text-sm font-semibold text-foreground">{managedUser.name}</p>
                                                             <p className="text-sm text-muted-foreground">{managedUser.email}</p>
@@ -697,7 +697,7 @@ export const UserAccountArea = () => {
                                     <div className="space-y-4 max-h-[460px] overflow-y-auto pr-2">
                                         {adminOverview.wallets.map((wallet) => (
                                             <div key={wallet.id} className="rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 space-y-4">
-                                                <div className="flex items-start justify-between gap-4">
+                                                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                                                     <div className="space-y-1">
                                                         <p className="text-sm font-semibold text-foreground">{wallet.label}</p>
                                                         <p className="text-sm text-muted-foreground">{wallet.ownerName} · {wallet.ownerEmail}</p>

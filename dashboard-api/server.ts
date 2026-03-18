@@ -31,6 +31,15 @@ import {
     updateUserStatus,
     updateUserRole,
 } from "../utils/userAccess";
+import {
+    getScopedPositions,
+    getScopedTrades,
+    getScopedTradingConfig,
+    replaceScopedPositions,
+    replaceScopedTrades,
+    resolvePrimaryWalletId,
+    upsertScopedTradingConfig,
+} from "../utils/userScopedData";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -169,6 +178,64 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
     next();
 }
 
+const LEGACY_SCOPE_SYNC_INTERVAL_MS = 5000;
+const legacyScopeLastSync = new Map<string, number>();
+
+function getScopedRequestContext(req: Request) {
+    const user = getRequestUser(req);
+    if (!user) return null;
+    const wallets = listUserWallets(user.id);
+    const defaultWallet = wallets.find((wallet) => wallet.isDefault) || wallets[0] || null;
+    const walletId = defaultWallet?.id || resolvePrimaryWalletId(user.id) || 0;
+    return {
+        user,
+        walletId,
+        wallet: defaultWallet,
+    };
+}
+
+function shouldSyncLegacyScope(context: { user: any; wallet: any | null }) {
+    if (!context.wallet) return false;
+    const bootstrapWalletAddress = getBootstrapWalletAddress();
+    if (!bootstrapWalletAddress) return false;
+    return context.wallet.publicKey === bootstrapWalletAddress;
+}
+
+function syncLegacyScopeDataIfNeeded(context: { user: any; walletId: number; wallet: any | null }) {
+    if (!shouldSyncLegacyScope(context)) return;
+
+    const scopeKey = `${context.user.id}:${context.walletId}`;
+    const now = Date.now();
+    const lastSyncAt = legacyScopeLastSync.get(scopeKey) || 0;
+    if (now - lastSyncAt < LEGACY_SCOPE_SYNC_INTERVAL_MS) return;
+    legacyScopeLastSync.set(scopeKey, now);
+
+    try {
+        replaceScopedPositions({
+            userId: context.user.id,
+            walletId: context.walletId,
+            positions: loadPositions(),
+        });
+
+        replaceScopedTrades({
+            userId: context.user.id,
+            walletId: context.walletId,
+            trades: loadAgentTrades(),
+        });
+
+        const configFromFile = fs.existsSync(TRADING_CONFIG_FILE)
+            ? JSON.parse(fs.readFileSync(TRADING_CONFIG_FILE, "utf-8"))
+            : {};
+        upsertScopedTradingConfig({
+            userId: context.user.id,
+            walletId: context.walletId,
+            config: configFromFile,
+        });
+    } catch (error) {
+        console.error("Failed to sync legacy scope data:", error);
+    }
+}
+
 syncBootstrapAdminUser();
 
 // ── Auth Middleware ───────────────────────────────────────────
@@ -190,6 +257,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
 export const app = express();
 const httpServer = http.createServer(app);
 const PORT = 3001;
+const BIND_HOST = process.env.API_BIND_HOST || "127.0.0.1";
 
 const io = new Server(httpServer, {
     cors: { origin: [FRONTEND_ORIGIN, "http://meu.listadecompras.shop", "https://meu.listadecompras.shop", "http://localhost:5174", "http://localhost:3001"], credentials: true }
@@ -365,6 +433,158 @@ app.get("/api/me/account", (req: Request, res: Response) => {
                 canManageUsers: user.role === "ADMIN",
             },
         });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get("/api/me/stats", (req: Request, res: Response) => {
+    try {
+        const context = getScopedRequestContext(req);
+        if (!context) return res.status(401).json({ error: "Account not found" });
+        syncLegacyScopeDataIfNeeded(context);
+
+        const positions = getScopedPositions({
+            userId: context.user.id,
+            walletId: context.walletId,
+            activeOnly: false,
+        });
+        const active = positions.filter((position: any) => position.isActive);
+        const closed = positions.filter((position: any) => !position.isActive);
+        const totalInvested = active.reduce((sum: number, position: any) => sum + Number(position.buySolAmount || 0), 0);
+
+        const trades = getScopedTrades({
+            userId: context.user.id,
+            walletId: context.walletId,
+            limit: 500,
+        });
+
+        const totalPnl = trades.reduce((sum: number, trade: any) => {
+            return sum + Number(trade.pnl ?? trade.pnl_sol ?? 0);
+        }, 0);
+
+        const wins = trades.filter((trade: any) => Number(trade.pnl ?? trade.pnl_sol ?? 0) > 0).length;
+        const losses = trades.filter((trade: any) => Number(trade.pnl ?? trade.pnl_sol ?? 0) < 0).length;
+        const closedCount = wins + losses;
+
+        res.json({
+            totalPositions: positions.length,
+            activePositions: active.length,
+            closedPositions: closed.length,
+            totalInvested: parseFloat(totalInvested.toFixed(4)),
+            totalPnL: parseFloat(totalPnl.toFixed(4)),
+            walletSol: parseFloat(totalPnl.toFixed(4)),
+            walletAddress: context.wallet?.publicKey || null,
+            wins,
+            losses,
+            winRate: closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : "0.0",
+            circuitBreaker: loadCBState(),
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get("/api/me/positions", (req: Request, res: Response) => {
+    try {
+        const context = getScopedRequestContext(req);
+        if (!context) return res.status(401).json({ error: "Account not found" });
+        syncLegacyScopeDataIfNeeded(context);
+
+        const positions = getScopedPositions({
+            userId: context.user.id,
+            walletId: context.walletId,
+            activeOnly: true,
+        });
+
+        const enriched = positions.map((position: any) => {
+            const buyTimestamp = Number(position.buyTimestamp || position.entryTime || position.timestamp || Date.now());
+            const age = Date.now() - buyTimestamp;
+            return {
+                ...position,
+                age,
+                ageFormatted: formatAge(age),
+            };
+        });
+
+        res.json(enriched);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get("/api/me/trades", (req: Request, res: Response) => {
+    try {
+        const context = getScopedRequestContext(req);
+        if (!context) return res.status(401).json({ error: "Account not found" });
+        syncLegacyScopeDataIfNeeded(context);
+
+        const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
+        const trades = getScopedTrades({
+            userId: context.user.id,
+            walletId: context.walletId,
+            limit,
+        });
+
+        res.json(trades.map((trade: any) => ({
+            token: trade.token || trade.tokenSymbol || trade.symbol || "Unknown",
+            timestamp: formatTimestamp(trade.timestamp || trade.exitTime || trade.entryTime || Date.now()),
+            entryTime: trade.entryTime || trade.timestamp || null,
+            exitTime: trade.exitTime || null,
+            entryPrice: trade.entryPrice || 0,
+            exitPrice: trade.exitPrice || 0,
+            pnl: Number(trade.pnl ?? trade.pnl_sol ?? 0),
+            pnlPercent: Number(trade.pnlPercent ?? trade.pnl_percent ?? 0),
+            confidence: Number(trade.confidence || 0),
+            status: trade.status || "closed",
+            tokenMint: trade.mint || trade.tokenMint || null,
+        })));
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get("/api/me/trading-config", (req: Request, res: Response) => {
+    try {
+        const context = getScopedRequestContext(req);
+        if (!context) return res.status(401).json({ error: "Account not found" });
+        syncLegacyScopeDataIfNeeded(context);
+
+        const defaults = getTradingConfigDefaults();
+        const scoped = getScopedTradingConfig({
+            userId: context.user.id,
+            walletId: context.walletId,
+        }) || {};
+
+        res.json({ ...defaults, ...scoped });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post("/api/me/trading-config", (req: Request, res: Response) => {
+    try {
+        const context = getScopedRequestContext(req);
+        if (!context) return res.status(401).json({ error: "Account not found" });
+
+        const existing = getScopedTradingConfig({
+            userId: context.user.id,
+            walletId: context.walletId,
+        }) || {};
+
+        const updated = {
+            ...existing,
+            ...req.body,
+            updatedAt: new Date().toISOString(),
+        };
+
+        upsertScopedTradingConfig({
+            userId: context.user.id,
+            walletId: context.walletId,
+            config: updated,
+        });
+
+        res.json({ success: true, config: updated });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -789,42 +1009,61 @@ app.get("/api/agent/logs", (req, res) => {
             if (logFiles.length === 0) return res.json([]);
 
             try {
-                const patterns = [/\[Agent\]/, /\[RiskEngine\]/, /\[WHALE ALERT\]/, /\[Pipeline/];
+                const includePatterns = [
+                    /\[Agent\]/,
+                    /\[RiskEngine\]/,
+                    /\[WHALE ALERT\]/,
+                    /\[Pipeline/,
+                    /\[SIMULATION\]/,
+                    /TYPE\s*:/i,
+                    /\bBUY\b/i,
+                    /\bSELL\b/i,
+                    /Meteora DBC/i,
+                ];
                 const excludePattern = /ALLOW_TRADE/;
-                let allLines: string[] = [];
+                let filteredLines: string[] = [];
+                let recentLines: string[] = [];
                 const { execSync } = require('child_process');
 
                 for (const filePath of logFiles) {
                     try {
-                        // Otimização Crítica: Usar 'tail' para ler apenas as últimas 500 linhas 
-                        // em vez de ler o arquivo inteiro (76MB+) para a memória.
+                        // Read only the most recent chunk from each file to keep response fast.
                         const lastLinesBuffer = execSync(`tail -n 500 "${filePath}"`);
-                        const content = lastLinesBuffer.toString('utf-8');
-                        const lines = content.split('\n');
-                        const filtered = lines.filter(line =>
-                            patterns.some(p => p.test(line)) && !excludePattern.test(line)
+                        const content = lastLinesBuffer.toString("utf-8");
+                        const lines = content
+                            .split("\n")
+                            .map((line: string) => line.trim())
+                            .filter(Boolean);
+
+                        recentLines = recentLines.concat(lines);
+
+                        const matched = lines.filter((line: string) =>
+                            includePatterns.some((pattern) => pattern.test(line)) &&
+                            !excludePattern.test(line)
                         );
-                        allLines = allLines.concat(filtered);
+                        filteredLines = filteredLines.concat(matched);
                     } catch (readErr) {
                         console.error(`Error tailing ${filePath}:`, readErr);
                     }
                 }
 
-                // Get last 60 lines
-                const tailLines = allLines.slice(-60);
+                // If specialized filters produce no rows, fall back to recent lines so the terminal never stays empty.
+                const sourceLines = filteredLines.length > 0 ? filteredLines : recentLines;
+                const tailLines = sourceLines.slice(-120);
 
-                const parsedLogs = tailLines.map(line => {
+                const parsedLogs = tailLines.map((line: string) => {
                     try {
                         const parsed = JSON.parse(line);
                         return {
                             timestamp: parsed.timestamp || new Date().toISOString(),
-                            level: parsed.level || 'info',
-                            message: parsed.message || line
+                            level: parsed.level || "info",
+                            message: parsed.message || line,
                         };
                     } catch {
-                        return { timestamp: new Date().toISOString(), level: 'info', message: line };
+                        return { timestamp: new Date().toISOString(), level: "info", message: line };
                     }
                 });
+
                 res.json(parsedLogs);
             } catch (err: any) {
                 res.status(500).json({ error: "Failed to read logs: " + err.message });
@@ -1263,6 +1502,26 @@ function loadAgentStatus() {
     }
 }
 
+function getTradingConfigDefaults() {
+    return {
+        buyAmountSol: parseFloat(process.env.BUY_AMOUNT_SOL || "0.01"),
+        takeProfitPercent: parseFloat(process.env.TAKE_PROFIT_PERCENT || "100"),
+        stopLossPercent: parseFloat(process.env.STOP_LOSS_PERCENT || "30"),
+        stopLossEnabled: true,
+        slippageBps: parseInt(process.env.SLIPPAGE_BPS || "300"),
+        agentMinConfidence: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
+        jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
+        autoBuyEnabled: process.env.AUTO_BUY_ENABLED === "true",
+        singleTradeMode: process.env.SINGLE_TRADE_MODE === "true",
+        copyTradeEnabled: process.env.COPY_TRADE_ENABLED === "true",
+        copyTradeAmountSol: parseFloat(process.env.COPY_TRADE_AMOUNT_SOL || "0.1"),
+        followWallets: (process.env.FOLLOW_WALLETS || "").split(",").filter((wallet: string) => wallet.length > 30),
+        volatilityAdjustedTpSl: process.env.VOLATILITY_ADJUSTED_TP_SL === "true",
+        atrMultiplierTp: parseFloat(process.env.ATR_MULTIPLIER_TP || "3.0"),
+        atrMultiplierSl: parseFloat(process.env.ATR_MULTIPLIER_SL || "1.5"),
+    };
+}
+
 // ══════════════════════════════════════════════════════════════
 // NEW CONTROL ENDPOINTS
 // ══════════════════════════════════════════════════════════════
@@ -1272,23 +1531,7 @@ function loadAgentStatus() {
  */
 app.get("/api/trading-config", (req, res) => {
     try {
-        const defaults = {
-            buyAmountSol: parseFloat(process.env.BUY_AMOUNT_SOL || "0.01"),
-            takeProfitPercent: parseFloat(process.env.TAKE_PROFIT_PERCENT || "100"),
-            stopLossPercent: parseFloat(process.env.STOP_LOSS_PERCENT || "30"),
-            stopLossEnabled: true,
-            slippageBps: parseInt(process.env.SLIPPAGE_BPS || "300"),
-            agentMinConfidence: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
-            jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
-            autoBuyEnabled: process.env.AUTO_BUY_ENABLED === "true",
-            singleTradeMode: process.env.SINGLE_TRADE_MODE === "true",
-            copyTradeEnabled: process.env.COPY_TRADE_ENABLED === "true",
-            copyTradeAmountSol: parseFloat(process.env.COPY_TRADE_AMOUNT_SOL || "0.1"),
-            followWallets: (process.env.FOLLOW_WALLETS || "").split(",").filter((w: string) => w.length > 30),
-            volatilityAdjustedTpSl: process.env.VOLATILITY_ADJUSTED_TP_SL === "true",
-            atrMultiplierTp: parseFloat(process.env.ATR_MULTIPLIER_TP || "3.0"),
-            atrMultiplierSl: parseFloat(process.env.ATR_MULTIPLIER_SL || "1.5"),
-        };
+        const defaults = getTradingConfigDefaults();
 
         let saved: any = {};
         if (fs.existsSync(TRADING_CONFIG_FILE)) {
@@ -1791,8 +2034,8 @@ app.use((req: Request, res: Response) => {
 
 // Iniciar servidor apenas se o script for executado diretamente
 if (require.main === module) {
-    httpServer.listen(PORT, '0.0.0.0', () => {
-        console.log(`✅ Dashboard + WebSocket + SQLite rodando em http://0.0.0.0:${PORT}`);
+    httpServer.listen(PORT, BIND_HOST, () => {
+        console.log(`✅ Dashboard + WebSocket + SQLite rodando em http://${BIND_HOST}:${PORT}`);
         console.log(`✅ SQLite P&L History inicializado`);
         console.log(`✅ Serving frontend from: ${DASHBOARD_DIST}`);
     });

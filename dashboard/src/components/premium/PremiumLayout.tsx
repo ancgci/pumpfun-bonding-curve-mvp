@@ -14,13 +14,13 @@ export const PremiumLayout = ({ children, activeTab, onTabChange }: PremiumLayou
         <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/30">
             <Sidebar activeTab={activeTab} onTabChange={onTabChange} />
 
-            <div className="pl-20 min-h-screen flex flex-col">
+            <div className="min-h-screen flex flex-col lg:pl-20">
                 <TopNavigation
                     isAccountActive={activeTab === 'account'}
                     onOpenAccount={() => onTabChange('account')}
                 />
 
-                <main className="flex-1 p-10 overflow-x-hidden">
+                <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:p-10 overflow-x-clip pb-24 lg:pb-10">
                     {children}
                 </main>
             </div>

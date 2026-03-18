@@ -83,12 +83,60 @@ db.exec(`
         FOREIGN KEY(user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS user_positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        wallet_id INTEGER NOT NULL DEFAULT 0,
+        position_key TEXT NOT NULL,
+        mint TEXT,
+        symbol TEXT,
+        buy_sol_amount REAL DEFAULT 0,
+        buy_timestamp INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        data_json TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, wallet_id, position_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        wallet_id INTEGER NOT NULL DEFAULT 0,
+        trade_key TEXT NOT NULL,
+        mint TEXT,
+        symbol TEXT,
+        side TEXT,
+        status TEXT,
+        pnl_sol REAL DEFAULT 0,
+        event_timestamp INTEGER,
+        data_json TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, wallet_id, trade_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_trading_configs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        wallet_id INTEGER NOT NULL DEFAULT 0,
+        config_json TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, wallet_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sim_trades_mint ON simulated_trades(token_mint);
     CREATE INDEX IF NOT EXISTS idx_sim_trades_status ON simulated_trades(status);
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
     CREATE INDEX IF NOT EXISTS idx_user_wallets_user_id ON user_wallets(user_id);
     CREATE INDEX IF NOT EXISTS idx_user_wallets_public_key ON user_wallets(public_key);
+    CREATE INDEX IF NOT EXISTS idx_user_positions_scope ON user_positions(user_id, wallet_id);
+    CREATE INDEX IF NOT EXISTS idx_user_positions_active ON user_positions(user_id, wallet_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_user_trades_scope ON user_trades(user_id, wallet_id);
+    CREATE INDEX IF NOT EXISTS idx_user_trades_event_ts ON user_trades(user_id, wallet_id, event_timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_trading_configs_scope ON user_trading_configs(user_id, wallet_id);
 `);
 
 // Add entry_amount column if it doesn't exist (migration for existing DBs)

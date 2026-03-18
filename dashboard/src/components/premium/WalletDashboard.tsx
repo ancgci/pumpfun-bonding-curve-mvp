@@ -87,7 +87,7 @@ export const WalletDashboard = () => {
                             <div className="flex justify-between items-start">
                                 <div className="space-y-1">
                                     <p className="text-xs text-primary font-bold uppercase tracking-widest">Main Balance</p>
-                                    <h3 className="text-4xl font-bold text-foreground">{solBalance.toFixed(4)} SOL</h3>
+                                    <h3 className="text-3xl sm:text-4xl font-bold text-foreground">{solBalance.toFixed(4)} SOL</h3>
                                 </div>
                                 <div className="p-3 bg-primary/20 rounded-2xl">
                                     <Wallet className="w-6 h-6 text-primary" />
@@ -98,8 +98,8 @@ export const WalletDashboard = () => {
 
                         <div className="p-6 bg-white/5 border border-white/10 rounded-3xl space-y-4 font-mono">
                             <p className="text-xs text-muted-foreground font-bold uppercase tracking-widest">Wallet Address</p>
-                            <div className="flex items-center justify-between bg-black/20 p-4 rounded-2xl border border-white/5">
-                                <span className="text-sm text-foreground truncate">{walletAddress || "Configure walletAddress na API"}</span>
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-black/20 p-4 rounded-2xl border border-white/5">
+                                <span className="text-sm text-foreground break-all">{walletAddress || "Configure walletAddress na API"}</span>
                                 <button onClick={copyAddress} className="p-2 hover:bg-white/5 rounded-xl transition-colors" disabled={!walletAddress}>
                                     {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4 text-muted-foreground" />}
                                 </button>
@@ -233,8 +233,8 @@ export const WalletDashboard = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white/5 border border-white/10 rounded-3xl overflow-hidden min-h-[400px]">
-                            <table className="w-full border-collapse text-xs">
+                        <div className="bg-white/5 border border-white/10 rounded-3xl overflow-x-auto min-h-[400px]">
+                            <table className="w-full min-w-[680px] border-collapse text-xs">
                                 <thead>
                                     <tr className="border-b border-white/10 bg-white/5 uppercase tracking-widest text-muted-foreground font-bold">
                                         <th className="p-4 text-left">Type</th>
@@ -316,9 +316,9 @@ export const WalletDashboard = () => {
     };
 
     return (
-        <div className="space-y-10 animate-in fade-in duration-500">
+        <div className="space-y-6 lg:space-y-10 animate-in fade-in duration-500">
             {/* Horizontal Sub-Navigation */}
-            <div className="flex items-center gap-2 p-1.5 bg-white/5 border border-white/10 rounded-3xl w-fit mx-auto md:mx-0 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2 p-1.5 bg-white/5 border border-white/10 rounded-3xl w-full md:w-fit mx-auto md:mx-0 overflow-x-auto no-scrollbar">
                 {[
                     { id: 'saldo', label: 'Saldo', icon: Wallet },
                     { id: 'depositar', label: 'Depositar', icon: ArrowDownLeft },
@@ -329,7 +329,7 @@ export const WalletDashboard = () => {
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id as WalletTab)}
-                        className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap ${activeTab === tab.id
+                        className={`flex items-center gap-2 px-3 md:px-6 py-2.5 md:py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap ${activeTab === tab.id
                                 ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20 scale-105"
                                 : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
                             }`}
@@ -362,7 +362,7 @@ export const WalletDashboard = () => {
                     </div>
                 }
             >
-                <div className="min-h-[500px] space-y-4">
+                <div className="min-h-[420px] md:min-h-[500px] space-y-4">
                     {renderContent()}
 
                     {exportedSecret && (
