@@ -28,6 +28,26 @@ import { TradeHistory } from '../dashboard/TradeHistory';
 import { AgentLiveTerminal } from '../dashboard/AgentLiveTerminal';
 import { PositionsList } from '../dashboard/PositionsList';
 
+function formatActivityTime(time: unknown): string {
+    if (!time) return "--:--:--";
+
+    const date = new Date(time as string | number | Date);
+    if (!Number.isNaN(date.getTime())) {
+        return date.toLocaleTimeString([], {
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+        });
+    }
+
+    const raw = String(time);
+    const hhmmss = raw.match(/(\d{2}:\d{2}:\d{2})/);
+    if (hhmmss) return hhmmss[1];
+
+    return "--:--:--";
+}
+
 export const PremiumDashboardPage = () => {
     const [activeTab, setActiveTab] = useState<PremiumTab>('overview');
     const {
@@ -38,6 +58,7 @@ export const PremiumDashboardPage = () => {
         agentStatus,
         tradingConfig,
         isAgentActive,
+        isBotOnline,
         tradeHistory,
     } = useDashboardData();
 
@@ -92,6 +113,11 @@ export const PremiumDashboardPage = () => {
             : "Unknown";
 
     const rpcLatencyMs = (botHealth as any)?.latencyMs ?? null;
+    const botLiveLabel = isBotOnline
+        ? "Bot Live"
+        : isAgentActive
+            ? "Bot Stalled"
+            : "Bot Off";
 
     const handleDragStart = (tab: string, id: string) => {
         setDraggedCard({ tab, id });
@@ -177,7 +203,7 @@ export const PremiumDashboardPage = () => {
                                         }`}></div>
                                     <div className="flex-1 min-w-0">
                                         <p className="text-xs text-foreground font-medium line-clamp-2">{log.message}</p>
-                                        <p className="text-[10px] text-muted-foreground mt-1">{new Date(log.time).toLocaleTimeString()}</p>
+                                        <p className="text-[10px] text-muted-foreground mt-1">{formatActivityTime(log.time)}</p>
                                     </div>
                                 </div>
                             )) : (
@@ -479,13 +505,15 @@ export const PremiumDashboardPage = () => {
                         </div>
 
                         <div
-                            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 border border-white/10 rounded-2xl text-sm font-medium transition-all ${isAgentActive
+                            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 border border-white/10 rounded-2xl text-sm font-medium transition-all ${isBotOnline
                                 ? "bg-green-500/20 text-green-200"
+                                : isAgentActive
+                                    ? "bg-amber-500/20 text-amber-200"
                                 : "bg-white/10 text-muted-foreground"
                                 }`}
                         >
-                            <span>{isAgentActive ? "Bot On" : "Bot Off"}</span>
-                            <div className={`w-2 h-2 rounded-full ${isAgentActive ? "bg-green-300 animate-pulse" : "bg-white/40"}`}></div>
+                            <span>{botLiveLabel}</span>
+                            <div className={`w-2 h-2 rounded-full ${isBotOnline ? "bg-green-300 animate-pulse" : isAgentActive ? "bg-amber-300" : "bg-white/40"}`}></div>
                         </div>
 
                         {/* Bot toggle permanece disponível dentro do menu Trading */}

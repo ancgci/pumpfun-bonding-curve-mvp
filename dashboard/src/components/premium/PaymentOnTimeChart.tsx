@@ -16,8 +16,10 @@ interface PaymentOnTimeChartProps {
 }
 
 export const PaymentOnTimeChart = ({ trades = [] }: PaymentOnTimeChartProps) => {
+    const recentTrades = trades.slice(-20);
+
     // Normalize multiple possible field names so the chart works with agent trades or simulation trades
-    const normalized = trades
+    const chartData = recentTrades
         .map((t, i) => {
             const percent =
                 t.pnlPercent ??
@@ -32,18 +34,18 @@ export const PaymentOnTimeChart = ({ trades = [] }: PaymentOnTimeChartProps) => 
             if (!time && percent === 0 && pnl === 0) return null; // skip empty rows
 
             return {
-                x: i,
+                x: i + 1,
                 y: Math.min(100, Math.max(0, percent + 50)),
-                z: Math.abs(percent) * 8 + 40,
+                z: Math.abs(percent) * 6 + 36,
                 status: pnl >= 0 ? 'win' : 'loss',
                 pnl,
                 percent,
                 mint: label,
+                tradeIndex: i + 1,
             };
         })
         .filter(Boolean) as any[];
-
-    const chartData = normalized.slice(-20);
+    const maxX = Math.max(chartData.length, 1);
 
     const winCount = trades.filter(t => (t.pnl || 0) > 0).length;
     const totalCount = trades.length;
@@ -75,11 +77,17 @@ export const PaymentOnTimeChart = ({ trades = [] }: PaymentOnTimeChartProps) => 
                     </div>
                 ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                        <ScatterChart margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+                        <ScatterChart margin={{ top: 12, right: 14, bottom: 12, left: 14 }}>
                             <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                            <XAxis type="number" dataKey="x" hide />
+                            <XAxis
+                                type="number"
+                                dataKey="x"
+                                hide
+                                domain={[0.5, maxX + 0.5]}
+                                allowDataOverflow
+                            />
                             <YAxis type="number" dataKey="y" hide domain={[0, 100]} />
-                            <ZAxis type="number" dataKey="z" range={[50, 400]} />
+                            <ZAxis type="number" dataKey="z" range={[52, 220]} />
                             <Tooltip
                                 cursor={{ strokeDasharray: '3 3' }}
                                 content={({ active, payload }: any) => {
@@ -87,6 +95,7 @@ export const PaymentOnTimeChart = ({ trades = [] }: PaymentOnTimeChartProps) => 
                                         const data = payload[0].payload;
                                         return (
                                             <div className="bg-background/95 backdrop-blur-xl border border-white/10 p-3 rounded-xl shadow-2xl space-y-1">
+                                                <p className="text-[10px] text-muted-foreground font-mono">Trade #{data.tradeIndex}</p>
                                                 <p className="text-[10px] text-muted-foreground font-mono truncate max-w-[150px]">{data.mint}</p>
                                                 <div className="flex justify-between gap-4">
                                                     <span className={`text-sm font-bold ${data.pnl >= 0 ? 'text-primary' : 'text-red-400'}`}>

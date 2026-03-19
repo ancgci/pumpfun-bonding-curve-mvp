@@ -6,6 +6,7 @@ export function TradingParameters() {
   const { tradingConfig, updateConfig } = useDashboardData();
   const [localConfig, setLocalConfig] = useState<any>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const stopLossEnabled = localConfig.stopLossEnabled !== false;
@@ -13,20 +14,23 @@ export function TradingParameters() {
 
   // Sync local state when the master config arrives
   useEffect(() => {
-    if (tradingConfig) {
+    if (tradingConfig && !isDirty) {
       setLocalConfig(tradingConfig);
     }
-  }, [tradingConfig]);
+  }, [tradingConfig, isDirty]);
 
   const handleChange = (key: string, value: any) => {
+    setIsDirty(true);
     setLocalConfig((prev: any) => ({ ...prev, [key]: value }));
   };
 
   const handleTogglePersist = async (key: string, next: boolean) => {
     setSavingKey(key);
+    setIsDirty(true);
     setLocalConfig((prev: any) => ({ ...prev, [key]: next }));
     try {
       await updateConfig({ [key]: next });
+      setIsDirty(false);
       setSaveMessage("");
     } catch (err: any) {
       setSaveMessage(`❌ ${err.message || "Erro ao salvar"}`);
@@ -57,9 +61,11 @@ export function TradingParameters() {
     }
 
     setSavingKey("stopLossEnabled");
+    setIsDirty(true);
     setLocalConfig((prev: any) => ({ ...prev, ...updates }));
     try {
       await updateConfig(updates);
+      setIsDirty(false);
       setSaveMessage("");
     } catch (err: any) {
       setSaveMessage(`❌ ${err.message || "Erro ao salvar"}`);
@@ -75,6 +81,7 @@ export function TradingParameters() {
     setSaveMessage("");
     try {
       await updateConfig(localConfig);
+      setIsDirty(false);
       setSaveMessage("✅ Parameters saved successfully");
       setTimeout(() => setSaveMessage(""), 3000);
     } catch (err: any) {

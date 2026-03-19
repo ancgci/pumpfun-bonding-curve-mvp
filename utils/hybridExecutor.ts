@@ -386,7 +386,12 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
     // Tentar enviar via Jito primeiro
     try {
       logger.info("⚡ Tentando enviar via Jito Bundle...");
-      const signature = await sendJitoBundle([versionedTransaction], signer, connection);
+      const signature = await sendJitoBundle(
+        [versionedTransaction],
+        signer,
+        connection,
+        currentConfig.JITO_TIP_AMOUNT
+      );
       logger.info(`✅ Compra realizada com sucesso via Jito: ${signature}`);
       return signature;
     } catch (jitoError) {
@@ -519,7 +524,12 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
     // Tentar enviar via Jito primeiro
     try {
       logger.info("⚡ Tentando enviar VENDA via Jito Bundle...");
-      const signature = await sendJitoBundle([versionedTransaction], signer, connection);
+      const signature = await sendJitoBundle(
+        [versionedTransaction],
+        signer,
+        connection,
+        currentConfig.JITO_TIP_AMOUNT
+      );
       logger.info(`✅ Venda realizada com sucesso via Jito: ${signature}`);
       return signature;
     } catch (jitoError) {
@@ -707,12 +717,6 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
     const TAKE_PROFIT_PERCENT = currentConfig.TAKE_PROFIT_PERCENT || 100;
     const STOP_LOSS_PERCENT = currentConfig.STOP_LOSS_PERCENT || 30;
 
-    // Verificar se a compra automática está habilitada (Mirror ignora isso)
-    if (!AUTO_BUY_ENABLED && !force) {
-      logger.info(`ℹ️  Compra automática desativada. AUTO_BUY_ENABLED=${AUTO_BUY_ENABLED}`);
-      return;
-    }
-
     // Checking Circuit Breaker
     if (!circuitBreaker.canTrade() && !force) {
       return;
@@ -726,6 +730,12 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
 
     // ─── COMPRA ───
     if (tradeType === "BUY") {
+      // Verificar se a compra automática está habilitada (Mirror ignora isso)
+      if (!AUTO_BUY_ENABLED && !force) {
+        logger.info(`ℹ️  Compra automática desativada. AUTO_BUY_ENABLED=${AUTO_BUY_ENABLED}`);
+        return;
+      }
+
       const isDiscoveryBuy = tokenData.mode === "CURVE" && tokenData.curvePercent >= 97.7;
       if (isDiscoveryBuy || force) {
         if (SINGLE_TRADE_MODE && hasActiveTrade() && !force) {
@@ -765,6 +775,15 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
     if (tradeType === "SELL") {
       const position = positionManager.getPosition(tokenData.mint);
       if (position && position.isActive) {
+        const autoSellTakeProfit = currentConfig.AUTO_SELL_TAKE_PROFIT !== false;
+        const autoSellStopLoss = currentConfig.AUTO_SELL_STOP_LOSS !== false;
+        const stopLossEnabled = (currentConfig as any).STOP_LOSS_ENABLED !== false;
+
+        if (!force && !autoSellTakeProfit && (!autoSellStopLoss || !stopLossEnabled)) {
+          logger.info(`ℹ️  Auto sell desativado para ${tokenData.mint}.`);
+          return;
+        }
+
         const priceInfo = await getTokenPrice(tokenData.mint);
         if (!priceInfo && !force) {
           logger.debug(`Não foi possível obter preço para ${tokenData.mint}, pulando verificação`);
@@ -779,8 +798,8 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
           currentPrice || buyPrice,
           (position as any).highWaterMark || buyPrice,
           buyPrice,
-          position.takeProfit || TAKE_PROFIT_PERCENT,
-          position.stopLoss || STOP_LOSS_PERCENT,
+          autoSellTakeProfit ? (position.takeProfit || TAKE_PROFIT_PERCENT) : Number.POSITIVE_INFINITY,
+          (autoSellStopLoss && stopLossEnabled) ? (position.stopLoss || STOP_LOSS_PERCENT) : 100,
           (currentConfig as any).TRAILING_STOP_PERCENT || 0,
           (currentConfig as any).WHALE_DUMP_PERCENT || 30,
           (currentConfig as any).VOLATILITY_ADJUSTED_TP_SL ? atr : null,

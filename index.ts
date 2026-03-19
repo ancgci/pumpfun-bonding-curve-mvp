@@ -45,6 +45,19 @@ import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
 import { dipMonitor } from "./utils/dipMonitor";
 import { circuitBreaker } from "./utils/circuitBreaker";
 import { getTAConfig } from "./utils/technicalConfig";
+import {
+  BOT_HEARTBEAT_INTERVAL_MS,
+  STREAM_STALL_THRESHOLD_MS,
+  initializeBotRuntimeHealth,
+  markBotHeartbeat,
+  markBotRuntimeError,
+  markDecisionActivity,
+  markDiscoveryActivity,
+  markTradeExecutionActivity,
+  markStreamConnected,
+  markStreamDisconnected,
+  markStreamEvent,
+} from "./utils/botRuntimeHealth";
 
 // Cores ANSI para Logs
 const C_BLUE = "\x1b[36m";
@@ -331,6 +344,10 @@ const botHealth: BotHealth = {
   lastError: null
 };
 
+let activeGrpcStream: any = null;
+let activeGrpcStreamStartedAt: number | null = null;
+let lastGrpcDataAt: number | null = null;
+
 function updateBotHealth(isHealthy: boolean, error?: string) {
   botHealth.isHealthy = isHealthy;
   if (!isHealthy && error) {
@@ -342,6 +359,44 @@ function updateBotHealth(isHealthy: boolean, error?: string) {
   } else if (isHealthy) {
     botHealth.errorCount = 0;
     botHealth.lastError = null;
+  }
+}
+
+function describeError(error: unknown): string {
+  if (!error) return "Unknown error";
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function recycleActiveGrpcStream(reason: string) {
+  if (!activeGrpcStream) return;
+
+  logger.error(`⚠️ gRPC stream stalled: ${reason}. Forcing reconnect.`);
+  markStreamDisconnected(reason);
+
+  const stream = activeGrpcStream;
+  activeGrpcStream = null;
+  activeGrpcStreamStartedAt = null;
+
+  try {
+    if (typeof stream.cancel === "function") {
+      stream.cancel();
+      return;
+    }
+    if (typeof stream.destroy === "function") {
+      stream.destroy(new Error(reason));
+      return;
+    }
+    if (typeof stream.end === "function") {
+      stream.end();
+    }
+  } catch (error) {
+    logger.warn(`⚠️ Failed to recycle stalled gRPC stream: ${describeError(error)}`);
   }
 }
 
@@ -443,9 +498,21 @@ if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
 async function handleStream(client: Client, args: SubscribeRequest) {
   // Subscribe for events
   const stream = await client.subscribe();
+  activeGrpcStream = stream;
+  activeGrpcStreamStartedAt = Date.now();
+  lastGrpcDataAt = null;
 
   // Cleanup function to remove all listeners and prevent memory leaks
-  const cleanup = () => {
+  let cleanedUp = false;
+  const cleanup = (reason?: string) => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    if (activeGrpcStream === stream) {
+      activeGrpcStream = null;
+      activeGrpcStreamStartedAt = null;
+      lastGrpcDataAt = null;
+    }
+    markStreamDisconnected(reason);
     try {
       stream.removeAllListeners();
     } catch (e) {
@@ -456,17 +523,19 @@ async function handleStream(client: Client, args: SubscribeRequest) {
   // Create `error` / `end` handler
   const streamClosed = new Promise<void>((resolve, reject) => {
     stream.on("error", (error) => {
+      const reason = describeError(error);
       logger.error("ERROR", error);
-      cleanup();
+      markBotRuntimeError(reason);
+      cleanup(reason);
       reject(error);
       stream.end();
     });
     stream.on("end", () => {
-      cleanup();
+      cleanup("Stream ended");
       resolve();
     });
     stream.on("close", () => {
-      cleanup();
+      cleanup("Stream closed");
       resolve();
     });
   });
@@ -474,7 +543,12 @@ async function handleStream(client: Client, args: SubscribeRequest) {
   // Handle updates
   stream.on("data", async (data) => {
     try {
+      lastGrpcDataAt = Date.now();
+      markStreamEvent();
       if (data?.transaction) {
+        const matchedFilters = Array.isArray((data as any).filters)
+          ? new Set((data as any).filters.map((filter: unknown) => String(filter)))
+          : null;
         const txn = TXN_FORMATTER.formTransactionFromJson(
           data.transaction,
           Date.now()
@@ -482,7 +556,11 @@ async function handleStream(client: Client, args: SubscribeRequest) {
 
         // Verificar transações PumpFun se o monitoramento estiver habilitado
         const pumpFunEnabled = (ACTIVE_CONFIG as any).PUMPFUN_ENABLED !== false;
-        if (pumpFunEnabled && (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (
+          pumpFunEnabled &&
+          (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") &&
+          (!matchedFilters || matchedFilters.has("pumpFun"))
+        ) {
           const parsedPumpFunTxn = decodePumpFunTxn(txn);
           if (parsedPumpFunTxn) {
             await processPumpFunTransaction(txn, parsedPumpFunTxn);
@@ -490,8 +568,11 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações Meteora DBC se o monitoramento estiver habilitado
-        if (ACTIVE_CONFIG.METEORA_DBC_MONITORING_ENABLED &&
-          (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH")) {
+        if (
+          ACTIVE_CONFIG.METEORA_DBC_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "METEORA_DBC" || MONITORING_PROTOCOL === "BOTH") &&
+          (!matchedFilters || matchedFilters.has("meteoraDBC"))
+        ) {
           const parsedMeteoraDBCTxn = decodeMeteoraDBCTxn(txn);
           if (parsedMeteoraDBCTxn) {
             await processMeteoraDBCTransaction(txn, parsedMeteoraDBCTxn);
@@ -499,8 +580,11 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações Bonk.fun se o monitoramento estiver habilitado
-        if (ACTIVE_CONFIG.BONK_FUN_MONITORING_ENABLED &&
-          (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (
+          ACTIVE_CONFIG.BONK_FUN_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "BONK_FUN" || MONITORING_PROTOCOL === "BOTH") &&
+          (!matchedFilters || matchedFilters.has("bonkFun"))
+        ) {
           const parsedBonkFunTxn = decodeBonkFunTxn(txn);
           if (parsedBonkFunTxn) {
             await processBonkFunTransaction(txn, parsedBonkFunTxn);
@@ -508,8 +592,11 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações daos.fun se o monitoramento estiver habilitado
-        if (ACTIVE_CONFIG.DAOS_FUN_MONITORING_ENABLED &&
-          (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (
+          ACTIVE_CONFIG.DAOS_FUN_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "DAOS_FUN" || MONITORING_PROTOCOL === "BOTH") &&
+          (!matchedFilters || matchedFilters.has("daosFun"))
+        ) {
           const parsedDaosFunTxn = decodeDaosFunTxn(txn);
           if (parsedDaosFunTxn) {
             await processDaosFunTransaction(txn, parsedDaosFunTxn);
@@ -517,8 +604,11 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações Moonshot Screener se o monitoramento estiver habilitado
-        if (ACTIVE_CONFIG.MOONSHOT_MONITORING_ENABLED &&
-          (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH")) {
+        if (
+          ACTIVE_CONFIG.MOONSHOT_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "MOONSHOT" || MONITORING_PROTOCOL === "BOTH") &&
+          (!matchedFilters || matchedFilters.has("moonshot"))
+        ) {
           const parsedMoonshotTxn = decodeMoonshotTxn(txn);
           if (parsedMoonshotTxn) {
             await processMoonshotTransaction(txn, parsedMoonshotTxn);
@@ -526,8 +616,11 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
 
         // Verificar transações anoncoin.it se o monitoramento estiver habilitado
-        if (ANONCOIN_MONITORING_ENABLED &&
-          (MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH")) {
+        if (
+          ANONCOIN_MONITORING_ENABLED &&
+          (MONITORING_PROTOCOL === "ANONCOIN" || MONITORING_PROTOCOL === "BOTH") &&
+          (!matchedFilters || matchedFilters.has("anoncoin"))
+        ) {
           const parsedAnoncoinTxn = decodeAnoncoinTxn(txn);
           if (parsedAnoncoinTxn) {
             await processAnoncoinTransaction(txn, parsedAnoncoinTxn);
@@ -535,6 +628,7 @@ async function handleStream(client: Client, args: SubscribeRequest) {
         }
       }
     } catch (err) {
+      markBotRuntimeError(describeError(err));
       logger.error(err);
     }
   });
@@ -549,11 +643,195 @@ async function handleStream(client: Client, args: SubscribeRequest) {
       }
     });
   }).catch((reason) => {
+    const message = describeError(reason);
+    markBotRuntimeError(message);
+    cleanup(message);
     logger.error(reason);
     throw reason;
   });
 
+  markStreamConnected();
+
   await streamClosed;
+}
+
+function getProtocolTokenKey(protocolId: string, mint: string): string {
+  return `${protocolId}:${mint}`;
+}
+
+function shouldPersistAgentDecision(decision: { action?: string; reasoning?: string } | null | undefined): boolean {
+  if (!decision) return false;
+  const reason = String(decision.reasoning || "").toLowerCase();
+  const isInsufficient =
+    reason.includes("insufficient data") ||
+    reason.includes("too few holders") ||
+    reason.includes("insufficient_data");
+  return decision.action === "BUY" || !isInsufficient;
+}
+
+function deriveObservedTokenPrice(
+  solAmountRaw: unknown,
+  tokenAmountRaw: unknown,
+  fallbackPrice?: number | null
+): number {
+  const solAmount = Number(solAmountRaw) || 0;
+  const tokenAmount = Number(tokenAmountRaw) || 0;
+
+  if (solAmount > 0 && tokenAmount > 0) {
+    const normalizedTokenAmount = tokenAmount > 1_000_000
+      ? tokenAmount / 1_000_000
+      : tokenAmount;
+    if (normalizedTokenAmount > 0) {
+      return solAmount / normalizedTokenAmount;
+    }
+  }
+
+  const numericFallback = Number(fallbackPrice) || 0;
+  return numericFallback > 0 ? numericFallback : 0;
+}
+
+async function loadTokenMetadataSafe(mint: string, contextLabel: string) {
+  if (!mint || mint === "UNKNOWN_MINT") return null;
+  try {
+    return await getCachedTokenMetadata(mint);
+  } catch (metadataError: any) {
+    logger.debug(`❌ Erro ao buscar metadados para ${contextLabel} ${mint}: ${metadataError.message}`);
+    return null;
+  }
+}
+
+async function runProtocolSimulationDiscovery(params: {
+  protocolId: string;
+  protocolLabel: string;
+  tOutput: {
+    mint: string;
+    user: string;
+    type: string;
+    bondingCurve: string;
+    tokenAmount: number;
+    solAmount: number;
+  };
+  progress: number;
+  tokenMetadata?: any;
+}) {
+  const runtimeCfg = getRuntimeConfig();
+  if (runtimeCfg.AGENT_ENABLED !== true) return;
+  if ((runtimeCfg.AGENT_MODE || "SIMULATION") !== "SIMULATION") return;
+
+  const { protocolId, protocolLabel, tOutput, progress, tokenMetadata } = params;
+  const tokenKey = getProtocolTokenKey(protocolId, tOutput.mint);
+
+  if (
+    !tOutput.mint ||
+    !tOutput.user ||
+    aiProcessedAddresses.has(tokenKey) ||
+    currentlyProcessing.has(tokenKey)
+  ) {
+    return;
+  }
+
+  currentlyProcessing.add(tokenKey);
+  try {
+    const symbol = tokenMetadata?.symbol || "UNK";
+    logger.info(
+      `[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${symbol} (${tOutput.mint}) descoberto em ${protocolLabel} aos ${Number(progress).toFixed(1)}% da curva.`
+    );
+    markDiscoveryActivity();
+
+    const currentPrice = deriveObservedTokenPrice(
+      tOutput.solAmount,
+      tOutput.tokenAmount,
+      tokenMetadata?.price
+    );
+
+    if (!(currentPrice > 0)) {
+      logger.info(`⚠️ [${protocolLabel}] ${tOutput.mint} sem preço confiável para simulação. Pulando candidato.`);
+      return;
+    }
+
+    recordPriceSample(tOutput.mint, currentPrice, Number(tOutput.solAmount) || 0);
+
+    if (tOutput.type === "BUY" || tOutput.type === "SELL") {
+      recordOrganicityTrade(
+        tOutput.mint,
+        tOutput.user,
+        tOutput.type as "BUY" | "SELL",
+        Number(tOutput.solAmount) || 0,
+        currentPrice,
+        Number(progress)
+      );
+    }
+
+    let riskAnalysis: any = null;
+    if (RISK_CONFIG.enabled) {
+      try {
+        logger.info(`[Pipeline 2/8 - RiskEngine] 🛡️ Validando ${symbol} (${tOutput.mint}) no Motor de Risco (${protocolLabel}).`);
+        riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata, Number(progress));
+
+        const isUltraAggressive = getTAConfig().scoreMinimo <= 5;
+        if (RISK_CONFIG.detection.blockUnlockedLP &&
+          !riskAnalysis.flags.LP_LOCKED &&
+          !riskAnalysis.flags.LP_BURNED) {
+          if (isUltraAggressive) {
+            logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando LP Locker para ${tOutput.mint} (${protocolLabel}).`);
+          } else {
+            logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | ${symbol} (${tOutput.mint}) bloqueado em ${protocolLabel} (LP não lockado).`);
+            return;
+          }
+        }
+
+        if (riskAnalysis.score > RISK_CONFIG.thresholds.med) {
+          if (isUltraAggressive) {
+            logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando Risk Score alto (${riskAnalysis.score}) em ${protocolLabel}.`);
+          } else {
+            logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | ${symbol} (${tOutput.mint}) bloqueado em ${protocolLabel} (Risk Score Alto: ${riskAnalysis.score}).`);
+            return;
+          }
+        } else {
+          logger.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | ${symbol} (${tOutput.mint}) aprovado no RiskEngine (${protocolLabel}).`);
+        }
+      } catch (riskError: any) {
+        logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint} em ${protocolLabel}: ${riskError.message}.`);
+        return;
+      }
+    }
+
+    const tokenAnalysis: any = {
+      mint: tOutput.mint,
+      symbol,
+      price: currentPrice,
+      bondingCurvePercent: Number(progress),
+      riskScore: riskAnalysis?.score ?? 0,
+      honeypotRisk: riskAnalysis?.flags?.HONEYPOT_OP ?? false,
+      isCopyTrade: false,
+      holders: riskAnalysis?.metrics?.totalHolders ?? 0,
+      volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
+      liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+      marketCap: tokenMetadata?.marketCap ?? null,
+      top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
+      protocol: protocolId,
+      timeframe: "1s",
+    };
+
+    const decision = await getAgentDecision(tokenAnalysis);
+    if (!decision) {
+      return;
+    }
+
+    markDecisionActivity();
+    if (shouldPersistAgentDecision(decision)) {
+      aiProcessedAddresses.add(tokenKey);
+      logger.info(`🎯 [Agent] Token ${tokenKey} marcado como processado (Decision: ${decision.action}).`);
+    } else {
+      logger.info(`⏳ [Agent] Token ${tokenKey} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+    }
+
+    await executeAgentTrade(tokenAnalysis, decision, async () => {
+      logger.warn(`⚠️ [${protocolLabel}] Execução LIVE ainda não implementada para este protocolo. Fluxo mantido apenas em simulação.`);
+    });
+  } finally {
+    currentlyProcessing.delete(tokenKey);
+  }
 }
 
 // Função para processar transações PumpFun (movida do handleStream original)
@@ -705,6 +983,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       }
       if (isDiscovery) {
         logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
+        markDiscoveryActivity();
 
         // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
         // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
@@ -803,6 +1082,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             await executeHybridTrade(tokenData, tOutput.type, force);
+            markTradeExecutionActivity();
             logger.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
             return;
           } catch (error: any) {
@@ -817,7 +1097,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       };
 
       // ── AI Agent / Copy-Trading orchestration ──
-      const agentEnabled = process.env.AGENT_ENABLED === "true";
+      const agentEnabled = getRuntimeConfig().AGENT_ENABLED === true;
       const tokenAnalysis: any = {
         mint: tOutput.mint,
         symbol: tokenMetadata?.symbol || "UNK",
@@ -856,6 +1136,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         }
 
         if (decision) {
+          markDecisionActivity();
           // Se houve uma decisão definitiva (BUY ou SKIP por risco concreto), marcamos como processado
           const reason = (decision.reasoning || "").toLowerCase();
           const isInsufficient = reason.includes("insufficient data") ||
@@ -908,7 +1189,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
 // Função para processar transações Meteora DBC
 async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
-  logger.info("🔄 Transação Meteora DBC detectada:", txn.transaction.signatures[0]);
+  logger.debug("🔄 Transação Meteora DBC detectada:", txn.transaction.signatures[0]);
 
   try {
     // Importar funções utilitárias da Meteora DBC
@@ -1014,7 +1295,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       logger.debug(`⚠️ Bonding Curve inválida (${tOutput.bondingCurve}), pulando cálculo de progresso.`);
     }
 
-    logger.info(
+    logger.debug(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -1031,30 +1312,51 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
     if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
 
     // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const meteoraRuntimeCfg = getRuntimeConfig();
+    const meteoraSimulationModeActive =
+      meteoraRuntimeCfg.AGENT_ENABLED === true &&
+      (meteoraRuntimeCfg.AGENT_MODE || "SIMULATION") === "SIMULATION";
     const currentMeteoraThreshold = ACTIVE_CONFIG.METEORA_DBC_ALERT_THRESHOLD || METEORA_DBC_ALERT_THRESHOLD;
-
-    if (
+    const meteoraTokenKey = getProtocolTokenKey("meteora_dbc", tOutput.mint);
+    const shouldSimulate =
+      meteoraSimulationModeActive &&
+      Number(progress) >= 90 &&
+      Number(progress) <= 100 &&
+      !aiProcessedAddresses.has(meteoraTokenKey) &&
+      !currentlyProcessing.has(meteoraTokenKey);
+    const shouldAlert =
       Number(progress) >= currentMeteoraThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint)
-    ) {
+      !sentAddresses.has(tOutput.mint);
+
+    let tokenMetadata = null;
+    if (shouldSimulate || shouldAlert) {
+      tokenMetadata = await loadTokenMetadataSafe(tOutput.mint, "token Meteora DBC");
+      if (tokenMetadata) {
+        recordCacheHit();
+      } else if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        recordCacheMiss();
+        recordApiCall();
+      }
+    }
+
+    if (shouldSimulate) {
+      await runProtocolSimulationDiscovery({
+        protocolId: "meteora_dbc",
+        protocolLabel: "Meteora DBC",
+        tOutput,
+        progress: Number(progress),
+        tokenMetadata,
+      });
+    }
+
+    if (shouldAlert) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-
-      // Buscar metadados do token, se disponível
-      let tokenMetadata = null;
-      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
-        try {
-          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
-        } catch (metadataError) {
-          logger.debug(`❌ Erro ao buscar metadados para token Meteora DBC ${tOutput.mint}:`, metadataError.message);
-        }
-      }
 
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (Meteora DBC): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
-        recordCacheHit(); // Registrar hit de cache
         if (tokenMetadata.name) {
           tokenInfo = `Token (Meteora DBC): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
         }
@@ -1096,9 +1398,6 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         if (tokenMetadata.creator) {
           tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
         }
-      } else {
-        recordCacheMiss(); // Registrar miss de cache
-        recordApiCall(); // Registrar chamada de API
       }
 
       // Enviar alerta
@@ -1121,7 +1420,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
 
 // Função para processar transações Bonk.fun
 async function processBonkFunTransaction(txn: any, parsedTxn: any) {
-  logger.info("🔄 Transação Bonk.fun detectada:", txn.transaction.signatures[0]);
+  logger.debug("🔄 Transação Bonk.fun detectada:", txn.transaction.signatures[0]);
 
   try {
     // Importar funções utilitárias do Bonk.fun
@@ -1196,7 +1495,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateBonkFunCurveProgress(tOutput.bondingCurve);
 
-    logger.info(
+    logger.debug(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -1213,30 +1512,51 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
     if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
 
     // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const bonkRuntimeCfg = getRuntimeConfig();
+    const bonkSimulationModeActive =
+      bonkRuntimeCfg.AGENT_ENABLED === true &&
+      (bonkRuntimeCfg.AGENT_MODE || "SIMULATION") === "SIMULATION";
     const currentBonkThreshold = ACTIVE_CONFIG.BONK_FUN_ALERT_THRESHOLD || BONK_FUN_ALERT_THRESHOLD;
-
-    if (
+    const bonkTokenKey = getProtocolTokenKey("bonk_fun", tOutput.mint);
+    const shouldSimulate =
+      bonkSimulationModeActive &&
+      Number(progress) >= 90 &&
+      Number(progress) <= 100 &&
+      !aiProcessedAddresses.has(bonkTokenKey) &&
+      !currentlyProcessing.has(bonkTokenKey);
+    const shouldAlert =
       Number(progress) >= currentBonkThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint)
-    ) {
+      !sentAddresses.has(tOutput.mint);
+
+    let tokenMetadata = null;
+    if (shouldSimulate || shouldAlert) {
+      tokenMetadata = await loadTokenMetadataSafe(tOutput.mint, "token bonk.fun");
+      if (tokenMetadata) {
+        recordCacheHit();
+      } else if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        recordCacheMiss();
+        recordApiCall();
+      }
+    }
+
+    if (shouldSimulate) {
+      await runProtocolSimulationDiscovery({
+        protocolId: "bonk_fun",
+        protocolLabel: "Bonk.fun",
+        tOutput,
+        progress: Number(progress),
+        tokenMetadata,
+      });
+    }
+
+    if (shouldAlert) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-
-      // Buscar metadados do token, se disponível
-      let tokenMetadata = null;
-      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
-        try {
-          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
-        } catch (metadataError) {
-          logger.debug(`❌ Erro ao buscar metadados para token bonk.fun ${tOutput.mint}:`, metadataError.message);
-        }
-      }
 
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (bonk.fun): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
-        recordCacheHit(); // Registrar hit de cache
         if (tokenMetadata.name) {
           tokenInfo = `Token (bonk.fun): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
         }
@@ -1278,9 +1598,6 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         if (tokenMetadata.creator) {
           tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
         }
-      } else {
-        recordCacheMiss(); // Registrar miss de cache
-        recordApiCall(); // Registrar chamada de API
       }
 
       // Enviar alerta
@@ -1304,7 +1621,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
 // Função para processar transações Moonshot Screener
 // Função para processar transações Moonshot Screener
 async function processMoonshotTransaction(txn: any, parsedTxn: any) {
-  logger.info("🔄 Transação Moonshot Screener detectada:", txn.transaction.signatures[0]);
+  logger.debug("🔄 Transação Moonshot Screener detectada:", txn.transaction.signatures[0]);
 
   try {
     // Importar funções utilitárias do Moonshot Screener
@@ -1379,7 +1696,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateMoonshotCurveProgress(tOutput.bondingCurve);
 
-    logger.info(
+    logger.debug(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -1396,30 +1713,51 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
     if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
 
     // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const moonshotRuntimeCfg = getRuntimeConfig();
+    const moonshotSimulationModeActive =
+      moonshotRuntimeCfg.AGENT_ENABLED === true &&
+      (moonshotRuntimeCfg.AGENT_MODE || "SIMULATION") === "SIMULATION";
     const currentMoonshotThreshold = ACTIVE_CONFIG.MOONSHOT_ALERT_THRESHOLD || MOONSHOT_ALERT_THRESHOLD;
-
-    if (
+    const moonshotTokenKey = getProtocolTokenKey("moonshot", tOutput.mint);
+    const shouldSimulate =
+      moonshotSimulationModeActive &&
+      Number(progress) >= 90 &&
+      Number(progress) <= 100 &&
+      !aiProcessedAddresses.has(moonshotTokenKey) &&
+      !currentlyProcessing.has(moonshotTokenKey);
+    const shouldAlert =
       Number(progress) >= currentMoonshotThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint)
-    ) {
+      !sentAddresses.has(tOutput.mint);
+
+    let tokenMetadata = null;
+    if (shouldSimulate || shouldAlert) {
+      tokenMetadata = await loadTokenMetadataSafe(tOutput.mint, "token moonshot");
+      if (tokenMetadata) {
+        recordCacheHit();
+      } else if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        recordCacheMiss();
+        recordApiCall();
+      }
+    }
+
+    if (shouldSimulate) {
+      await runProtocolSimulationDiscovery({
+        protocolId: "moonshot",
+        protocolLabel: "Moonshot",
+        tOutput,
+        progress: Number(progress),
+        tokenMetadata,
+      });
+    }
+
+    if (shouldAlert) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-
-      // Buscar metadados do token, se disponível
-      let tokenMetadata = null;
-      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
-        try {
-          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
-        } catch (metadataError) {
-          logger.debug(`❌ Erro ao buscar metadados para token moonshot ${tOutput.mint}:`, metadataError.message);
-        }
-      }
 
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (moonshot): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
-        recordCacheHit(); // Registrar hit de cache
         if (tokenMetadata.name) {
           tokenInfo = `Token (moonshot): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
         }
@@ -1461,9 +1799,6 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         if (tokenMetadata.creator) {
           tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
         }
-      } else {
-        recordCacheMiss(); // Registrar miss de cache
-        recordApiCall(); // Registrar chamada de API
       }
 
       // Enviar alerta
@@ -1670,7 +2005,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
 
 // Função para processar transações daos.fun
 async function processDaosFunTransaction(txn: any, parsedTxn: any) {
-  logger.info("🔄 Transação daos.fun detectada:", txn.transaction.signatures[0]);
+  logger.debug("🔄 Transação daos.fun detectada:", txn.transaction.signatures[0]);
 
   try {
     // Importar funções utilitárias do daos.fun
@@ -1756,7 +2091,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateDaosFunCurveProgress(tOutput.bondingCurve);
 
-    logger.info(
+    logger.debug(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -1773,30 +2108,51 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
     if ((ACTIVE_CONFIG as any).EMERGENCY_STOP_ACTIVE) return;
 
     // Verificar se atingiu o limiar de alerta usando config dinâmica
+    const daosRuntimeCfg = getRuntimeConfig();
+    const daosSimulationModeActive =
+      daosRuntimeCfg.AGENT_ENABLED === true &&
+      (daosRuntimeCfg.AGENT_MODE || "SIMULATION") === "SIMULATION";
     const currentDaosThreshold = ACTIVE_CONFIG.DAOS_FUN_ALERT_THRESHOLD || DAOS_FUN_ALERT_THRESHOLD;
-
-    if (
+    const daosTokenKey = getProtocolTokenKey("daos_fun", tOutput.mint);
+    const shouldSimulate =
+      daosSimulationModeActive &&
+      Number(progress) >= 90 &&
+      Number(progress) <= 100 &&
+      !aiProcessedAddresses.has(daosTokenKey) &&
+      !currentlyProcessing.has(daosTokenKey);
+    const shouldAlert =
       Number(progress) >= currentDaosThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint)
-    ) {
+      !sentAddresses.has(tOutput.mint);
+
+    let tokenMetadata = null;
+    if (shouldSimulate || shouldAlert) {
+      tokenMetadata = await loadTokenMetadataSafe(tOutput.mint, "token daos.fun");
+      if (tokenMetadata) {
+        recordCacheHit();
+      } else if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
+        recordCacheMiss();
+        recordApiCall();
+      }
+    }
+
+    if (shouldSimulate) {
+      await runProtocolSimulationDiscovery({
+        protocolId: "daos_fun",
+        protocolLabel: "Daos.fun",
+        tOutput,
+        progress: Number(progress),
+        tokenMetadata,
+      });
+    }
+
+    if (shouldAlert) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
-
-      // Buscar metadados do token, se disponível
-      let tokenMetadata = null;
-      if (tOutput.mint && tOutput.mint !== "UNKNOWN_MINT") {
-        try {
-          tokenMetadata = await getCachedTokenMetadata(tOutput.mint);
-        } catch (metadataError) {
-          logger.debug(`❌ Erro ao buscar metadados para token daos.fun ${tOutput.mint}:`, metadataError.message);
-        }
-      }
 
       // Preparar mensagem com metadados, se disponíveis
       let tokenInfo = `Token (daos.fun): <code>${tOutput.mint}</code>\n`;
       if (tokenMetadata) {
-        recordCacheHit(); // Registrar hit de cache
         if (tokenMetadata.name) {
           tokenInfo = `Token (daos.fun): <code>${tokenMetadata.name} (${tOutput.mint})</code>\n`;
         }
@@ -1838,9 +2194,6 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         if (tokenMetadata.creator) {
           tokenInfo += `Creator: <code>${tokenMetadata.creator.substring(0, 8)}...</code>\n`;
         }
-      } else {
-        recordCacheMiss(); // Registrar miss de cache
-        recordApiCall(); // Registrar chamada de API
       }
 
       // Enviar alerta
@@ -1885,7 +2238,9 @@ async function subscribeCommand(client: Client, args: SubscribeRequest) {
     } catch (error: any) {
       reconnectAttempts++;
       const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts), 30000);
+      const reason = describeError(error);
 
+      markBotRuntimeError(reason);
       logger.error(`⚠️ Stream error (tentativa ${reconnectAttempts}/${maxReconnectAttempts}), reconnecting em ${delay}ms...`, error.message || error);
 
       if (reconnectAttempts >= maxReconnectAttempts) {
@@ -1924,6 +2279,22 @@ if (GRPC_ENDPOINT) {
 } else {
   logger.warn("⚠️ Nenhum endpoint gRPC configurado. Streaming desabilitado; apenas componentes HTTP funcionarão.");
 }
+
+initializeBotRuntimeHealth(Boolean(GRPC_ENDPOINT));
+
+setInterval(() => {
+  markBotHeartbeat();
+
+  if (!activeGrpcStream || !activeGrpcStreamStartedAt) {
+    return;
+  }
+
+  const referenceTime = lastGrpcDataAt || activeGrpcStreamStartedAt;
+  const silenceMs = Date.now() - referenceTime;
+  if (silenceMs > STREAM_STALL_THRESHOLD_MS) {
+    recycleActiveGrpcStream(`No events for ${Math.round(silenceMs / 1000)}s`);
+  }
+}, BOT_HEARTBEAT_INTERVAL_MS);
 
 const req: SubscribeRequest = {
   accounts: {},

@@ -77,18 +77,26 @@ export function LearningBlocks() {
   const sim = agentStatus?.simulation || {};
   const main = agentStatus?.mainnet || {};
 
-  // Derive live values from simulation metrics/trades when file-based metrics are empty
-  const liveTrades = Array.isArray(simTrades) ? simTrades.length : 0;
-  const liveWinRate = simStatus?.metrics?.winRate ?? null;
-  const liveTotalTrades = simStatus?.metrics?.totalTrades ?? null;
-  const derivedTradesAnalyzed = liveTotalTrades ?? liveTrades ?? 0;
-  const derivedWinShift = liveWinRate !== null ? liveWinRate : sim.winRateImprovement || 0;
+  // The legacy learning metrics file can be empty while simulation metrics are already populated.
+  // Use a single source of truth per render path to avoid mixed cards like "0 trades" with a non-zero win shift.
+  const closedSimTrades = Array.isArray(simTrades)
+    ? simTrades.filter((trade) => trade?.status !== "OPEN").length
+    : 0;
+  const legacySimTrades = Number(sim.tradesAnalyzed ?? 0);
+  const legacySimRequired = Number(sim.tradesRequired || 50);
+  const runtimeSimTrades = Number(simStatus?.metrics?.totalTrades ?? 0);
+  const runtimeSimWinRate = Number(simStatus?.metrics?.winRate ?? 0);
+  const fallbackSimTrades = runtimeSimTrades > 0 ? runtimeSimTrades : closedSimTrades;
+  const effectiveSimTrades = legacySimTrades > 0 ? legacySimTrades : fallbackSimTrades;
+  const effectiveSimWinShift = effectiveSimTrades > 0
+    ? (legacySimTrades > 0 ? Number(sim.winRateImprovement || 0) : runtimeSimWinRate)
+    : 0;
 
   const simProgress = useMemo(() => {
-    const analyzed = Number(sim.tradesAnalyzed ?? derivedTradesAnalyzed ?? 0);
-    const required = Number(sim.tradesRequired || 50);
+    const analyzed = Number(effectiveSimTrades);
+    const required = Number(legacySimRequired);
     return required > 0 ? (analyzed / required) * 100 : 0;
-  }, [sim.tradesAnalyzed, sim.tradesRequired, derivedTradesAnalyzed]);
+  }, [effectiveSimTrades, legacySimRequired]);
 
   const mainProgress = useMemo(() => {
     const analyzed = Number(main.tradesAnalyzed || 0);
@@ -97,8 +105,8 @@ export function LearningBlocks() {
   }, [main.tradesAnalyzed, main.tradesRequired]);
 
   const nextOptSim = (() => {
-    const required = Number(sim.tradesRequired || 50);
-    const analyzed = Number(sim.tradesAnalyzed ?? derivedTradesAnalyzed ?? 0);
+    const required = Number(legacySimRequired);
+    const analyzed = Number(effectiveSimTrades);
     const remaining = Math.max(0, required - analyzed);
     return remaining === 0 ? 'Running...' : `In ${remaining} trades`;
   })();
@@ -117,8 +125,8 @@ export function LearningBlocks() {
         accent="purple"
         icon={FlaskConical}
         progress={simProgress}
-        trades={sim.tradesAnalyzed ?? derivedTradesAnalyzed ?? 0}
-        winRateShift={derivedWinShift || 0}
+        trades={effectiveSimTrades}
+        winRateShift={effectiveSimWinShift}
         nextOpt={nextOptSim}
       />
       <LearningCard

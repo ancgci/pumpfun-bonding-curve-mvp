@@ -27,10 +27,14 @@ function groupBySource(rules: any[]) {
     const src = item.source || "unknown";
     if (!map[src]) map[src] = { rules: [], createdAt: item.createdAt };
     map[src].rules.push(item.rule);
-    // keep earliest date
-    if (item.createdAt < map[src].createdAt) map[src].createdAt = item.createdAt;
+    // keep the most recent learning timestamp for this token group
+    if (item.createdAt > map[src].createdAt) map[src].createdAt = item.createdAt;
   }
-  return Object.entries(map);
+  return Object.entries(map).sort((a, b) => {
+    const aTime = Date.parse(a[1].createdAt || "") || 0;
+    const bTime = Date.parse(b[1].createdAt || "") || 0;
+    return bTime - aTime;
+  });
 }
 
 export function LearnedRules() {

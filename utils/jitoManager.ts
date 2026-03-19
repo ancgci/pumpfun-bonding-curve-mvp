@@ -13,12 +13,13 @@ import {
 import { Bundle } from "jito-ts/dist/sdk/block-engine/types";
 import logger from "./logger";
 import { encode, decode } from "bs58";
+import { getRuntimeConfig } from "./config";
 
 // Configurações
 const JITO_BLOCK_ENGINE_URL = process.env.JITO_BLOCK_ENGINE_URL || "https://amsterdam.mainnet.block-engine.jito.wtf";
 // auth keypair is optional for some endpoints but recommended
 const JITO_AUTH_KEYPAIR = process.env.JITO_AUTH_KEYPAIR ? Keypair.fromSecretKey(decode(process.env.JITO_AUTH_KEYPAIR)) : undefined;
-const JITO_TIP_AMOUNT = parseFloat(process.env.JITO_TIP_AMOUNT || "0.001");
+const JITO_TIP_AMOUNT = parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001");
 
 // Contas de Tip da Jito (Mainnet)
 const JITO_TIP_ACCOUNTS = [
@@ -57,17 +58,23 @@ export async function sendJitoBundle(
     transactions: VersionedTransaction[],
     payer: Keypair,
     connection: Connection,
-    tipAmountSOL: number = JITO_TIP_AMOUNT
+    tipAmountSOL?: number
 ): Promise<string> {
     if (!searcher) {
         throw new Error("Cliente Jito não inicializado");
     }
 
     try {
-        const tipLamports = Math.floor(tipAmountSOL * 1e9);
+        const configuredTipAmount = Number(
+            tipAmountSOL ?? getRuntimeConfig().JITO_TIP_AMOUNT ?? JITO_TIP_AMOUNT
+        );
+        const finalTipAmount = Number.isFinite(configuredTipAmount) && configuredTipAmount > 0
+            ? configuredTipAmount
+            : JITO_TIP_AMOUNT;
+        const tipLamports = Math.floor(finalTipAmount * 1e9);
         const tipAccount = getRandomTipAccount();
 
-        logger.info(`🚀 Preparando Jito Bundle com Tip: ${tipAmountSOL} SOL`);
+        logger.info(`🚀 Preparando Jito Bundle com Tip: ${finalTipAmount} SOL`);
 
         // 1. Criar instrução de Tip
         const tipInstruction = SystemProgram.transfer({

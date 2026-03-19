@@ -1,11 +1,51 @@
 import dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
+import { getScopedTradingConfig } from "./userScopedData";
+import { getActiveTradingWallet } from "./walletStore";
 dotenv.config();
 
 const TRADING_CONFIG_FILE = path.join(__dirname, "../data/trading-config.json");
 const PROTOCOL_CONFIG_FILE = path.join(__dirname, "../data/protocol-config.json");
 const EMERGENCY_STOP_FILE = path.join(__dirname, "../data/emergency-stop.json");
+const AGENT_CONFIG_FILE = path.join(__dirname, "../data/agent/config.json");
+
+type AgentMode = "SIMULATION" | "LIVE";
+
+function normalizeAgentMode(value: unknown): AgentMode {
+  return String(value || "").toUpperCase() === "LIVE" ? "LIVE" : "SIMULATION";
+}
+
+function safeReadJson<T>(filePath: string, fallback: T): T {
+  if (!fs.existsSync(filePath)) return fallback;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function getScopedTradingConfigForActiveWallet(): Record<string, any> | null {
+  try {
+    const activeWallet = getActiveTradingWallet()?.wallet;
+    if (!activeWallet) return null;
+    return getScopedTradingConfig({
+      userId: activeWallet.userId,
+      walletId: activeWallet.id,
+    }) || null;
+  } catch {
+    return null;
+  }
+}
+
+function getAgentConfigDefaults() {
+  return {
+    enabled: process.env.AGENT_ENABLED === "true",
+    mode: normalizeAgentMode(process.env.AGENT_MODE),
+    confidence: 0,
+    learningEnabled: false,
+  };
+}
 
 export const CONFIG = {
   // RPC & Network
@@ -34,8 +74,12 @@ export const CONFIG = {
   TAKE_PROFIT_PERCENT: parseFloat(process.env.TAKE_PROFIT_PERCENT || "20"),
   STOP_LOSS_PERCENT: parseFloat(process.env.STOP_LOSS_PERCENT || "25"),
   SLIPPAGE_BPS: parseInt(process.env.SLIPPAGE_BPS || "50"),
+  AGENT_MIN_CONFIDENCE: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
+  JITO_TIP_AMOUNT: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
 
   // Auto Trading
+  AGENT_ENABLED: process.env.AGENT_ENABLED === "true",
+  AGENT_MODE: normalizeAgentMode(process.env.AGENT_MODE),
   AUTO_BUY_ENABLED: process.env.AUTO_BUY_ENABLED === "true",
   AUTO_SELL_TAKE_PROFIT: process.env.AUTO_SELL_TAKE_PROFIT !== "false",
   AUTO_SELL_STOP_LOSS: process.env.AUTO_SELL_STOP_LOSS !== "false",
@@ -126,41 +170,44 @@ export const CONFIG = {
  */
 export function getRuntimeConfig() {
   const runtimeConfig = { ...CONFIG };
+  const fileTradingConfig = safeReadJson<Record<string, any>>(TRADING_CONFIG_FILE, {});
+  const scopedTradingConfig = getScopedTradingConfigForActiveWallet();
+  const savedTradingConfig = scopedTradingConfig
+    ? { ...fileTradingConfig, ...scopedTradingConfig }
+    : fileTradingConfig;
 
   // Carregar Trading Config
-  if (fs.existsSync(TRADING_CONFIG_FILE)) {
-    try {
-      const saved = JSON.parse(fs.readFileSync(TRADING_CONFIG_FILE, "utf-8"));
-      if (saved.buyAmountSol !== undefined) runtimeConfig.BUY_AMOUNT_SOL = saved.buyAmountSol;
-      if (saved.takeProfitPercent !== undefined) runtimeConfig.TAKE_PROFIT_PERCENT = saved.takeProfitPercent;
-      if (saved.stopLossPercent !== undefined) runtimeConfig.STOP_LOSS_PERCENT = saved.stopLossPercent;
-      if (saved.stopLossEnabled !== undefined) (runtimeConfig as any).STOP_LOSS_ENABLED = saved.stopLossEnabled;
-      if (saved.slippageBps !== undefined) runtimeConfig.SLIPPAGE_BPS = saved.slippageBps;
-      if (saved.autoBuyEnabled !== undefined) runtimeConfig.AUTO_BUY_ENABLED = saved.autoBuyEnabled;
-      if (saved.singleTradeMode !== undefined) runtimeConfig.SINGLE_TRADE_MODE = saved.singleTradeMode;
-      if (saved.autoSellTakeProfit !== undefined) runtimeConfig.AUTO_SELL_TAKE_PROFIT = saved.autoSellTakeProfit;
-      if (saved.autoSellStopLoss !== undefined) runtimeConfig.AUTO_SELL_STOP_LOSS = saved.autoSellStopLoss;
-      if (saved.sellPercentOnTp !== undefined) runtimeConfig.SELL_PERCENT_ON_TP = saved.sellPercentOnTp;
-      if (saved.jitoTipAmount !== undefined) (runtimeConfig as any).JITO_TIP_AMOUNT = saved.jitoTipAmount;
-      if (saved.agentMinConfidence !== undefined) (runtimeConfig as any).AGENT_MIN_CONFIDENCE = saved.agentMinConfidence;
-      if (saved.copyTradeEnabled !== undefined) runtimeConfig.COPY_TRADE_ENABLED = saved.copyTradeEnabled;
-      if (saved.copyTradeAmountSol !== undefined) runtimeConfig.COPY_TRADE_AMOUNT_SOL = saved.copyTradeAmountSol;
-      if (saved.followWallets !== undefined) {
-        runtimeConfig.FOLLOW_WALLETS = Array.isArray(saved.followWallets)
-          ? saved.followWallets
-          : saved.followWallets.split(",").filter((w: string) => w.length > 30);
-      }
-      if (saved.volatilityAdjustedTpSl !== undefined) runtimeConfig.VOLATILITY_ADJUSTED_TP_SL = saved.volatilityAdjustedTpSl;
-      if (saved.atrMultiplierTp !== undefined) runtimeConfig.ATR_MULTIPLIER_TP = saved.atrMultiplierTp;
-      if (saved.atrMultiplierSl !== undefined) runtimeConfig.ATR_MULTIPLIER_SL = saved.atrMultiplierSl;
-      if (saved.huggingfaceApiKey !== undefined) runtimeConfig.HUGGINGFACE_API_KEY = saved.huggingfaceApiKey;
-      if (saved.senseAiEnabled !== undefined) runtimeConfig.SENSE_AI_ENABLED = saved.senseAiEnabled;
-      if (saved.autoTrackCreator !== undefined) (runtimeConfig as any).AUTO_TRACK_CREATOR = saved.autoTrackCreator;
-      if (saved.autoSellOnCreatorExit !== undefined) (runtimeConfig as any).AUTO_SELL_ON_CREATOR_EXIT = saved.autoSellOnCreatorExit;
-      if (saved.simulationTimeoutMin !== undefined) runtimeConfig.SIMULATION_TIMEOUT_MIN = saved.simulationTimeoutMin;
-    } catch (e) {
-      console.error("Erro ao carregar trading-config.json:", e);
+  try {
+    const saved = savedTradingConfig;
+    if (saved.buyAmountSol !== undefined) runtimeConfig.BUY_AMOUNT_SOL = saved.buyAmountSol;
+    if (saved.takeProfitPercent !== undefined) runtimeConfig.TAKE_PROFIT_PERCENT = saved.takeProfitPercent;
+    if (saved.stopLossPercent !== undefined) runtimeConfig.STOP_LOSS_PERCENT = saved.stopLossPercent;
+    if (saved.stopLossEnabled !== undefined) (runtimeConfig as any).STOP_LOSS_ENABLED = saved.stopLossEnabled;
+    if (saved.slippageBps !== undefined) runtimeConfig.SLIPPAGE_BPS = saved.slippageBps;
+    if (saved.autoBuyEnabled !== undefined) runtimeConfig.AUTO_BUY_ENABLED = saved.autoBuyEnabled;
+    if (saved.singleTradeMode !== undefined) runtimeConfig.SINGLE_TRADE_MODE = saved.singleTradeMode;
+    if (saved.autoSellTakeProfit !== undefined) runtimeConfig.AUTO_SELL_TAKE_PROFIT = saved.autoSellTakeProfit;
+    if (saved.autoSellStopLoss !== undefined) runtimeConfig.AUTO_SELL_STOP_LOSS = saved.autoSellStopLoss;
+    if (saved.sellPercentOnTp !== undefined) runtimeConfig.SELL_PERCENT_ON_TP = saved.sellPercentOnTp;
+    if (saved.jitoTipAmount !== undefined) runtimeConfig.JITO_TIP_AMOUNT = saved.jitoTipAmount;
+    if (saved.agentMinConfidence !== undefined) runtimeConfig.AGENT_MIN_CONFIDENCE = saved.agentMinConfidence;
+    if (saved.copyTradeEnabled !== undefined) runtimeConfig.COPY_TRADE_ENABLED = saved.copyTradeEnabled;
+    if (saved.copyTradeAmountSol !== undefined) runtimeConfig.COPY_TRADE_AMOUNT_SOL = saved.copyTradeAmountSol;
+    if (saved.followWallets !== undefined) {
+      runtimeConfig.FOLLOW_WALLETS = Array.isArray(saved.followWallets)
+        ? saved.followWallets
+        : saved.followWallets.split(",").filter((w: string) => w.length > 30);
     }
+    if (saved.volatilityAdjustedTpSl !== undefined) runtimeConfig.VOLATILITY_ADJUSTED_TP_SL = saved.volatilityAdjustedTpSl;
+    if (saved.atrMultiplierTp !== undefined) runtimeConfig.ATR_MULTIPLIER_TP = saved.atrMultiplierTp;
+    if (saved.atrMultiplierSl !== undefined) runtimeConfig.ATR_MULTIPLIER_SL = saved.atrMultiplierSl;
+    if (saved.huggingfaceApiKey !== undefined) runtimeConfig.HUGGINGFACE_API_KEY = saved.huggingfaceApiKey;
+    if (saved.senseAiEnabled !== undefined) runtimeConfig.SENSE_AI_ENABLED = saved.senseAiEnabled;
+    if (saved.autoTrackCreator !== undefined) (runtimeConfig as any).AUTO_TRACK_CREATOR = saved.autoTrackCreator;
+    if (saved.autoSellOnCreatorExit !== undefined) (runtimeConfig as any).AUTO_SELL_ON_CREATOR_EXIT = saved.autoSellOnCreatorExit;
+    if (saved.simulationTimeoutMin !== undefined) runtimeConfig.SIMULATION_TIMEOUT_MIN = saved.simulationTimeoutMin;
+  } catch (e) {
+    console.error("Erro ao carregar trading-config runtime:", e);
   }
 
   // Carregar Protocol Config
@@ -185,6 +232,19 @@ export function getRuntimeConfig() {
         (runtimeConfig as any).EMERGENCY_STOP_ACTIVE = true;
       }
     } catch (e) { }
+  }
+
+  try {
+    const savedAgentConfig = {
+      ...getAgentConfigDefaults(),
+      ...safeReadJson<Record<string, any>>(AGENT_CONFIG_FILE, {}),
+    };
+    runtimeConfig.AGENT_ENABLED = savedAgentConfig.enabled === true;
+    runtimeConfig.AGENT_MODE = normalizeAgentMode(savedAgentConfig.mode);
+    (runtimeConfig as any).AGENT_CONFIDENCE = Number(savedAgentConfig.confidence || 0);
+    (runtimeConfig as any).AGENT_LEARNING_ENABLED = savedAgentConfig.learningEnabled === true;
+  } catch (e) {
+    console.error("Erro ao carregar agent-config runtime:", e);
   }
 
   return runtimeConfig;

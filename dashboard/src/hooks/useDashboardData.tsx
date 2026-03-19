@@ -13,6 +13,7 @@ export interface DashboardData {
   logs: any[];
   connected: boolean;
   isAgentActive: boolean;
+  isBotOnline: boolean;
   plChartData: any[];
   positions: any[];
   agentStats: any;
@@ -319,6 +320,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   };
 
   const isAgentActive = agentStatus?.enabled === true;
+  const isBotOnline = isAgentActive && (
+    !botHealth || (
+      botHealth.botProcessHealthy === true &&
+      botHealth.streamHealthy === true &&
+      botHealth.emergencyStop !== true &&
+      botHealth.circuitBreakerTripped !== true
+    )
+  );
 
   return (
     <DashboardContext.Provider
@@ -328,6 +337,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         logs,
         connected,
         isAgentActive,
+        isBotOnline,
         plChartData,
         positions,
         agentStatus,

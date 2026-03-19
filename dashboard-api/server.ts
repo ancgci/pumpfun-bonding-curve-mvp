@@ -46,9 +46,12 @@ import {
 import {
     createManagedWalletSecret,
     exportWalletSecretBase58,
+    getActiveTradingWallet,
     getActiveTradingWalletAddress,
     loadConfiguredFallbackWallet,
 } from "../utils/walletStore";
+import { evaluateBotRuntimeHealth, readBotRuntimeHealth } from "../utils/botRuntimeHealth";
+import { rpcPool } from "../utils/rpcPool";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -565,6 +568,8 @@ app.post("/api/me/trading-config", (req: Request, res: Response) => {
     try {
         const context = getScopedRequestContext(req);
         if (!context) return res.status(401).json({ error: "Account not found" });
+        const validationError = validateTradingConfigUpdates(req.body || {});
+        if (validationError) return res.status(400).json({ error: validationError });
 
         const existing = getScopedTradingConfig({
             userId: context.user.id,
@@ -582,6 +587,8 @@ app.post("/api/me/trading-config", (req: Request, res: Response) => {
             walletId: context.walletId,
             config: updated,
         });
+
+        syncActiveRuntimeTradingConfig(context.user.id, context.walletId, updated);
 
         res.json({ success: true, config: updated });
     } catch (error: any) {
@@ -779,6 +786,42 @@ function invalidateWalletBalanceCache() {
     lastBalanceFetch = 0;
 }
 
+function validateTradingConfigUpdates(payload: Record<string, any>) {
+    const {
+        buyAmountSol,
+        takeProfitPercent,
+        stopLossPercent,
+        slippageBps,
+        agentMinConfidence,
+        jitoTipAmount,
+        sellPercentOnTp,
+    } = payload;
+
+    if (buyAmountSol !== undefined && (buyAmountSol < 0.001 || buyAmountSol > 10)) {
+        return "buyAmountSol must be between 0.001 and 10 SOL";
+    }
+    if (takeProfitPercent !== undefined && (takeProfitPercent < 0 || takeProfitPercent > 1000)) {
+        return "takeProfitPercent must be between 0 and 1000";
+    }
+    if (stopLossPercent !== undefined && (stopLossPercent < 0 || stopLossPercent > 100)) {
+        return "stopLossPercent must be between 0 and 100";
+    }
+    if (slippageBps !== undefined && (slippageBps < 0 || slippageBps > 10000)) {
+        return "slippageBps must be between 0 and 10000";
+    }
+    if (agentMinConfidence !== undefined && (agentMinConfidence < 50 || agentMinConfidence > 99)) {
+        return "agentMinConfidence must be between 50 and 99";
+    }
+    if (jitoTipAmount !== undefined && (jitoTipAmount < 0 || jitoTipAmount > 0.1)) {
+        return "jitoTipAmount must be between 0 and 0.1 SOL";
+    }
+    if (sellPercentOnTp !== undefined && (sellPercentOnTp < 1 || sellPercentOnTp > 100)) {
+        return "sellPercentOnTp must be between 1 and 100";
+    }
+
+    return null;
+}
+
 function readTradingConfigFile() {
     try {
         if (!fs.existsSync(TRADING_CONFIG_FILE)) return {};
@@ -791,6 +834,17 @@ function readTradingConfigFile() {
 function writeJsonFile(filePath: string, value: unknown) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function syncActiveRuntimeTradingConfig(userId: number, walletId: number, config: Record<string, any>) {
+    const activeWallet = getActiveTradingWallet()?.wallet;
+    if (!activeWallet) return;
+    if (activeWallet.userId !== userId || activeWallet.id !== walletId) return;
+
+    writeJsonFile(TRADING_CONFIG_FILE, {
+        ...getTradingConfigDefaults(),
+        ...config,
+    });
 }
 
 function switchRuntimeWalletContext(userId: number, nextWalletId: number, previousWalletId?: number | null) {
@@ -1427,9 +1481,10 @@ app.get("/api/simulation/status", (req, res) => {
     try {
         const metrics = getSimulationMetrics();
         const readiness = isSimulationReadyForLive();
+        const agentConfig = loadAgentConfig();
 
         res.json({
-            mode: process.env.AGENT_MODE || "SIMULATION",
+            mode: agentConfig.mode || "SIMULATION",
             metrics,
             readyForLive: readiness.ready,
             readinessScore: readiness.score,
@@ -1542,25 +1597,21 @@ function formatTimestamp(timestamp: number | string): string {
 }
 
 function loadAgentConfig() {
+    const defaults = {
+        enabled: CONFIG.AGENT_ENABLED || false,
+        mode: CONFIG.AGENT_MODE || "SIMULATION",
+        confidence: 0,
+        learningEnabled: false,
+    };
     try {
         if (!fs.existsSync(AGENT_CONFIG_FILE)) {
-            return {
-                enabled: false,
-                mode: "SIMULATION",
-                confidence: 0,
-                learningEnabled: false,
-            };
+            return defaults;
         }
         const data = fs.readFileSync(AGENT_CONFIG_FILE, "utf-8");
-        return JSON.parse(data);
+        return { ...defaults, ...JSON.parse(data) };
     } catch (error) {
         console.error("Erro ao carregar config do agente:", error);
-        return {
-            enabled: false,
-            mode: "SIMULATION",
-            confidence: 0,
-            learningEnabled: false,
-        };
+        return defaults;
     }
 }
 
@@ -1649,6 +1700,35 @@ function loadAgentStatus() {
     }
 }
 
+function buildBotRuntimeSummary(agentEnabled: boolean) {
+    const runtime = readBotRuntimeHealth();
+    const runtimeEval = evaluateBotRuntimeHealth(runtime);
+
+    const runtimeStatus = !agentEnabled
+        ? "DISABLED"
+        : !runtime
+            ? "BOT_OFFLINE"
+            : !runtimeEval.processHealthy
+                ? "BOT_OFFLINE"
+                : !runtimeEval.streamConnected
+                    ? "STREAM_DISCONNECTED"
+                    : !runtimeEval.streamHealthy
+                        ? "STREAM_STALLED"
+                        : "OPERATIONAL";
+
+    return {
+        runtime,
+        runtimeStatus,
+        botProcessHealthy: runtimeEval.processHealthy,
+        streamHealthy: runtimeEval.streamHealthy,
+        streamConnected: runtimeEval.streamConnected,
+        heartbeatLagMs: runtimeEval.heartbeatLagMs,
+        streamLagMs: runtimeEval.streamLagMs,
+        heartbeatThresholdMs: runtimeEval.heartbeatThresholdMs,
+        stallThresholdMs: runtimeEval.stallThresholdMs,
+    };
+}
+
 function getTradingConfigDefaults() {
     return {
         buyAmountSol: parseFloat(process.env.BUY_AMOUNT_SOL || "0.01"),
@@ -1720,12 +1800,9 @@ app.post("/api/trading-config", (req, res) => {
             senseAiEnabled,
         } = req.body;
 
-        // Validações de segurança
-        if (buyAmountSol !== undefined && (buyAmountSol < 0.001 || buyAmountSol > 10)) {
-            return res.status(400).json({ error: "buyAmountSol must be between 0.001 and 10 SOL" });
-        }
-        if (agentMinConfidence !== undefined && (agentMinConfidence < 50 || agentMinConfidence > 99)) {
-            return res.status(400).json({ error: "agentMinConfidence must be between 50 and 99" });
+        const validationError = validateTradingConfigUpdates(req.body || {});
+        if (validationError) {
+            return res.status(400).json({ error: validationError });
         }
 
         const existing = fs.existsSync(TRADING_CONFIG_FILE)
@@ -1764,6 +1841,16 @@ app.post("/api/trading-config", (req, res) => {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
         fs.writeFileSync(TRADING_CONFIG_FILE, JSON.stringify(updated, null, 2));
+
+        const activeWallet = getActiveTradingWallet()?.wallet;
+        if (activeWallet) {
+            upsertScopedTradingConfig({
+                userId: activeWallet.userId,
+                walletId: activeWallet.id,
+                config: updated,
+            });
+        }
+
         res.json({ success: true, config: updated });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -1942,13 +2029,31 @@ app.post("/api/internal/broadcast", (req, res) => {
 /**
  * GET /api/bot-health - Status de saúde geral do bot
  */
-app.get("/api/bot-health", (req, res) => {
+app.get("/api/bot-health", async (req, res) => {
     try {
         const cbState = loadCBState();
+        const agentConfig = loadAgentConfig();
         const agentStatus = loadAgentStatus();
         const emergencyStop = fs.existsSync(EMERGENCY_STOP_FILE)
             ? JSON.parse(fs.readFileSync(EMERGENCY_STOP_FILE, "utf-8"))
             : { active: false };
+        const runtimeSummary = buildBotRuntimeSummary(agentConfig.enabled === true);
+        let rpcLatencyMs: number | null = null;
+        let rpcName: string | null = null;
+
+        try {
+            await rpcPool.getBestConnection();
+            const rpcStats = rpcPool.getStats();
+            const activeRpc = rpcStats.find((rpc) => rpc.isCurrent) || rpcStats.find((rpc) => rpc.isHealthy);
+            if (activeRpc) {
+                rpcName = activeRpc.name;
+                rpcLatencyMs = Number.isFinite(activeRpc.latency) && activeRpc.latency > 0
+                    ? activeRpc.latency
+                    : null;
+            }
+        } catch (rpcError: any) {
+            console.warn("Erro ao medir RPC latency no bot-health:", rpcError?.message || rpcError);
+        }
 
         const positions = loadPositions();
         const activePositions = positions.filter((p: any) => p.isActive);
@@ -1957,13 +2062,26 @@ app.get("/api/bot-health", (req, res) => {
             status: (
                 emergencyStop.active ? "EMERGENCY_STOP" :
                     cbState.isTripped ? "CIRCUIT_BREAKER_TRIPPED" :
-                        agentStatus.rateLimited ? "RATE_LIMITED" :
-                            "OPERATIONAL"
+                        runtimeSummary.runtimeStatus !== "OPERATIONAL" ? runtimeSummary.runtimeStatus :
+                            agentStatus.rateLimited ? "RATE_LIMITED" :
+                                "OPERATIONAL"
             ),
+            agentEnabled: agentConfig.enabled === true,
+            agentMode: agentConfig.mode || "SIMULATION",
             emergencyStop: emergencyStop.active || false,
             circuitBreakerTripped: cbState.isTripped || false,
             rateLimited: agentStatus.rateLimited || false,
             activePositions: activePositions.length,
+            botProcessHealthy: runtimeSummary.botProcessHealthy,
+            streamHealthy: runtimeSummary.streamHealthy,
+            streamConnected: runtimeSummary.streamConnected,
+            heartbeatLagMs: runtimeSummary.heartbeatLagMs,
+            streamLagMs: runtimeSummary.streamLagMs,
+            heartbeatThresholdMs: runtimeSummary.heartbeatThresholdMs,
+            stallThresholdMs: runtimeSummary.stallThresholdMs,
+            latencyMs: rpcLatencyMs,
+            rpcName,
+            runtime: runtimeSummary.runtime,
             uptimeSince: process.uptime(),
             timestamp: new Date().toISOString(),
         });

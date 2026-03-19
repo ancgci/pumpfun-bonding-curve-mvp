@@ -187,13 +187,15 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       throw new Error(`LLM returned unparseable content: ${(rawContent || rawReasoning).slice(0, 200)}`);
     }
 
-    // Parse dynamic TP/SL from LLM (fallback to CONFIG values)
+    const runtimeCfg = getRuntimeConfig();
+
+    // Parse dynamic TP/SL from LLM (fallback to current runtime values)
     const tpPercent = (typeof parsed.takeProfitPercent === "number" && parsed.takeProfitPercent > 0)
       ? parsed.takeProfitPercent
-      : CONFIG.TAKE_PROFIT_PERCENT;
+      : (runtimeCfg.TAKE_PROFIT_PERCENT ?? CONFIG.TAKE_PROFIT_PERCENT);
     const slPercent = (typeof parsed.stopLossPercent === "number" && parsed.stopLossPercent > 0)
       ? parsed.stopLossPercent
-      : CONFIG.STOP_LOSS_PERCENT;
+      : (runtimeCfg.STOP_LOSS_PERCENT ?? CONFIG.STOP_LOSS_PERCENT);
 
     const decision: AgentDecision = {
       action: parsed.action === "BUY" ? "BUY" : "SKIP",
@@ -316,8 +318,9 @@ export async function getAgentDecision(
   // If agent is disabled, always skip
   const isDev = CONFIG.NODE_ENV === "development";
   const isTest = process.env.NODE_ENV === "test";
-  const agentEnabled = process.env.AGENT_ENABLED === "true";
-  const agentMode = process.env.AGENT_MODE || "SIMULATION";
+  const runtimeCfg = getRuntimeConfig();
+  const agentEnabled = runtimeCfg.AGENT_ENABLED === true;
+  const agentMode = runtimeCfg.AGENT_MODE || "SIMULATION";
 
   if ((isDev && !isTest) || !agentEnabled) {
     logger.info(`⏭️  [Agent] Skipping: dev=${isDev}, test=${isTest}, enabled=${agentEnabled}`);
@@ -541,7 +544,8 @@ export async function executeAgentTrade(
   executeRealTrade: (force?: boolean) => Promise<void>
 ): Promise<void> {
   // Get agent mode from config
-  const agentMode = process.env.AGENT_MODE || "SIMULATION";
+  const runtimeCfg = getRuntimeConfig();
+  const agentMode = runtimeCfg.AGENT_MODE || "SIMULATION";
 
   if (decision.action === "SKIP") {
     logger.info(
@@ -551,8 +555,7 @@ export async function executeAgentTrade(
   }
 
   // Minimum confidence check
-  const minConfidenceStr = process.env.AGENT_MIN_CONFIDENCE || "70";
-  let minConfidence = parseInt(minConfidenceStr);
+  let minConfidence = Number(runtimeCfg.AGENT_MIN_CONFIDENCE ?? CONFIG.AGENT_MIN_CONFIDENCE ?? 70);
 
   // Soften confidence requirement to allow more simulated trades
   if (agentMode === "SIMULATION") {
@@ -878,6 +881,7 @@ export function scheduleSimulationExit(
 
   // Ensure TP/SL logic respects disabled state
   const minTpPercent = 1; // 1%
+  const autoTpEnabled = runtimeCfg.AUTO_SELL_TAKE_PROFIT ?? CONFIG.AUTO_SELL_TAKE_PROFIT;
   const tpRaw = Math.max(decision.takeProfit || 0, entryPrice * (1 + minTpPercent / 100));
 
   // If Stop Loss is disabled, set slRaw to 0 (ignored)
@@ -894,7 +898,7 @@ export function scheduleSimulationExit(
 
   // Decidir valores finais: USAR O GLOBAL CONFIG COMO PISO (Minimum Floor)
   // O bot só usa o TP da IA se ele for MAIOR que o alvo global.
-  const tp = Math.max(tpRaw, configTp);
+  const tp = autoTpEnabled === false ? Number.POSITIVE_INFINITY : Math.max(tpRaw, configTp);
   let sl = isSlDisabled ? 0 : ((slRaw < entryPrice && slRaw > 0) ? slRaw : configSl);
 
   // Calculate remaining timeout if this is a resumed trade
@@ -976,7 +980,7 @@ export function scheduleSimulationExit(
       */
 
       // Check TP
-      if (currentPrice >= tp) {
+      if (autoTpEnabled !== false && currentPrice >= tp) {
         clearInterval(exitCheckInterval);
         logger.info(
           `📈 [SIMULATION] ${symbol} HIT TAKE PROFIT: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`

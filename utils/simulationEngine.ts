@@ -11,6 +11,7 @@ import {
   TradePostMortemReport,
 } from "./postMortemTypes";
 import { getPostMortemStatusForClosedTrade } from "./postMortemContext";
+import { markTradeExecutionActivity } from "./botRuntimeHealth";
 
 /**
  * SIMULATION ENGINE
@@ -226,6 +227,7 @@ export async function recordSimulatedTrade(
   logger.info(
     `📊 [SIMULATION] Recorded trade entry: ${tokenSymbol} (${tokenMint.substring(0, 8)}...) at ${entryPrice.toFixed(8)} (confidence: ${confidence}%)`
   );
+  markTradeExecutionActivity();
 }
 
 /**

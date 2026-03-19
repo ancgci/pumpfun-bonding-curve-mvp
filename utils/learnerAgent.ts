@@ -200,12 +200,19 @@ export async function runLearningCycle(): Promise<void> {
 
     const state = loadLearnerState();
     const allTrades = loadTrades();
+    const lastRunAtMs = state.lastRunAt ? Date.parse(state.lastRunAt) : NaN;
 
-    // Only look at new trades since last run
-    const newTrades = allTrades.slice(state.lastAnalyzedIndex);
-    const closedTrades = newTrades.filter(
-        (t: any) => t.status && t.status !== "OPEN"
-    );
+    // The simulation JSON is trimmed to the most recent trades.
+    // Using only a raw array index can permanently stall learning once the file rotates.
+    const closedTrades = (Number.isFinite(lastRunAtMs) && lastRunAtMs > 0
+        ? allTrades.filter((t: any) => {
+            if (!t?.status || t.status === "OPEN") return false;
+            const closedAt = Number(t.exitTime || t.entryTime || 0);
+            return closedAt > lastRunAtMs;
+        })
+        : allTrades.slice(state.lastAnalyzedIndex).filter(
+            (t: any) => t.status && t.status !== "OPEN"
+        ));
 
     if (closedTrades.length === 0) {
         logger.info("🧠 [LearnerAgent] No new closed trades to analyze. Skipping.");

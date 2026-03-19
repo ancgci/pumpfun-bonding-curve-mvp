@@ -10,11 +10,18 @@ export function AgentStatus() {
     : botHealth?.status
       ? botHealth.status.replace(/_/g, " ").toUpperCase()
       : "Unknown";
+  const runtimeLabel = !agentStatus
+    ? "Initializing..."
+    : !agentStatus.enabled
+      ? "Paused"
+      : botHealth?.status
+        ? botHealth.status.replace(/_/g, " ").toUpperCase()
+        : "Running";
 
   const statusItems = [
     {
       label: "Status",
-      value: agentStatus ? (agentStatus.enabled ? 'Running' : 'Paused') : 'Initializing...',
+      value: runtimeLabel,
       icon: Server,
       color: "green"
     },
