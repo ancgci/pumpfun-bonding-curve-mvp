@@ -14,7 +14,7 @@ import {
   getOpenTradesFromDb,
 } from "./simulationEngine";
 import { recordPriceSample, getVolatility, getTASnapshotV2, TASnapshotV2 } from "./volatilityMonitor";
-import { getTAConfig } from "./technicalConfig";
+import { getProtocolAdjustedTAConfig, getTAConfig } from "./technicalConfig";
 const C_BLUE = "\x1b[36m";
 const C_RED = "\x1b[31m";
 const C_GREEN = "\x1b[32m";
@@ -23,10 +23,10 @@ const C_RST = "\x1b[0m";
 import { calculateConfluenceScore, formatScoreLog } from "./technicalScore";
 import {
   checkEntryBlocks,
-  hasHardBlock,
-  formatBlocksLog,
   registerPriceForLegDetection,
-  checkOrganicityHardBlocks
+  checkOrganicityHardBlocks,
+  assessEntryBlockPressure,
+  assessOrganicityBlockPressure,
 } from "./entryBlocker";
 import { getOrganicityWindowData, getCurveHistory } from "./organicityMonitor";
 import { calculateOrganicityScore, formatOrganicityLog } from "./organicityScore";
@@ -48,6 +48,7 @@ import {
   buildTradeExitSnapshot,
   buildTradeMonitoringPoint,
 } from "./postMortemContext";
+import { recordFunnelEvent } from "./decisionFunnelMetrics";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -249,9 +250,18 @@ export interface AgentDecision {
   force?: boolean; // Signal to bypass normal checks
 }
 
+export interface AgentTradeExecutionResult {
+  executed: boolean;
+  persistDecision: boolean;
+  temporary: boolean;
+  reason: string;
+}
+
 interface TokenAnalysis {
   mint: string;
   symbol: string;
+  protocol?: string;
+  timeframe?: string;
   price: number;
   bondingCurvePercent: number;
   holders: number;
@@ -301,6 +311,97 @@ interface TokenAnalysis {
   macd?: { macd: number; signal: number; histogram: number };
 }
 
+type StageResolution = "ALLOW" | "RECHECK" | "BLOCK";
+
+interface RecheckResult<TPayload> {
+  resolution: StageResolution;
+  attemptsUsed: number;
+  payload: TPayload;
+  reason: string;
+}
+
+function getTokenProtocol(tokenAnalysis: TokenAnalysis): string {
+  return String(tokenAnalysis.protocol || "pumpfun").toLowerCase();
+}
+
+function buildTemporarySkipReason(reason: string): string {
+  return `TEMP_RECHECK: ${reason}`;
+}
+
+function isTemporaryReason(reason: string | null | undefined): boolean {
+  const normalized = String(reason || "").toLowerCase();
+  return (
+    normalized.includes("temp_recheck") ||
+    normalized.includes("waiting_dip") ||
+    normalized.includes("temporary") ||
+    normalized.includes("recheck timeout") ||
+    normalized.includes("insufficient data") ||
+    normalized.includes("insufficient_data") ||
+    normalized.includes("too few holders")
+  );
+}
+
+function isBorderlineScore(score: number, threshold: number, buffer: number): boolean {
+  return score < threshold && score >= Math.max(0, threshold - buffer);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runRecheckLoop<TPayload>(params: {
+  stage: "post_llm_blocks" | "post_llm_score" | "organicity";
+  tokenAnalysis: TokenAnalysis;
+  baseReason: string;
+  maxAttempts: number;
+  delayMs: number;
+  evaluate: (attempt: number) => Promise<{ resolution: StageResolution; reason: string; payload: TPayload; pressure?: number | null; score?: number | null }>;
+}): Promise<RecheckResult<TPayload>> {
+  let last: { resolution: StageResolution; reason: string; payload: TPayload; pressure?: number | null; score?: number | null } | null = null;
+
+  for (let attempt = 0; attempt < params.maxAttempts; attempt++) {
+    if (attempt > 0) {
+      logger.info(
+        `⏳ [Recheck] ${params.tokenAnalysis.symbol} aguardando ${params.delayMs}ms para reavaliar ${params.stage} (${attempt}/${params.maxAttempts - 1})`
+      );
+      await wait(params.delayMs);
+    }
+
+    last = await params.evaluate(attempt);
+    recordFunnelEvent({
+      stage: params.stage,
+      outcome: last.resolution === "ALLOW" ? "approved" : last.resolution === "RECHECK" ? "recheck" : "blocked",
+      reason: last.reason,
+      protocol: getTokenProtocol(params.tokenAnalysis),
+      mint: params.tokenAnalysis.mint,
+      symbol: params.tokenAnalysis.symbol,
+      pressure: last.pressure ?? null,
+      score: last.score ?? null,
+      metadata: { attempt },
+    });
+
+    if (last.resolution !== "RECHECK") {
+      return {
+        resolution: last.resolution,
+        attemptsUsed: attempt + 1,
+        payload: last.payload,
+        reason: last.reason,
+      };
+    }
+  }
+
+  if (!last) {
+    throw new Error(`Recheck loop failed without evaluation for ${params.stage}`);
+  }
+
+  return {
+    resolution: "BLOCK",
+    attemptsUsed: params.maxAttempts,
+    payload: last.payload,
+    reason: `${params.baseReason} | recheck timeout`,
+  };
+}
+
 /**
  * Get AI Agent decision on whether to BUY a token
  * 
@@ -337,7 +438,7 @@ export async function getAgentDecision(
   // em executeAgentTrade(), APÓS a aprovação da LLM.         
   // ══════════════════════════════════════════════════════════
   // ══════════════════════════════════════════════════════════
-  const taConfig = getTAConfig();
+  const taConfig = getProtocolAdjustedTAConfig(tokenAnalysis.protocol, getTAConfig());
   const taSnap = getTASnapshotV2(tokenAnalysis.mint, taConfig);
   tokenAnalysis.taSnapshot = taSnap;
 
@@ -380,6 +481,14 @@ export async function getAgentDecision(
     ));
   if (riskBlocks.length > 0) {
     logger.info(`🚫 [PreFilter-Risk] ${tokenAnalysis.symbol}: ${riskBlocks[0].reason}`);
+    recordFunnelEvent({
+      stage: "pre_llm",
+      outcome: "blocked",
+      reason: riskBlocks[0].code,
+      protocol: getTokenProtocol(tokenAnalysis),
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+    });
     return { action: "SKIP", confidence: 0, reasoning: riskBlocks[0].code };
   }
 
@@ -388,6 +497,14 @@ export async function getAgentDecision(
     const microThreshold = agentMode === "SIMULATION" ? -15 : -8;
     if (taSnap.microTrend.changePct < microThreshold) {
       logger.warn(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: Micro-dump (${taSnap.microTrend.changePct.toFixed(1)}% in 10s)`);
+      recordFunnelEvent({
+        stage: "pre_llm",
+        outcome: "blocked",
+        reason: "PREFILTER_MICRO_DUMP",
+        protocol: getTokenProtocol(tokenAnalysis),
+        mint: tokenAnalysis.mint,
+        symbol: tokenAnalysis.symbol,
+      });
       return { action: "SKIP", confidence: 0, reasoning: `MicroTrend: sharp drop (${taSnap.microTrend.changePct.toFixed(1)}% in 10s)` };
     }
   }
@@ -396,6 +513,14 @@ export async function getAgentDecision(
 
   if (tokenAnalysis.honeypotRisk) {
     logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: honeypot risk`);
+    recordFunnelEvent({
+      stage: "pre_llm",
+      outcome: "blocked",
+      reason: "PREFILTER_HONEYPOT",
+      protocol: getTokenProtocol(tokenAnalysis),
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+    });
     return { action: "SKIP", confidence: 0, reasoning: "PreFilter: honeypot risk" };
   }
 
@@ -407,6 +532,14 @@ export async function getAgentDecision(
     } else {
       if (tokenAnalysis.liquiditySol > 0 && tokenAnalysis.liquiditySol < 1.0) {
         logger.info(`⚡ [PreFilter] ${tokenAnalysis.symbol} REJECTED: low liquidity (${tokenAnalysis.liquiditySol} SOL)`);
+        recordFunnelEvent({
+          stage: "pre_llm",
+          outcome: "blocked",
+          reason: "PREFILTER_LOW_LIQUIDITY",
+          protocol: getTokenProtocol(tokenAnalysis),
+          mint: tokenAnalysis.mint,
+          symbol: tokenAnalysis.symbol,
+        });
         return { action: "SKIP", confidence: 0, reasoning: "PreFilter: low liquidity" };
       }
     }
@@ -517,6 +650,15 @@ export async function getAgentDecision(
     }, 2);
 
     persistAgentStatus({ rateLimited: false, at: Date.now() });
+    recordFunnelEvent({
+      stage: "llm",
+      outcome: decision.action === "BUY" ? "approved" : "skipped",
+      reason: decision.reasoning,
+      protocol: getTokenProtocol(tokenAnalysis),
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      score: decision.confidence,
+    });
     decisionCache.set(cacheKey, { decision, ts: Date.now() });
     return decision;
   } catch (error: any) {
@@ -524,6 +666,14 @@ export async function getAgentDecision(
     if ((error.message || "").toLowerCase().includes("rate limit")) {
       persistAgentStatus({ rateLimited: true, reason: error.message, at: Date.now() });
     }
+    recordFunnelEvent({
+      stage: "llm",
+      outcome: "error",
+      reason: error.message,
+      protocol: getTokenProtocol(tokenAnalysis),
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+    });
     return {
       action: "SKIP",
       confidence: 0,
@@ -542,16 +692,54 @@ export async function executeAgentTrade(
   tokenAnalysis: TokenAnalysis,
   decision: AgentDecision,
   executeRealTrade: (force?: boolean) => Promise<void>
-): Promise<void> {
+): Promise<AgentTradeExecutionResult> {
   // Get agent mode from config
   const runtimeCfg = getRuntimeConfig();
   const agentMode = runtimeCfg.AGENT_MODE || "SIMULATION";
+  const protocol = getTokenProtocol(tokenAnalysis);
+  const finish = (overrides: Partial<AgentTradeExecutionResult>): AgentTradeExecutionResult => ({
+    executed: false,
+    persistDecision: true,
+    temporary: false,
+    reason: decision.reasoning || "unspecified",
+    ...overrides,
+  });
+  const moveToDipWaitlist = (reason: string, immediateBuy = false): AgentTradeExecutionResult => {
+    const temporaryReason = buildTemporarySkipReason(reason);
+    dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, immediateBuy);
+    recordFunnelEvent({
+      stage: "execution",
+      outcome: "recheck",
+      reason: temporaryReason,
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+    });
+    return finish({
+      persistDecision: false,
+      temporary: true,
+      reason: temporaryReason,
+    });
+  };
 
   if (decision.action === "SKIP") {
     logger.info(
       `⏭️  [Agent ${agentMode}] Skipping ${tokenAnalysis.symbol}: confidence ${decision.confidence}% < threshold. Reasoning: ${decision.reasoning}`
     );
-    return;
+    recordFunnelEvent({
+      stage: "execution",
+      outcome: "skipped",
+      reason: decision.reasoning || "AGENT_SKIPPED",
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      score: decision.confidence,
+    });
+    return finish({
+      persistDecision: !isTemporaryReason(decision.reasoning),
+      temporary: isTemporaryReason(decision.reasoning),
+      reason: decision.reasoning || "AGENT_SKIPPED",
+    });
   }
 
   // Minimum confidence check
@@ -566,7 +754,18 @@ export async function executeAgentTrade(
     logger.info(
       `⏭️  [Agent ${agentMode}] Skipping ${tokenAnalysis.symbol}: confidence ${decision.confidence}% < ${minConfidence}%`
     );
-    return;
+    recordFunnelEvent({
+      stage: "execution",
+      outcome: "skipped",
+      reason: `LOW_CONFIDENCE:${decision.confidence}<${minConfidence}`,
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      score: decision.confidence,
+    });
+    return finish({
+      reason: `LOW_CONFIDENCE:${decision.confidence}<${minConfidence}`,
+    });
   }
 
   logger.info(
@@ -580,110 +779,163 @@ export async function executeAgentTrade(
   // ══════════════════════════════════════════════════
   if (decision.action === "WAITING_DIP") {
     dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol);
-    return;
+    recordFunnelEvent({
+      stage: "execution",
+      outcome: "recheck",
+      reason: decision.reasoning || "WAITING_DIP",
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      score: decision.confidence,
+    });
+    return finish({
+      persistDecision: false,
+      temporary: true,
+      reason: buildTemporarySkipReason(decision.reasoning || "WAITING_DIP"),
+    });
   }
 
   if (decision.action === "BUY") {
-    // ══════════════════════════════════════════════════════════
-    // RE-VALIDAÇÃO PÓS-LLM — TA V2 completa
-    //
-    // A LLM pode ter demorado 1-3s para responder.
-    // Nesse tempo o setup técnico pode ter mudado completamente.
-    // Re-validamos AGORA, no momento exato antes de comprar.
-    // Se inválido → token vai para fila de espera (dipMonitor).
-    // ══════════════════════════════════════════════════════════
-    const taConfigExec = getTAConfig();
-    const taSnapNow = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
-
-    // 1. Checar bloqueios HARD no momento atual
-    logger.info(`[Pipeline 5/8 - Hard Blocks] 🛡️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) revalidando Hard Blocks (Pré-execução)...`);
-    const execBlocks = checkEntryBlocks(taSnapNow, taConfigExec, tokenAnalysis.mint);
-
+    const taConfigExec = getProtocolAdjustedTAConfig(tokenAnalysis.protocol, getTAConfig());
     const isUltraAggressive = taConfigExec.scoreMinimo <= 5;
-    if (hasHardBlock(execBlocks)) {
-      const hardBlock = execBlocks.find(b => b.severity === "HARD");
-      const isInsufficientData = hardBlock?.code === "BLOCK_INSUFFICIENT_DATA";
+    const recheckDelayMs = Math.max(1000, taConfigExec.recheckDelayMs || 6000);
+    const recheckMaxAttempts = Math.max(1, taConfigExec.recheckMaxAttempts || 1);
 
-      // No modo Ultra-Agressivo, só paramos por Insuficiência de Dados ou Cooldown/Stops
-      if (!isUltraAggressive || isInsufficientData || hardBlock?.code === "BLOCK_COOLDOWN" || hardBlock?.code === "BLOCK_CONSECUTIVE_STOPS") {
-        logger.warn(
-          `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} HARD BLOCK no momento da execução: ` +
-          `${hardBlock?.code} — Enfileirando no DipMonitor (Immediate=${isInsufficientData}).`
-        );
-        logger.info(`[Pipeline 5/8 - Hard Blocks] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) BLOQUEADO por regra estática (${hardBlock?.code}).`);
-        dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, isInsufficientData);
-        return;
-      } else {
-        logger.info(`[Pipeline 5/8 - Hard Blocks] ⚠️ ${C_BLUE}PASS-THRU (Aggressive)${C_RST} | Ignorando ${hardBlock?.code} para execução imediata.`);
+    logger.info(`[Pipeline 5/8 - Hard Blocks] 🛡️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) revalidando Hard Blocks (Pré-execução)...`);
+    const blockCheck = await runRecheckLoop({
+      stage: "post_llm_blocks",
+      tokenAnalysis,
+      baseReason: "post_llm_blocks",
+      maxAttempts: recheckMaxAttempts,
+      delayMs: recheckDelayMs,
+      evaluate: async () => {
+        const snap = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
+        const blocks = checkEntryBlocks(snap, taConfigExec, tokenAnalysis.mint);
+        const assessment = assessEntryBlockPressure(blocks, taConfigExec);
+        const hasInsufficientData = blocks.some((block) => block.code === "BLOCK_INSUFFICIENT_DATA");
+        let resolution: StageResolution = assessment.action;
+
+        if (hasInsufficientData) {
+          resolution = "RECHECK";
+        } else if (isUltraAggressive && resolution === "BLOCK" && assessment.fatalCodes.length === 0) {
+          resolution = "RECHECK";
+        }
+
+        return {
+          resolution,
+          reason: blocks[0]?.code || assessment.summary,
+          payload: { snap, blocks, assessment },
+          pressure: assessment.pressure,
+        };
+      },
+    });
+
+    if (blockCheck.resolution !== "ALLOW") {
+      const immediateBuy = blockCheck.payload.blocks.some((block) => block.code === "BLOCK_INSUFFICIENT_DATA");
+      if (blockCheck.payload.assessment.action === "RECHECK" || immediateBuy) {
+        logger.warn(`♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} aguardando nova janela técnica: ${blockCheck.reason}`);
+        logger.info(`[Pipeline 5/8 - Hard Blocks] ⏳ ${C_BLUE}RECHECK${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) adiado por bloqueios temporários (${blockCheck.reason}).`);
+        return moveToDipWaitlist(blockCheck.reason, immediateBuy);
       }
-    }
-    logger.info(`[Pipeline 5/8 - Hard Blocks] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) sobreviveu aos Hard Blocks post-LLM.`);
 
-    // 2. Checar score de confluência no momento atual
-    const execScore = calculateConfluenceScore(taSnapNow, taConfigExec);
-    tokenAnalysis.taSnapshot = taSnapNow;
-    tokenAnalysis.taScore = execScore.score;
-    tokenAnalysis.taScoreBreakdown = formatScoreLog(execScore);
+      logger.info(`[Pipeline 5/8 - Hard Blocks] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) bloqueado por ${blockCheck.reason}.`);
+      return finish({
+        reason: blockCheck.reason,
+      });
+    }
+
+    logger.info(`[Pipeline 5/8 - Hard Blocks] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) sobreviveu aos bloqueios pós-LLM.`);
+
+    const scoreCheck = await runRecheckLoop({
+      stage: "post_llm_score",
+      tokenAnalysis,
+      baseReason: "post_llm_score",
+      maxAttempts: recheckMaxAttempts,
+      delayMs: recheckDelayMs,
+      evaluate: async () => {
+        const snap = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
+        const execScore = calculateConfluenceScore(snap, taConfigExec);
+        const borderline = !execScore.invalidated &&
+          isBorderlineScore(execScore.score, taConfigExec.scoreMinimo, taConfigExec.taScoreRecheckBuffer);
+
+        let resolution: StageResolution = "BLOCK";
+        if (isUltraAggressive && !execScore.invalidated) {
+          resolution = "ALLOW";
+        } else if (!execScore.invalidated && execScore.score >= taConfigExec.scoreMinimo) {
+          resolution = "ALLOW";
+        } else if (borderline) {
+          resolution = "RECHECK";
+        }
+
+        return {
+          resolution,
+          reason: execScore.invalidated
+            ? `TA_INVALID:${execScore.invalidReason || "unknown"}`
+            : `TA_SCORE:${execScore.score}/${taConfigExec.scoreMinimo}`,
+          payload: { snap, execScore, borderline },
+          score: execScore.score,
+        };
+      },
+    });
+
+    tokenAnalysis.taSnapshot = scoreCheck.payload.snap;
+    tokenAnalysis.taScore = scoreCheck.payload.execScore.score;
+    tokenAnalysis.taScoreBreakdown = formatScoreLog(scoreCheck.payload.execScore);
     logger.info(
-      `📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score pós-LLM: ${execScore.score}/100` +
-      (execScore.invalidated ? ` ⚠️ INVÁLIDO: ${execScore.invalidReason}` : "")
+      `📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score pós-LLM: ${scoreCheck.payload.execScore.score}/100` +
+      (scoreCheck.payload.execScore.invalidated ? ` ⚠️ INVÁLIDO: ${scoreCheck.payload.execScore.invalidReason}` : "")
     );
 
-    if (execScore.invalidated || execScore.score < taConfigExec.scoreMinimo) {
-      if (isUltraAggressive && !execScore.invalidated) {
-        logger.info(`📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score baixo (${execScore.score}), mas mantendo BUY por modo Ultra-Agressivo.`);
-      } else {
-        logger.warn(
-          `♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score insuficiente (${execScore.score} < ${taConfigExec.scoreMinimo}) ` +
-          `— Setup mudou durante avaliação LLM. Enfileirando no DipMonitor (Dip Sniper Mode).`
-        );
-        dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
-        return;
+    if (scoreCheck.resolution !== "ALLOW") {
+      if (scoreCheck.payload.borderline) {
+        logger.warn(`♻️ [TA V2 Post-LLM] ${tokenAnalysis.symbol} score borderline (${scoreCheck.payload.execScore.score}) aguardando reentrada.`);
+        return moveToDipWaitlist(scoreCheck.reason, false);
       }
+
+      logger.info(`[Pipeline 5/8 - Score] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) falhou no score pós-LLM (${scoreCheck.reason}).`);
+      return finish({
+        reason: scoreCheck.reason,
+      });
     }
 
-    // 2.5. Re-validação de ORGANICIDADE — detecta tokens artificiais
-    // (staircase bots, subida morta, crescimento empurrado)
-    // ─ Se ORGANICITY_SHADOW_MODE=true: apenas observa, NÃO bloqueia ─
+    const taSnapNow = scoreCheck.payload.snap;
+
     const orgHistory = getOrganicityWindowData(tokenAnalysis.mint);
     if (orgHistory) {
-      const prices1sNow = (taSnapNow as any).closes1s as number[] | undefined ?? [];
-      const t0 = performance.now();
-      const orgResult = calculateOrganicityScore(orgHistory, prices1sNow, tokenAnalysis.bondingCurvePercent || 90);
-      const orgBlocks = checkOrganicityHardBlocks(
-        orgHistory,
-        orgResult,
-        prices1sNow,
-        /* minTrades20s */ 3,
-        /* minUniqueBuyers30s */ 2,
-        /* minUniqueWalletsLifetime */ 5,
-        /* minAlternationRatio */ 0.15,
-        /* maxLinearityR2 */ 0.98,
-        /* maxTop1WalletSharePct */ 70,
-        /* maxTop2WalletSharePct */ 85,
-        /* maxOrderRepetitionRatioHard */ 0.75,
-        /* maxOrderRepetitionRatioSoft */ 0.55,
-        /* minOrganicScore */ taConfigExec.minOrganicScore ?? 30
-      );
-      const latencyMs = performance.now() - t0;
-
       logger.info(`[Pipeline 6/8 - Organicity] 🧬 Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) avaliando Organicidade de Fluxo...`);
-      logger.info(formatOrganicityLog(orgResult, tokenAnalysis.mint));
 
-      const hardOrgBlocks = orgBlocks.filter(b => b.severity === "HARD");
-      const softOrgBlocks = orgBlocks.filter(b => b.severity === "SOFT");
-      const wouldBlock = hardOrgBlocks.length > 0;
-
-      // ── SHADOW MODE: observar sem bloquear ──
       if (SHADOW_MODE) {
+        const prices1sNow = (taSnapNow as any).closes1s as number[] | undefined ?? [];
+        const t0 = performance.now();
+        const orgResult = calculateOrganicityScore(orgHistory, prices1sNow, tokenAnalysis.bondingCurvePercent || 90);
+        const orgBlocks = checkOrganicityHardBlocks(
+          orgHistory,
+          orgResult,
+          prices1sNow,
+          3,
+          2,
+          5,
+          0.15,
+          0.98,
+          70,
+          85,
+          0.75,
+          0.55,
+          taConfigExec.minOrganicScore ?? 30
+        );
+        const assessment = assessOrganicityBlockPressure(orgBlocks, taConfigExec);
+        const hardOrgBlocks = orgBlocks.filter((block) => block.severity === "HARD");
+        const softOrgBlocks = orgBlocks.filter((block) => block.severity === "SOFT");
+        const latencyMs = performance.now() - t0;
+
         recordShadowEvent({
           timestamp: new Date().toISOString(),
           mint: tokenAnalysis.mint,
           symbol: tokenAnalysis.symbol,
           organicMarketScore: orgResult.organicMarketScore,
-          hardBlocksTriggered: hardOrgBlocks.map(b => b.code),
-          softBlocksTriggered: softOrgBlocks.map(b => b.code),
-          wouldHaveBlocked: wouldBlock,
+          hardBlocksTriggered: hardOrgBlocks.map((block) => block.code),
+          softBlocksTriggered: softOrgBlocks.map((block) => block.code),
+          wouldHaveBlocked: assessment.action !== "ALLOW",
           scoreBreakdown: orgResult.breakdown as unknown as Record<string, number>,
           tradeDensity_20s: orgHistory.trades_20s.length,
           uniqueBuyers_30s: orgHistory.buyerSet_30s.size,
@@ -697,43 +949,118 @@ export async function executeAgentTrade(
           llmDecision: decision.action,
         }, latencyMs);
 
-        if (wouldBlock) {
-          const hardOrgBlock = hardOrgBlocks[0];
-          logger.warn(
-            `🔬 [SHADOW] ${tokenAnalysis.symbol} TERIA SIDO BLOQUEADO por organicidade: ` +
-            `${hardOrgBlock.code} — ${hardOrgBlock.reason} (latência: ${latencyMs.toFixed(2)}ms)`
-          );
-          logger.info(`[Pipeline 6/8 - Organicity] ⚠️ ${C_BLUE}APROVADO (Shadow)${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) falharia na Organicidade, mas salvo pelo SHADOW MODE.`);
+        recordFunnelEvent({
+          stage: "organicity",
+          outcome: "approved",
+          reason: assessment.action === "ALLOW" ? "SHADOW_OK" : `SHADOW_${assessment.summary}`,
+          protocol,
+          mint: tokenAnalysis.mint,
+          symbol: tokenAnalysis.symbol,
+          score: orgResult.organicMarketScore,
+          pressure: assessment.pressure,
+        });
+
+        logger.info(formatOrganicityLog(orgResult, tokenAnalysis.mint));
+        if (assessment.action !== "ALLOW") {
+          logger.info(`[Pipeline 6/8 - Organicity] ⚠️ ${C_BLUE}APROVADO (Shadow)${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) seguiria bloqueado, mas o shadow mode apenas observa.`);
         } else {
-          logger.debug(`🔬 [SHADOW] ${tokenAnalysis.symbol} PASSARIA na camada de organicidade (score=${orgResult.organicMarketScore}, ${latencyMs.toFixed(2)}ms)`);
           logger.info(`[Pipeline 6/8 - Organicity] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) com fluxo de trade Orgânico.`);
         }
-        // Em shadow mode: não bloquear, apenas observar → continua execução
       } else {
-        // ── MODO NORMAL: bloqueia se detectar token artificial ──
-        if (wouldBlock) {
-          const hardOrgBlock = hardOrgBlocks[0];
-          logger.warn(
-            `🧪 [Organicity Post-LLM] ${tokenAnalysis.symbol} BLOQUEADO: ` +
-            `${hardOrgBlock.code} — ${hardOrgBlock.reason}. Enfileirando no DipMonitor (Dip Sniper Mode).`
-          );
-          logger.info(`[Pipeline 6/8 - Organicity] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) BLOQUEADO pela Proteção de Organicidade.`);
-          dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
-          return;
-        }
-        logger.info(`[Pipeline 6/8 - Organicity] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) com fluxo de trade Orgânico.`);
+        const organicityCheck = await runRecheckLoop({
+          stage: "organicity",
+          tokenAnalysis,
+          baseReason: "organicity",
+          maxAttempts: recheckMaxAttempts,
+          delayMs: recheckDelayMs,
+          evaluate: async () => {
+            const history = getOrganicityWindowData(tokenAnalysis.mint);
+            const taSnap = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
+            const prices1sNow = (taSnap as any).closes1s as number[] | undefined ?? [];
+            if (!history) {
+              return {
+                resolution: "ALLOW" as StageResolution,
+                reason: "ORGANICITY_NO_HISTORY",
+                payload: {
+                  history: null,
+                  orgResult: null,
+                  orgBlocks: [],
+                  taSnap,
+                  assessment: { action: "ALLOW", pressure: 0, fatalCodes: [], hardCodes: [], softCodes: [], summary: "sem histórico" },
+                },
+                score: 0,
+                pressure: 0,
+              };
+            }
 
-        if (softOrgBlocks.length > 0) {
-          logger.debug(`⚠️ [Organicity] ${tokenAnalysis.symbol} Soft signals: ${softOrgBlocks.map(b => b.code).join(", ")}`);
+            const orgResult = calculateOrganicityScore(history, prices1sNow, tokenAnalysis.bondingCurvePercent || 90);
+            const orgBlocks = checkOrganicityHardBlocks(
+              history,
+              orgResult,
+              prices1sNow,
+              3,
+              2,
+              5,
+              0.15,
+              0.98,
+              70,
+              85,
+              0.75,
+              0.55,
+              taConfigExec.minOrganicScore ?? 30
+            );
+            const assessment = assessOrganicityBlockPressure(orgBlocks, taConfigExec);
+
+            let resolution: StageResolution = assessment.action;
+            if (isUltraAggressive && resolution === "BLOCK" && assessment.fatalCodes.length === 0) {
+              resolution = "RECHECK";
+            }
+
+            return {
+              resolution,
+              reason: orgBlocks[0]?.code || assessment.summary,
+              payload: { history, orgResult, orgBlocks, taSnap, assessment },
+              score: orgResult.organicMarketScore,
+              pressure: assessment.pressure,
+            };
+          },
+        });
+
+        if (organicityCheck.payload.orgResult) {
+          logger.info(formatOrganicityLog(organicityCheck.payload.orgResult, tokenAnalysis.mint));
         }
+
+        if (organicityCheck.resolution !== "ALLOW") {
+          if (organicityCheck.payload.assessment.action === "RECHECK") {
+            logger.warn(`♻️ [Organicity Post-LLM] ${tokenAnalysis.symbol} aguardando reavaliação orgânica: ${organicityCheck.reason}`);
+            logger.info(`[Pipeline 6/8 - Organicity] ⏳ ${C_BLUE}RECHECK${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) adiado por organicidade limítrofe.`);
+            return moveToDipWaitlist(organicityCheck.reason, false);
+          }
+
+          logger.info(`[Pipeline 6/8 - Organicity] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) bloqueado pela Proteção de Organicidade (${organicityCheck.reason}).`);
+          return finish({
+            reason: organicityCheck.reason,
+          });
+        }
+
+        logger.info(`[Pipeline 6/8 - Organicity] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) com fluxo de trade Orgânico.`);
       }
+    } else {
+      recordFunnelEvent({
+        stage: "organicity",
+        outcome: "approved",
+        reason: "ORGANICITY_NO_HISTORY",
+        protocol,
+        mint: tokenAnalysis.mint,
+        symbol: tokenAnalysis.symbol,
+      });
     }
 
-    // 2.7. micro-confirmação (Sprint 2)
-    // Janela assíncrona de 3-8s observando a saúde do token no momento da execução.
     logger.info(`[Pipeline 7/8 - Micro-Confirm] ⏱️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) iniciando janela de Micro-Confirmação...`);
     const runMicroConfirm = getMicroConfirmRunner();
-    const prices1sExec = (taSnapNow as any).closes1s as number[] | undefined ?? [];
+    const preExecutionSnapshot = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
+    tokenAnalysis.taSnapshot = preExecutionSnapshot;
+    const prices1sExec = (preExecutionSnapshot as any).closes1s as number[] | undefined ?? [];
     const mcResult = await runMicroConfirm(
       tokenAnalysis.mint,
       tokenAnalysis.symbol,
@@ -741,30 +1068,52 @@ export async function executeAgentTrade(
       prices1sExec
     );
 
-    if (!mcResult.passed) {
-      // Se falhou (e não estamos em shadow mode), aborta.
-      // O runner shadow retorna passed: true even if criteria fail internally.
-      logger.info(`[Pipeline 7/8 - Micro-Confirm] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) falhou na Micro-Confirmação (Sinais de Despejo).`);
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
-      return;
+    if ("code" in mcResult) {
+      recordFunnelEvent({
+        stage: "micro_confirm",
+        outcome: "blocked",
+        reason: mcResult.code,
+        protocol,
+        mint: tokenAnalysis.mint,
+        symbol: tokenAnalysis.symbol,
+        metadata: { latencyMs: mcResult.latencyMs },
+      });
+      logger.info(`[Pipeline 7/8 - Micro-Confirm] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) falhou na Micro-Confirmação.`);
+      return moveToDipWaitlist(mcResult.reason, false);
     }
+    recordFunnelEvent({
+      stage: "micro_confirm",
+      outcome: "approved",
+      reason: "MICRO_CONFIRM_OK",
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      score: mcResult.finalScore,
+      metadata: { latencyMs: mcResult.latencyMs },
+    });
     logger.info(`[Pipeline 7/8 - Micro-Confirm] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) confirmado contra Despejos Rápidos!`);
 
-    // 3. Checar spike de preço durante avaliação LLM
     const maxSpike = isUltraAggressive ? 25.0 : 10.0;
     const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, maxSpike);
+    recordFunnelEvent({
+      stage: "execution",
+      outcome: validation.isValid ? "approved" : "blocked",
+      reason: validation.isValid ? "PRE_EXECUTION_VALID" : "PRICE_SPIKE_PRE_EXECUTION",
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      metadata: { maxSpike },
+    });
     if (!validation.isValid) {
       logger.warn(
         `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike > ${maxSpike}%. ` +
         `Moving ${tokenAnalysis.symbol} to Dip Waitlist (Dip Sniper Mode).`
       );
       logger.info(`[Pipeline 8/8 - Execution] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) abortado (Price Spike detectado pré-compra).`);
-      dipMonitor.addToken(tokenAnalysis.mint, tokenAnalysis.symbol, false);
-      return;
+      return moveToDipWaitlist("PRICE_SPIKE_PRE_EXECUTION", false);
     }
 
-    // ✅ Setup ainda válido após LLM + Organicidade — pode executar!
-    logger.info(`✅ [Post-LLM Full] ${tokenAnalysis.symbol} TA=${execScore.score} ORGANIC=✅ APROVADO — executando compra.`);
+    logger.info(`✅ [Post-LLM Full] ${tokenAnalysis.symbol} TA=${tokenAnalysis.taScore} ORGANIC=✅ APROVADO — executando compra.`);
     logger.info(`[Pipeline 8/8 - Execution] 🚀 ${C_GREEN}EXECUTADO TRADE${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) aprovado em todas as etapas! Enviando Ordem (COMPRA) para a Blockchain.`);
   }
 
@@ -799,7 +1148,17 @@ export async function executeAgentTrade(
     const existingTrade = getOpenTradeForToken(tokenAnalysis.mint);
     if (existingTrade) {
       logger.info(`⏭️  [SIMULATION] Skipping trade for ${tokenAnalysis.symbol}: Position already open.`);
-      return;
+      recordFunnelEvent({
+        stage: "execution",
+        outcome: "skipped",
+        reason: "POSITION_ALREADY_OPEN",
+        protocol,
+        mint: tokenAnalysis.mint,
+        symbol: tokenAnalysis.symbol,
+      });
+      return finish({
+        reason: "POSITION_ALREADY_OPEN",
+      });
     }
 
     logger.info(`📊 [SIMULATION] Recording simulated trade...`);
@@ -838,6 +1197,19 @@ export async function executeAgentTrade(
 
     // Schedule monitoring for exit (TP/SL/timeout)
     scheduleSimulationExit(tokenAnalysis, decision);
+    recordFunnelEvent({
+      stage: "execution",
+      outcome: "executed",
+      reason: "SIMULATED_TRADE_RECORDED",
+      protocol,
+      mint: tokenAnalysis.mint,
+      symbol: tokenAnalysis.symbol,
+      score: decision.confidence,
+    });
+    return finish({
+      executed: true,
+      reason: "SIMULATED_TRADE_RECORDED",
+    });
   } else if (agentMode === "LIVE") {
     // ════════════════════════════════════════════════════════
     // LIVE MODE: Execute real transaction on blockchain
@@ -847,10 +1219,38 @@ export async function executeAgentTrade(
     try {
       await executeRealTrade(decision.force);
       logger.info(`✅ Trade executed successfully for ${tokenAnalysis.symbol}`);
+      recordFunnelEvent({
+        stage: "execution",
+        outcome: "executed",
+        reason: "LIVE_TRADE_EXECUTED",
+        protocol,
+        mint: tokenAnalysis.mint,
+        symbol: tokenAnalysis.symbol,
+        score: decision.confidence,
+      });
+      return finish({
+        executed: true,
+        reason: "LIVE_TRADE_EXECUTED",
+      });
     } catch (error: any) {
       logger.error(`❌ Live trade failed: ${error.message}`);
+      recordFunnelEvent({
+        stage: "execution",
+        outcome: "error",
+        reason: error.message,
+        protocol,
+        mint: tokenAnalysis.mint,
+        symbol: tokenAnalysis.symbol,
+      });
+      return finish({
+        reason: error.message,
+      });
     }
   }
+
+  return finish({
+    reason: "EXECUTION_SKIPPED",
+  });
 }
 
 /**

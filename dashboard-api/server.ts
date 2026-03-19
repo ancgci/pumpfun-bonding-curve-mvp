@@ -52,6 +52,7 @@ import {
 } from "../utils/walletStore";
 import { evaluateBotRuntimeHealth, readBotRuntimeHealth } from "../utils/botRuntimeHealth";
 import { rpcPool } from "../utils/rpcPool";
+import { getFunnelMetrics } from "../utils/decisionFunnelMetrics";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -2024,6 +2025,17 @@ app.delete("/api/agent/patterns", (req, res) => {
 app.post("/api/internal/broadcast", (req, res) => {
     broadcastDashboardUpdate();
     res.json({ success: true });
+});
+
+/**
+ * GET /api/agent/funnel-metrics - Métricas do funil de decisão do agente
+ */
+app.get("/api/agent/funnel-metrics", (req, res) => {
+    try {
+        res.json(getFunnelMetrics());
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 /**

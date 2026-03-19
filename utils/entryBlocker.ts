@@ -19,11 +19,21 @@ import { OrganicityResult } from "./organicityScore";
 // TIPOS
 // ============================================================
 export type BlockSeverity = "HARD" | "SOFT";
+export type GateAction = "ALLOW" | "RECHECK" | "BLOCK";
 
 export interface BlockResult {
     code: string;
     reason: string;
     severity: BlockSeverity;
+}
+
+export interface GateAssessment {
+    action: GateAction;
+    pressure: number;
+    fatalCodes: string[];
+    hardCodes: string[];
+    softCodes: string[];
+    summary: string;
 }
 
 // Estado de runtime para cooldowns e stops consecutivos
@@ -287,6 +297,110 @@ export function resetEntryBlockerState(): void {
     state.consecutiveStopPauseUntil = null;
     state.legCounts.clear();
     state.lastPrices.clear();
+}
+
+const ENTRY_FATAL_CODES = new Set([
+    "BLOCK_COOLDOWN",
+    "BLOCK_CONSECUTIVE_STOPS",
+    "BLOCK_INSUFFICIENT_DATA",
+    "BLOCK_ATR_DEAD",
+]);
+
+const ENTRY_WEIGHTS: Record<string, number> = {
+    BLOCK_VWAP_DISTANCE: 22,
+    BLOCK_CANDLE_STRETCHED: 22,
+    BLOCK_ATR_EXTREME: 28,
+    BLOCK_RSI_OVERBOUGHT: 20,
+    BLOCK_3RD_LEG: 18,
+    BLOCK_VOLUME_SPIKE_NO_FOLLOW: 26,
+    BLOCK_NO_VOLUME: 14,
+    BLOCK_HISTOGRAM_DECEL: 8,
+    BLOCK_RSI_SLOPE_NEG: 10,
+    BLOCK_BREAKOUT_NO_SUSTAIN: 16,
+};
+
+const ORGANICITY_FATAL_CODES = new Set([
+    "BLOCK_EXCESSIVE_LINEARITY",
+    "BLOCK_ORDER_REPETITION",
+    "BLOCK_ARTIFICIAL_COMBO",
+]);
+
+const ORGANICITY_WEIGHTS: Record<string, number> = {
+    BLOCK_LOW_TRADE_DENSITY: 12,
+    BLOCK_LOW_WALLET_DIVERSITY: 14,
+    BLOCK_UNILATERAL_MOVEMENT: 16,
+    BLOCK_WALLET_CONCENTRATION: 16,
+    BLOCK_ORDER_REPETITION_SOFT: 22,
+    BLOCK_NO_PARTICIPATION_EXPANSION: 14,
+    BLOCK_NO_SELLER_PRESENCE: 18,
+    BLOCK_LOW_ORGANIC_SCORE: 20,
+    BLOCK_TOP3_BUYER_CONCENTRATION: 14,
+    BLOCK_TOP5_WALLET_CONCENTRATION: 14,
+    BLOCK_WALLET_REPETITION_STREAK: 18,
+    BLOCK_HOLLOW_LIQUIDITY: 24,
+    BLOCK_MASS_SELLER_EXODUS: 24,
+};
+
+function buildGateAssessment(
+    blocks: BlockResult[],
+    fatalCodesSet: Set<string>,
+    weights: Record<string, number>,
+    recheckPressure: number,
+    fatalPressure: number
+): GateAssessment {
+    const fatalCodes = blocks.filter((block) => fatalCodesSet.has(block.code)).map((block) => block.code);
+    const hardCodes = blocks.filter((block) => block.severity === "HARD").map((block) => block.code);
+    const softCodes = blocks.filter((block) => block.severity === "SOFT").map((block) => block.code);
+    const pressure = blocks.reduce((sum, block) => {
+        const fallback = block.severity === "HARD" ? 24 : 10;
+        return sum + (weights[block.code] ?? fallback);
+    }, 0);
+
+    let action: GateAction = "ALLOW";
+    if (fatalCodes.length > 0 || pressure >= fatalPressure) {
+        action = "BLOCK";
+    } else if (hardCodes.length > 0 || pressure >= recheckPressure) {
+        action = "RECHECK";
+    }
+
+    const summary = blocks.length === 0
+        ? "sem bloqueios"
+        : `${action} pressure=${pressure} hard=${hardCodes.length} soft=${softCodes.length}`;
+
+    return {
+        action,
+        pressure,
+        fatalCodes,
+        hardCodes,
+        softCodes,
+        summary,
+    };
+}
+
+export function assessEntryBlockPressure(
+    blocks: BlockResult[],
+    config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
+): GateAssessment {
+    return buildGateAssessment(
+        blocks,
+        ENTRY_FATAL_CODES,
+        ENTRY_WEIGHTS,
+        config.entryBlockRecheckPressure,
+        config.entryBlockFatalPressure
+    );
+}
+
+export function assessOrganicityBlockPressure(
+    blocks: BlockResult[],
+    config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
+): GateAssessment {
+    return buildGateAssessment(
+        blocks,
+        ORGANICITY_FATAL_CODES,
+        ORGANICITY_WEIGHTS,
+        config.organicityRecheckPressure,
+        config.organicityFatalPressure
+    );
 }
 
 // ============================================================

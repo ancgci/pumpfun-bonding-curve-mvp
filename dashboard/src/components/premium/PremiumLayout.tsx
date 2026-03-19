@@ -16,6 +16,8 @@ export const PremiumLayout = ({ children, activeTab, onTabChange }: PremiumLayou
 
             <div className="min-h-screen flex flex-col lg:pl-20">
                 <TopNavigation
+                    activeTab={activeTab}
+                    onTabChange={onTabChange}
                     isAccountActive={activeTab === 'account'}
                     onOpenAccount={() => onTabChange('account')}
                 />

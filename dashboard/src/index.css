@@ -68,6 +68,36 @@
 
     --radius: 1rem; /* More rounded as requested */
   }
+
+  :root[data-theme="light"] {
+    --background: 165 35% 96%;
+    --foreground: 224 38% 16%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 38% 16%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 38% 16%;
+
+    --primary: 171 80% 28%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 173 26% 90%;
+    --secondary-foreground: 224 38% 16%;
+
+    --muted: 174 18% 88%;
+    --muted-foreground: 221 16% 39%;
+
+    --accent: 172 57% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 173 18% 79%;
+    --input: 173 18% 84%;
+    --ring: 171 80% 28%;
+  }
 }
 
 @layer base {
@@ -82,16 +112,28 @@
       radial-gradient(circle at 15% 50%, rgba(162, 255, 218, 0.03) 0%, transparent 40%),
       radial-gradient(circle at 85% 30%, rgba(20, 184, 166, 0.03) 0%, transparent 40%);
     background-attachment: fixed;
+    transition: background-color 220ms ease, color 220ms ease;
   }
+}
+
+html[data-theme="light"] body {
+  background-image:
+    radial-gradient(circle at 15% 50%, rgba(15, 118, 110, 0.08) 0%, transparent 42%),
+    radial-gradient(circle at 85% 30%, rgba(20, 184, 166, 0.09) 0%, transparent 38%);
 }
 
 /* Glassmorphism Utilities */
 .glass {
-  @apply bg-card/60 backdrop-blur-md border border-white/5 shadow-xl;
+  background-color: hsl(var(--card) / 0.6);
+  backdrop-filter: blur(16px);
+  border: 1px solid hsl(var(--border) / 0.55);
+  box-shadow: 0 24px 60px rgba(6, 10, 19, 0.18);
 }
 
 .glass-panel {
-  @apply bg-card/40 backdrop-blur-sm border border-white/5;
+  background-color: hsl(var(--card) / 0.42);
+  backdrop-filter: blur(10px);
+  border: 1px solid hsl(var(--border) / 0.5);
 }
 
 /* Custom Scrollbar for dark theme */

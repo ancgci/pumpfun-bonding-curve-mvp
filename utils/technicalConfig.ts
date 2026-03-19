@@ -116,6 +116,22 @@ export interface TechnicalAnalysisConfig {
     /** Habilitar ajuste automático do score baseado em performance. Default: false */
     adaptiveOrganicEnabled: boolean;
 
+    // --- Governança do pipeline / recheck ---
+    /** Pressão mínima dos bloqueios para entrar em recheck curto. Default: 35 */
+    entryBlockRecheckPressure: number;
+    /** Pressão mínima dos bloqueios para bloqueio definitivo. Default: 75 */
+    entryBlockFatalPressure: number;
+    /** Pressão mínima da camada de organicidade para entrar em recheck curto. Default: 40 */
+    organicityRecheckPressure: number;
+    /** Pressão mínima da camada de organicidade para bloqueio definitivo. Default: 75 */
+    organicityFatalPressure: number;
+    /** Buffer abaixo do score minimo em que o setup ainda pode ser reavaliado. Default: 8 */
+    taScoreRecheckBuffer: number;
+    /** Delay do recheck em ms. Default: 6000 */
+    recheckDelayMs: number;
+    /** Numero maximo de reavaliacoes curtas antes de abortar. Default: 2 */
+    recheckMaxAttempts: number;
+
     // --- Fallback Automático ---
     /** Habilitar fallback se 0 trades em N minutos. Default: true */
     fallbackEnabled?: boolean;
@@ -193,6 +209,15 @@ export const DEFAULT_TA_CONFIG: TechnicalAnalysisConfig = {
     // Organicidade
     minOrganicScore: 50,
     adaptiveOrganicEnabled: false,
+
+    // Governança do pipeline
+    entryBlockRecheckPressure: 35,
+    entryBlockFatalPressure: 75,
+    organicityRecheckPressure: 40,
+    organicityFatalPressure: 75,
+    taScoreRecheckBuffer: 8,
+    recheckDelayMs: 6000,
+    recheckMaxAttempts: 2,
 };
 
 // ============================================================
@@ -238,6 +263,34 @@ let _taConfig: TechnicalAnalysisConfig = loadTAConfig();
 
 export function getTAConfig(): TechnicalAnalysisConfig {
     return _taConfig;
+}
+
+export function getProtocolAdjustedTAConfig(
+    protocol: string | null | undefined,
+    baseConfig: TechnicalAnalysisConfig = getTAConfig()
+): TechnicalAnalysisConfig {
+    const normalized = String(protocol || "pumpfun").toLowerCase();
+    const adjusted = { ...baseConfig };
+
+    if (normalized === "meteora_dbc") {
+        adjusted.scoreMinimo = Math.max(35, adjusted.scoreMinimo - 4);
+        adjusted.minOrganicScore = Math.max(25, adjusted.minOrganicScore - 5);
+        adjusted.maxDistVWAPPct += 0.75;
+    } else if (normalized === "bonk_fun") {
+        adjusted.scoreMinimo = Math.max(35, adjusted.scoreMinimo - 3);
+        adjusted.minOrganicScore = Math.max(25, adjusted.minOrganicScore - 4);
+        adjusted.maxDistVWAPPct += 0.5;
+    } else if (normalized === "daos_fun") {
+        adjusted.scoreMinimo = Math.max(35, adjusted.scoreMinimo - 2);
+        adjusted.minOrganicScore = Math.max(25, adjusted.minOrganicScore - 3);
+        adjusted.organicityRecheckPressure += 5;
+    } else if (normalized === "moonshot") {
+        adjusted.scoreMinimo = Math.max(35, adjusted.scoreMinimo - 2);
+        adjusted.minOrganicScore = Math.max(25, adjusted.minOrganicScore - 2);
+        adjusted.maxDistVWAPPct += 0.25;
+    }
+
+    return adjusted;
 }
 
 export function reloadTAConfig(): TechnicalAnalysisConfig {

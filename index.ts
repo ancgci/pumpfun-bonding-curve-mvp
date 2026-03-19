@@ -58,6 +58,7 @@ import {
   markStreamDisconnected,
   markStreamEvent,
 } from "./utils/botRuntimeHealth";
+import { recordFunnelEvent } from "./utils/decisionFunnelMetrics";
 
 // Cores ANSI para Logs
 const C_BLUE = "\x1b[36m";
@@ -666,7 +667,15 @@ function shouldPersistAgentDecision(decision: { action?: string; reasoning?: str
     reason.includes("insufficient data") ||
     reason.includes("too few holders") ||
     reason.includes("insufficient_data");
-  return decision.action === "BUY" || !isInsufficient;
+  const isTemporary =
+    reason.includes("temp_recheck") ||
+    reason.includes("temporary") ||
+    reason.includes("recheck") ||
+    reason.includes("waiting_dip");
+  if (decision.action === "BUY") {
+    return !isTemporary;
+  }
+  return !isInsufficient && !isTemporary;
 }
 
 function deriveObservedTokenPrice(
@@ -737,6 +746,15 @@ async function runProtocolSimulationDiscovery(params: {
       `[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${symbol} (${tOutput.mint}) descoberto em ${protocolLabel} aos ${Number(progress).toFixed(1)}% da curva.`
     );
     markDiscoveryActivity();
+    recordFunnelEvent({
+      stage: "discovery",
+      outcome: "approved",
+      reason: `${protocolLabel}_DISCOVERY`,
+      protocol: protocolId,
+      mint: tOutput.mint,
+      symbol,
+      metadata: { progress: Number(progress) },
+    });
 
     const currentPrice = deriveObservedTokenPrice(
       tOutput.solAmount,
@@ -746,6 +764,14 @@ async function runProtocolSimulationDiscovery(params: {
 
     if (!(currentPrice > 0)) {
       logger.info(`⚠️ [${protocolLabel}] ${tOutput.mint} sem preço confiável para simulação. Pulando candidato.`);
+      recordFunnelEvent({
+        stage: "discovery",
+        outcome: "blocked",
+        reason: "NO_RELIABLE_PRICE",
+        protocol: protocolId,
+        mint: tOutput.mint,
+        symbol,
+      });
       return;
     }
 
@@ -776,6 +802,15 @@ async function runProtocolSimulationDiscovery(params: {
             logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando LP Locker para ${tOutput.mint} (${protocolLabel}).`);
           } else {
             logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | ${symbol} (${tOutput.mint}) bloqueado em ${protocolLabel} (LP não lockado).`);
+            recordFunnelEvent({
+              stage: "risk",
+              outcome: "blocked",
+              reason: "RISK_LP_UNLOCKED",
+              protocol: protocolId,
+              mint: tOutput.mint,
+              symbol,
+              score: riskAnalysis.score,
+            });
             return;
           }
         }
@@ -785,15 +820,50 @@ async function runProtocolSimulationDiscovery(params: {
             logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando Risk Score alto (${riskAnalysis.score}) em ${protocolLabel}.`);
           } else {
             logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | ${symbol} (${tOutput.mint}) bloqueado em ${protocolLabel} (Risk Score Alto: ${riskAnalysis.score}).`);
+            recordFunnelEvent({
+              stage: "risk",
+              outcome: "blocked",
+              reason: "RISK_SCORE_HIGH",
+              protocol: protocolId,
+              mint: tOutput.mint,
+              symbol,
+              score: riskAnalysis.score,
+            });
             return;
           }
         } else {
           logger.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | ${symbol} (${tOutput.mint}) aprovado no RiskEngine (${protocolLabel}).`);
+          recordFunnelEvent({
+            stage: "risk",
+            outcome: "approved",
+            reason: "RISK_OK",
+            protocol: protocolId,
+            mint: tOutput.mint,
+            symbol,
+            score: riskAnalysis.score,
+          });
         }
       } catch (riskError: any) {
         logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint} em ${protocolLabel}: ${riskError.message}.`);
+        recordFunnelEvent({
+          stage: "risk",
+          outcome: "error",
+          reason: riskError.message,
+          protocol: protocolId,
+          mint: tOutput.mint,
+          symbol,
+        });
         return;
       }
+    } else {
+      recordFunnelEvent({
+        stage: "risk",
+        outcome: "approved",
+        reason: "RISK_ENGINE_DISABLED",
+        protocol: protocolId,
+        mint: tOutput.mint,
+        symbol,
+      });
     }
 
     const tokenAnalysis: any = {
@@ -819,16 +889,16 @@ async function runProtocolSimulationDiscovery(params: {
     }
 
     markDecisionActivity();
-    if (shouldPersistAgentDecision(decision)) {
+    const tradeResult = await executeAgentTrade(tokenAnalysis, decision, async () => {
+      logger.warn(`⚠️ [${protocolLabel}] Execução LIVE ainda não implementada para este protocolo. Fluxo mantido apenas em simulação.`);
+    });
+
+    if (tradeResult.persistDecision) {
       aiProcessedAddresses.add(tokenKey);
       logger.info(`🎯 [Agent] Token ${tokenKey} marcado como processado (Decision: ${decision.action}).`);
     } else {
-      logger.info(`⏳ [Agent] Token ${tokenKey} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+      logger.info(`⏳ [Agent] Token ${tokenKey} skippado temporariamente: ${tradeResult.reason}. Tentará novamente.`);
     }
-
-    await executeAgentTrade(tokenAnalysis, decision, async () => {
-      logger.warn(`⚠️ [${protocolLabel}] Execução LIVE ainda não implementada para este protocolo. Fluxo mantido apenas em simulação.`);
-    });
   } finally {
     currentlyProcessing.delete(tokenKey);
   }
@@ -984,6 +1054,15 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       if (isDiscovery) {
         logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
         markDiscoveryActivity();
+        recordFunnelEvent({
+          stage: "discovery",
+          outcome: "approved",
+          reason: "PUMPFUN_DISCOVERY",
+          protocol: "pumpfun",
+          mint: tOutput.mint,
+          symbol: tokenMetadata?.symbol || "UNK",
+          metadata: { progress: Number(progress) },
+        });
 
         // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
         // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
@@ -1042,6 +1121,15 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
             } else {
               logger.warn(`🚫 [RiskEngine] Discovery BLOQUEADO para ${tOutput.mint}: LP não lockado.`);
               logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine: LP não lockado).`);
+              recordFunnelEvent({
+                stage: "risk",
+                outcome: "blocked",
+                reason: "RISK_LP_UNLOCKED",
+                protocol: "pumpfun",
+                mint: tOutput.mint,
+                symbol: tokenMetadata?.symbol || "UNK",
+                score: riskAnalysis.score,
+              });
               return;
             }
           }
@@ -1051,10 +1139,28 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
               logger.info(`[Pipeline 2/8 - RiskEngine] ⚠️ ${C_BLUE}PASS-THRU (Killer Mode)${C_RST} | Ignorando Risk Score alto (${riskAnalysis.score}).`);
             } else {
               logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Score Alto: ${riskAnalysis.score}).`);
+              recordFunnelEvent({
+                stage: "risk",
+                outcome: "blocked",
+                reason: "RISK_SCORE_HIGH",
+                protocol: "pumpfun",
+                mint: tOutput.mint,
+                symbol: tokenMetadata?.symbol || "UNK",
+                score: riskAnalysis.score,
+              });
               return;
             }
           } else if (isDiscovery) {
             logger.info(`[Pipeline 2/8 - RiskEngine] ✅ ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) aprovado no RiskEngine.`);
+            recordFunnelEvent({
+              stage: "risk",
+              outcome: "approved",
+              reason: "RISK_OK",
+              protocol: "pumpfun",
+              mint: tOutput.mint,
+              symbol: tokenMetadata?.symbol || "UNK",
+              score: riskAnalysis.score,
+            });
           }
 
           riskSection = formatRiskForTelegram(riskAnalysis);
@@ -1063,8 +1169,25 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
           // abortamos o trade para não entrar às cegas.
           logger.error(`🚨 [RiskEngine/CRITICAL] Análise falhou para ${tOutput.mint}: ${riskError.message}. ABORTANDO TRADE por segurança.`);
           logger.info(`[Pipeline 2/8 - RiskEngine] 🛑 ${C_RED}REPROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) BLOQUEADO (RiskEngine Error).`);
+          recordFunnelEvent({
+            stage: "risk",
+            outcome: "error",
+            reason: riskError.message,
+            protocol: "pumpfun",
+            mint: tOutput.mint,
+            symbol: tokenMetadata?.symbol || "UNK",
+          });
           return;
         }
+      } else if (isDiscovery) {
+        recordFunnelEvent({
+          stage: "risk",
+          outcome: "approved",
+          reason: "RISK_ENGINE_DISABLED",
+          protocol: "pumpfun",
+          mint: tOutput.mint,
+          symbol: tokenMetadata?.symbol || "UNK",
+        });
       }
 
       // Preparar dados do token para o executor
@@ -1137,22 +1260,16 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
         if (decision) {
           markDecisionActivity();
-          // Se houve uma decisão definitiva (BUY ou SKIP por risco concreto), marcamos como processado
-          const reason = (decision.reasoning || "").toLowerCase();
-          const isInsufficient = reason.includes("insufficient data") ||
-            reason.includes("too few holders") ||
-            reason.includes("insufficient_data");
+          const tradeResult = await executeAgentTrade(tokenAnalysis, decision, async (force) => {
+            await executeTradeWithRetry(force || decision.force);
+          });
 
-          if (decision.action === "BUY" || !isInsufficient) {
+          if (tradeResult.persistDecision) {
             aiProcessedAddresses.add(tOutput.mint);
             logger.info(`🎯 [Agent] Token ${tOutput.mint} marcado como processado (Decision: ${decision.action})`);
           } else {
-            logger.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${decision.reasoning}. Tentará novamente.`);
+            logger.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${tradeResult.reason}. Tentará novamente.`);
           }
-
-          await executeAgentTrade(tokenAnalysis, decision, async (force) => {
-            await executeTradeWithRetry(force || decision.force);
-          });
         } else if (isDiscovery && !agentEnabled) {
           // Fallback discovery sem agent
           await executeTradeWithRetry(false);
