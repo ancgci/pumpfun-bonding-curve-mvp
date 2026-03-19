@@ -221,16 +221,22 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       if (data.plHistory) applyPlHistory(data.plHistory);
     });
 
-    const fetchLogs = async () => {
-      try {
-        const freshLogs = await apiFetch(`${API_BASE}/agent/logs`);
-        if (freshLogs && Array.isArray(freshLogs)) {
-          setLogs(freshLogs);
+      const fetchLogs = async () => {
+        try {
+          const freshLogs = await apiFetch(`${API_BASE}/agent/logs`);
+          if (freshLogs && Array.isArray(freshLogs)) {
+            setLogs(
+              freshLogs.map((log: any) => ({
+                message: log.message || "",
+                type: (log.type || log.level || "info") as "info" | "warn" | "error",
+                time: log.time || log.timestamp || Date.now(),
+              }))
+            );
+          }
+        } catch (_e) {
+          // fail silently
         }
-      } catch (_e) {
-        // fail silently
-      }
-    };
+      };
 
     const logInterval = setInterval(fetchLogs, 5000); // 5s log poll (was 2s)
     refreshData();
