@@ -106,6 +106,10 @@ Expected behavior:
 After observing stable behavior:
 
 - switch `POSTMORTEM_LLM_ENABLED=true`
+- optionally set a dedicated NVIDIA model stack for the offline worker:
+  `POSTMORTEM_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions`
+  `POSTMORTEM_LLM_MODEL=qwen/qwen3.5-122b-a10b`
+  `POSTMORTEM_LLM_API_KEY=...`
 
 Expected behavior:
 

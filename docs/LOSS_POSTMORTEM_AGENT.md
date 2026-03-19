@@ -149,6 +149,15 @@ LLM enrichment is optional and guarded by:
 - `POSTMORTEM_LLM_ENABLED=false` to disable;
 - missing API key also skips enrichment safely.
 
+When enabled, the post-mortem worker can use its own dedicated model stack without changing the main trading agent:
+
+- `POSTMORTEM_LLM_API_URL`
+- `POSTMORTEM_LLM_MODEL`
+- `POSTMORTEM_LLM_API_KEY`
+- `POSTMORTEM_LLM_TIMEOUT_MS`
+
+If these are omitted, the worker falls back to the global NVIDIA-compatible settings already used by the main agent.
+
 ---
 
 ### 7. Integration With Existing Learning Cycle

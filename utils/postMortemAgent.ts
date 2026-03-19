@@ -3,9 +3,18 @@ import logger from "./logger";
 import { getPendingLossTrades, SimulatedTrade, updateTradePostMortem } from "./simulationEngine";
 import { TradePostMortemReport } from "./postMortemTypes";
 
-const LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const LLM_MODEL = process.env.LLM_MODEL || "moonshotai/kimi-k2.5";
-const getLlmApiKey = () => process.env.NV_LLM_API_KEY || process.env.NVIDIA_API_KEY || "";
+const DEFAULT_LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const POSTMORTEM_LLM_API_URL = process.env.POSTMORTEM_LLM_API_URL || DEFAULT_LLM_API_URL;
+const POSTMORTEM_LLM_MODEL = process.env.POSTMORTEM_LLM_MODEL || process.env.LLM_MODEL || "moonshotai/kimi-k2.5";
+const getPostMortemLlmApiKey = () =>
+  process.env.POSTMORTEM_LLM_API_KEY ||
+  process.env.NV_LLM_API_KEY ||
+  process.env.NVIDIA_API_KEY ||
+  "";
+const POSTMORTEM_LLM_TIMEOUT_MS = Math.max(
+  5000,
+  parseInt(process.env.POSTMORTEM_LLM_TIMEOUT_MS || "20000", 10) || 20000
+);
 const postMortemLlmEnabled = () => process.env.POSTMORTEM_LLM_ENABLED !== "false";
 const postMortemAgentEnabled = () => process.env.POSTMORTEM_AGENT_ENABLED !== "false";
 
@@ -276,13 +285,13 @@ async function enrichWithLlm(
   trade: SimulatedTrade,
   deterministic: DeterministicAnalysis
 ): Promise<Partial<TradePostMortemReport> | null> {
-  const apiKey = getLlmApiKey();
+  const apiKey = getPostMortemLlmApiKey();
   if (!apiKey || !postMortemLlmEnabled()) {
     return null;
   }
 
   const payload = {
-    model: LLM_MODEL,
+    model: POSTMORTEM_LLM_MODEL,
     temperature: 0.2,
     max_tokens: 1200,
     stream: false,
@@ -322,13 +331,13 @@ async function enrichWithLlm(
   };
 
   try {
-    const response = await axios.post(LLM_API_URL, payload, {
+    const response = await axios.post(POSTMORTEM_LLM_API_URL, payload, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      timeout: 20000,
+      timeout: POSTMORTEM_LLM_TIMEOUT_MS,
     });
 
     const data: any = response.data;
@@ -428,5 +437,5 @@ export const PostMortemAgent = {
 };
 
 logger.info(
-  `✅ PostMortem Agent module loaded (enabled=${postMortemAgentEnabled()}, llmEnrichment=${postMortemLlmEnabled()}, batchSize=${process.env.POSTMORTEM_BATCH_SIZE || "5"})`
+  `✅ PostMortem Agent module loaded (enabled=${postMortemAgentEnabled()}, llmEnrichment=${postMortemLlmEnabled()}, batchSize=${process.env.POSTMORTEM_BATCH_SIZE || "5"}, llmModel=${POSTMORTEM_LLM_MODEL})`
 );
