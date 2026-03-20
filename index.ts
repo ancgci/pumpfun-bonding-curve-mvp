@@ -95,6 +95,7 @@ const {
   TELEGRAM_BOT_TOKEN: token,
   TELEGRAM_CHAT_ID: chatId,
   ALERT_THRESHOLD,
+  VERBOSE_TRANSACTION_LOGS,
   MONITORING_PROTOCOL,
   METEORA_DBC_MONITORING_ENABLED,
   METEORA_DBC_ALERT_THRESHOLD,
@@ -348,6 +349,11 @@ const botHealth: BotHealth = {
 let activeGrpcStream: any = null;
 let activeGrpcStreamStartedAt: number | null = null;
 let lastGrpcDataAt: number | null = null;
+
+function logVerboseTransaction(message: string) {
+  if (!VERBOSE_TRANSACTION_LOGS) return;
+  logger.info(message);
+}
 
 function updateBotHealth(isHealthy: boolean, error?: string) {
   botHealth.isHealthy = isHealthy;
@@ -922,7 +928,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
   const balance = await getBondingCurveAddress(tOutput.bondingCurve);
   const progress = calculateCurveProgress(Number(balance));
-  logger.info(
+  logVerboseTransaction(
     `
     TYPE : ${tOutput.type}
     MINT : ${tOutput.mint}
@@ -1412,7 +1418,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       logger.debug(`⚠️ Bonding Curve inválida (${tOutput.bondingCurve}), pulando cálculo de progresso.`);
     }
 
-    logger.debug(
+    logVerboseTransaction(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -1612,7 +1618,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateBonkFunCurveProgress(tOutput.bondingCurve);
 
-    logger.debug(
+    logVerboseTransaction(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -1813,7 +1819,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateMoonshotCurveProgress(tOutput.bondingCurve);
 
-    logger.debug(
+    logVerboseTransaction(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -2013,7 +2019,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateAnoncoinCurveProgress(tOutput.bondingCurve);
 
-    logger.info(
+    logVerboseTransaction(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}
@@ -2208,7 +2214,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
     // Calcular o progresso da curva
     const progress = await calculateDaosFunCurveProgress(tOutput.bondingCurve);
 
-    logger.debug(
+    logVerboseTransaction(
       `
       TYPE : ${tOutput.type}
       MINT : ${tOutput.mint}

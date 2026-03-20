@@ -79,7 +79,32 @@ pm2 restart dashboard-api
 
 ---
 
-## 3. Gerenciamento Financeiro e de Processos (PM2)
+## 3. Perfil Operacional Recomendado na VPS
+
+Para reduzir risco de novo throttle de banda na Contabo, o perfil padrão recomendado na produção é:
+
+```bash
+MONITORING_PROTOCOL=PUMPFUN
+METEORA_DBC_MONITORING_ENABLED=false
+BONK_FUN_MONITORING_ENABLED=false
+DAOS_FUN_MONITORING_ENABLED=false
+MOONSHOT_MONITORING_ENABLED=false
+ANONCOIN_MONITORING_ENABLED=false
+VERBOSE_TRANSACTION_LOGS=false
+AGENT_MODE=SIMULATION
+```
+
+Esse perfil mantém o bot pronto para voltar ao modo `LIVE`, mas evita o custo operacional de múltiplos pipelines e de logs detalhados por transação.
+
+Se houver necessidade de ampliar o escopo:
+
+1. habilite um protocolo extra por vez
+2. acompanhe `vnstat` por pelo menos 24h
+3. só então abra a próxima frente
+
+---
+
+## 4. Gerenciamento Financeiro e de Processos (PM2)
 
 Na VPS, usamos o **PM2** para manter o bot rodando 24/7 sem interrupções.
 Se você precisar verificar o status ou os logs, os comandos abaixo devem ser executados **dentro da VPS**.
@@ -123,10 +148,64 @@ pm2 start bot
 pm2 restart all
 ```
 
+### Parada segura em caso de consumo elevado
+
+Se o tráfego subir além do esperado ou houver novo aviso do provedor:
+
+```bash
+pm2 stop bot
+```
+
+Depois revise `.env`, confirme o escopo de monitoramento e só então religue:
+
+```bash
+pm2 restart bot --update-env
+```
+
 
 ---
 
-## 4. O Painel de Controle (Dashboard)
+## 5. Monitoramento de Banda na VPS
+
+O `vnstat` está instalado na VPS e deve ser usado como fonte primária de histórico de tráfego.
+
+### Comandos principais
+
+```bash
+vnstat -i eth0
+vnstat -d -i eth0
+vnstat -h -i eth0
+vnstat -m -i eth0
+vnstat -tr 5 -i eth0
+```
+
+### Alerta diário por Telegram
+
+Há uma checagem periódica no `crontab` do usuário `anto` usando `tools/vnstat_daily_alert.py`.
+
+Limite operacional atual:
+
+- `5 GiB/dia`
+- frequência atual: a cada `15` minutos
+
+Para conferir o `crontab`:
+
+```bash
+crontab -l
+```
+
+Para testar manualmente:
+
+```bash
+cd /home/anto/pumpfun-bot
+python3 tools/vnstat_daily_alert.py --iface eth0 --threshold-gib 5 --dry-run
+```
+
+O `--dry-run` serve apenas para validar o alerta sem enviar mensagem real ao Telegram.
+
+---
+
+## 6. O Painel de Controle (Dashboard)
 
 ### Acessando na Máquina Local (Desenvolvimento)
 Quando você roda `npm run start:all` na sua máquina local, o painel roda em um endereço local e fechado apenas para a sua máquina:
@@ -146,7 +225,7 @@ http://meu.listadecompras.shop/login
 
 ---
 
-## 5. Segurança (Hardening)
+## 7. Segurança (Hardening)
 
 A VPS opera sob o **Protocolo de Hardening Nível 3**:
 - **Acesso**: Restrito a chaves SSH (Senhas desativadas no `/etc/ssh/sshd_config`).

@@ -205,6 +205,85 @@ ALERT_THRESHOLD=90 # Alerta no Telegram apenas no final da curva
 
 ---
 
+### `VERBOSE_TRANSACTION_LOGS`
+Controla se o bot escreve o bloco detalhado de cada transação em nível `info`.
+
+**Padrão operacional recomendado na VPS:** `false`
+
+```bash
+VERBOSE_TRANSACTION_LOGS=false
+```
+
+Use `true` apenas para troubleshooting temporário.
+
+---
+
+### `MONITORING_PROTOCOL`
+Define o escopo principal do stream on-chain.
+
+**Opções:** `PUMPFUN`, `METEORA_DBC`, `BONK_FUN`, `DAOS_FUN`, `MOONSHOT`, `ANONCOIN`, `BOTH`
+
+**Padrão recomendado na VPS:** `PUMPFUN`
+
+```bash
+MONITORING_PROTOCOL=PUMPFUN
+```
+
+> [!WARNING]
+> O modo `BOTH` ou o monitoramento simultâneo de múltiplos protocolos aumenta o consumo contínuo de banda, processamento e logging. Na VPS da Contabo, o baseline recomendado passou a ser `PUMPFUN` apenas.
+
+---
+
+### Flags de protocolos auxiliares
+Mesmo com `MONITORING_PROTOCOL=PUMPFUN`, mantenha desabilitados no servidor os protocolos que não estiver usando:
+
+```bash
+METEORA_DBC_MONITORING_ENABLED=false
+BONK_FUN_MONITORING_ENABLED=false
+DAOS_FUN_MONITORING_ENABLED=false
+MOONSHOT_MONITORING_ENABLED=false
+ANONCOIN_MONITORING_ENABLED=false
+```
+
+Ative um protocolo extra apenas quando houver necessidade operacional clara.
+
+---
+
+### `BANDWIDTH_ALERT_THRESHOLD_GIB`
+Limite diário de tráfego usado pelo alerta via Telegram baseado no `vnstat`.
+
+**Padrão operacional atual:** `5`
+
+```bash
+BANDWIDTH_ALERT_THRESHOLD_GIB=5
+```
+
+Isso representa um alerta preventivo, bem abaixo do throughput máximo aplicado pela Contabo.
+
+---
+
+### `BANDWIDTH_ALERT_IFACE`
+Interface de rede monitorada pelo script de alerta de banda.
+
+**Padrão operacional atual:** `eth0`
+
+```bash
+BANDWIDTH_ALERT_IFACE=eth0
+```
+
+---
+
+### `BANDWIDTH_ALERT_CHAT_ID`
+Chat de destino específico para o alerta diário de banda.
+
+Se não for definido, o script usa `TELEGRAM_CHAT_ID`.
+
+```bash
+BANDWIDTH_ALERT_CHAT_ID=123456789
+```
+
+---
+
 ## Modos do Agente (Simulation vs Live)
 
 ### `AGENT_MODE`
@@ -358,13 +437,13 @@ JITO_BLOCK_ENGINE_URL=https://mainnet.block-engine.jito.wtf
 
 ---
 
-### `JITO_TIP_LAMPORTS`
-Gorjeta para validadores Jito (em lamports).
+### `JITO_TIP_AMOUNT`
+Gorjeta para validadores Jito em SOL.
 
-**Padrão:** `10000` (0.00001 SOL)
+**Padrão:** `0.0001`
 
 ```bash
-JITO_TIP_LAMPORTS=50000  # 0.00005 SOL
+JITO_TIP_AMOUNT=0.0001
 ```
 
 ---
@@ -459,8 +538,9 @@ BONDING_CURVE=<endereço_da_bonding_curve>
 ```bash
 # === RPCs ===
 RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
-RPC_URL_FALLBACK_1=https://api.mainnet-beta.solana.com
-RPC_URL_FALLBACK_2=https://solana-api.projectserum.com
+RPC_FALLBACK_LIST=https://url1,https://url2
+WS_URL=wss://your-primary-ws
+WS_FALLBACK_LIST=wss://url1,wss://url2
 
 # === Wallet ===
 SECRET_KEY_JSON=[1,2,3,...,64]
@@ -468,6 +548,10 @@ SECRET_KEY_JSON=[1,2,3,...,64]
 # === Telegram ===
 TELEGRAM_BOT_TOKEN=123456789:ABC...
 TELEGRAM_CHAT_ID=123456789
+BANDWIDTH_ALERT_CHAT_ID=
+VERBOSE_TRANSACTION_LOGS=false
+BANDWIDTH_ALERT_THRESHOLD_GIB=5
+BANDWIDTH_ALERT_IFACE=eth0
 
 # === Trading ===
 BUY_AMOUNT_SOL=0.05
@@ -475,11 +559,21 @@ TAKE_PROFIT_PERCENT=40
 STOP_LOSS_PERCENT=25
 SLIPPAGE_BPS=50
 
-AUTO_BUY_ENABLED=true
+AUTO_BUY_ENABLED=false
 AUTO_SELL_TAKE_PROFIT=true
 AUTO_SELL_STOP_LOSS=true
 SINGLE_TRADE_MODE=false
 TRADE_TYPE_FILTER=BOTH
+AGENT_MODE=SIMULATION
+ALERT_THRESHOLD=90
+
+# === Monitoring Scope (recommended on VPS) ===
+MONITORING_PROTOCOL=PUMPFUN
+METEORA_DBC_MONITORING_ENABLED=false
+BONK_FUN_MONITORING_ENABLED=false
+DAOS_FUN_MONITORING_ENABLED=false
+MOONSHOT_MONITORING_ENABLED=false
+ANONCOIN_MONITORING_ENABLED=false
 
 # === Circuit Breaker ===
 CB_MAX_DAILY_LOSS_SOL=1.0
@@ -497,13 +591,12 @@ MAX_SLIPPAGE_BPS=500
 
 # === Jito ===
 JITO_BLOCK_ENGINE_URL=https://mainnet.block-engine.jito.wtf
-JITO_TIP_LAMPORTS=10000
+JITO_TIP_AMOUNT=0.0001
 
 # === Jupiter ===
-JUPITER_API_BASE=https://quote-api.jup.ag/v6
+JUPITER_API_BASE=https://api.jup.ag/ultra
 JUPITER_API_KEY=
 
 # === Protocolos ===
 PUMPFUN_PROGRAM_ID=6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P
-BONDING_CURVE=
 ```

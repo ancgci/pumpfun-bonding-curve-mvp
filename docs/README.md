@@ -2,6 +2,19 @@
 
 Bot de trading automático para Solana com suporte a múltiplos protocolos DeFi (PumpFun, Meteora, Moonshot, Bonk, Daos, Anoncoin).
 
+## 📌 Perfil Operacional Atual
+
+Após os ajustes de banda aplicados em **20/03/2026**, o perfil recomendado para a VPS ficou:
+
+- `MONITORING_PROTOCOL=PUMPFUN`
+- protocolos auxiliares desabilitados por padrão no servidor (`METEORA_DBC`, `BONK_FUN`, `DAOS_FUN`, `MOONSHOT`, `ANONCOIN`)
+- `VERBOSE_TRANSACTION_LOGS=false`
+- `AGENT_MODE=SIMULATION` no baseline operacional
+- `AGENT_MODE=LIVE` continua disponível quando houver decisão explícita de operar em mainnet
+- `vnstat` instalado na VPS para histórico de tráfego
+- alerta diário em Telegram configurado para `5 GiB/dia`
+- `tools/vnstat_daily_alert.py` executado via `cron` a cada 15 minutos na VPS
+
 ## 🌟 Características Principais
 
 ### Sprint 1: Redução de Risco ✅
@@ -58,16 +71,24 @@ Copie `.env.example` para `.env` e configure:
 ```bash
 # RPCs
 RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
-RPC_URL_FALLBACK_1=https://api.mainnet-beta.solana.com
-RPC_URL_FALLBACK_2=https://solana-api.projectserum.com
+RPC_FALLBACK_LIST=https://url1,https://url2
+WS_URL=wss://your-primary-ws
+WS_FALLBACK_LIST=wss://url1,wss://url2
 
 # Wallet
 SECRET_KEY_JSON=[...]
 
-# Trading
-BUY_AMOUNT_SOL=0.05
-TAKE_PROFIT_PERCENT=40
-STOP_LOSS_PERCENT=25
+# Perfil recomendado na VPS
+MONITORING_PROTOCOL=PUMPFUN
+VERBOSE_TRANSACTION_LOGS=false
+METEORA_DBC_MONITORING_ENABLED=false
+BONK_FUN_MONITORING_ENABLED=false
+DAOS_FUN_MONITORING_ENABLED=false
+MOONSHOT_MONITORING_ENABLED=false
+ANONCOIN_MONITORING_ENABLED=false
+AGENT_MODE=SIMULATION
+BANDWIDTH_ALERT_THRESHOLD_GIB=5
+BANDWIDTH_ALERT_IFACE=eth0
 
 # Ver docs/CONFIGURATION.md para todas as opções
 ```
@@ -119,6 +140,8 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 - [Arquitetura](ARCHITECTURE.md) - Visão técnica do sistema
 - [Guia de Uso](USAGE.md) - Como usar todas as features
 - [VPS & Deploy](VPS_DEPLOYMENT.md) - Gerenciamento, acesso remoto e atualização da VPS
+- [Avaliação de Banda Contabo](AVALIACAO_BANDA_CONTABO_2026-03-20.md) - Diagnóstico do throttle de banda
+- [Mitigação de Banda e Monitoramento](MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md) - Registro do que foi ajustado
 - [Hardening de Segurança](SECURITY_HARDENING.md) - Protocolo de proteção e auditoria da VPS
 - [API do Dashboard](API.md) - Endpoints REST
 - [Configuração](CONFIGURATION.md) - Todas as variáveis de ambiente

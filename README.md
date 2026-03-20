@@ -16,9 +16,10 @@ All project documentation is in the `/docs` folder:
 - **[AI_AGENT](docs/AI_AGENT.md)** - AI Agent architecture, learning loop, and precision trading
 - **[🤖 AI_AGENTS_ARCHITECTURE](docs/AI_AGENTS_ARCHITECTURE.md)** - **Entenda o Pipeline de 8 Etapas dos Agentes**
 - **[🧠 MULTI_AGENT](docs/MULTI_AGENT_ORCHESTRATION.md)** - Orquestração de múltiplos agentes e consenso
-- **[DIP_SNIPER](docs/DIP_SNIPER.md)** - Pre-Execution Guard and RSI Pullback trading
 - **[🛡️ SECURITY_HARDENING](docs/SECURITY_HARDENING.md)** - Protocolo avançado de proteção Nível 3
 - **[📚 VPS_DEPLOYMENT](docs/VPS_DEPLOYMENT.md)** - Guia de instalação e acesso à VPS
+- **[📉 AVALIACAO_BANDA_CONTABO](docs/AVALIACAO_BANDA_CONTABO_2026-03-20.md)** - Diagnóstico local + VPS do throttle de banda
+- **[🧯 MITIGACAO_BANDA](docs/MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md)** - O que foi ajustado no bot e no VPS após o alerta
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
@@ -27,6 +28,21 @@ All project documentation is in the `/docs` folder:
 - **[ORGANICITY](docs/ORGANICITY_PROTECTION.md)** - Anti-manipulation detection
 - **[📊 P&L_HISTORY](docs/PNL_HISTORY.md)** - Documentação do SQLite P&L
 - **[CHANGELOG](docs/CHANGELOG.md)** - Histórico de melhorias
+
+## ⚙️ Current VPS Profile
+
+As of **March 20, 2026**, the recommended low-bandwidth production profile is:
+
+- `MONITORING_PROTOCOL=PUMPFUN`
+- `METEORA_DBC_MONITORING_ENABLED=false`
+- `BONK_FUN_MONITORING_ENABLED=false`
+- `DAOS_FUN_MONITORING_ENABLED=false`
+- `MOONSHOT_MONITORING_ENABLED=false`
+- `ANONCOIN_MONITORING_ENABLED=false`
+- `VERBOSE_TRANSACTION_LOGS=false`
+- `AGENT_MODE=SIMULATION` by default on VPS, while `LIVE` remains available when you explicitly switch to mainnet operation
+- `vnstat` installed on VPS with a Telegram alert threshold of `5 GiB/day`
+- `tools/vnstat_daily_alert.py` scheduled via `cron` every 15 minutes on the VPS
 
 ## 🚀 Quick Start
 
@@ -39,6 +55,16 @@ npm install
 # 2. Configure .env
 cp .env.example .env
 # Edit .env with your credentials
+
+# Recommended low-bandwidth VPS defaults
+MONITORING_PROTOCOL=PUMPFUN
+VERBOSE_TRANSACTION_LOGS=false
+METEORA_DBC_MONITORING_ENABLED=false
+BONK_FUN_MONITORING_ENABLED=false
+DAOS_FUN_MONITORING_ENABLED=false
+MOONSHOT_MONITORING_ENABLED=false
+BANDWIDTH_ALERT_THRESHOLD_GIB=5
+BANDWIDTH_ALERT_IFACE=eth0
 
 # 3. Start bot + dashboard simultaneously
 npm run start:all
@@ -93,7 +119,6 @@ npm start
 **Dashboard API (separate terminal):**
 ```bash
 npm run start:dashboard-api
-npm run start:all
 ```
 
 
@@ -132,30 +157,7 @@ Após um incidente de segurança, a VPS foi totalmente reinstalada (Ubuntu 24.04
 
 ---
 
-## 🚀 Quick Start
-
-### Option 1: Everything at Once (Recommended)
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Configure .env
-cp .env.example .env
-# Edit .env with your credentials
-
-# 3. Start bot + dashboard simultaneously
-npm run start:all
-```
-
-**Result:** Bot and Dashboard start together.
-- **New Premium Dashboard:** [http://localhost:5174](http://localhost:5174)
-- **Classic Dashboard:** [http://localhost:5174/classic](http://localhost:5174/classic)
-
----
-
-## 🛡️ QA & Quality Control
-... (rest of the section)
+## 🔬 Additional Highlights
 
 ### 🧪 QAgent (QA Senior)
 | Feature | Description |
