@@ -11,6 +11,8 @@ Após os ajustes de banda aplicados em **20/03/2026**, o perfil recomendado para
 - `VERBOSE_TRANSACTION_LOGS=false`
 - `AGENT_MODE=SIMULATION` no baseline operacional
 - `AGENT_MODE=LIVE` continua disponível quando houver decisão explícita de operar em mainnet
+- governança adaptativa de entrada implementada no código local (`FULL`, `REDUCED`, `PROBE` e `RECHECK` para setups precoces)
+- gateway LLM unificado disponível localmente com `legacy -> google`, saída estruturada e tool calling por agente
 - `vnstat` instalado na VPS para histórico de tráfego
 - alerta diário em Telegram configurado para `5 GiB/dia`
 - `tools/vnstat_daily_alert.py` executado via `cron` a cada 15 minutos na VPS
@@ -142,6 +144,8 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 - [VPS & Deploy](VPS_DEPLOYMENT.md) - Gerenciamento, acesso remoto e atualização da VPS
 - [Avaliação de Banda Contabo](AVALIACAO_BANDA_CONTABO_2026-03-20.md) - Diagnóstico do throttle de banda
 - [Mitigação de Banda e Monitoramento](MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md) - Registro do que foi ajustado
+- [Governança Adaptativa de Entrada](GOVERNANCA_ADAPTATIVA_ENTRADA_2026-03-20.md) - Ajuste local do funil de BUY, sizing adaptativo e recheck
+- [Integração AI SDK Google](AI_SDK_GOOGLE_INTEGRATION_2026-03-20.md) - Gateway LLM unificado, fallback, saída estruturada e tool calling local
 - [Hardening de Segurança](SECURITY_HARDENING.md) - Protocolo de proteção e auditoria da VPS
 - [API do Dashboard](API.md) - Endpoints REST
 - [Configuração](CONFIGURATION.md) - Todas as variáveis de ambiente

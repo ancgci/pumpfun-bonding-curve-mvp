@@ -1,9 +1,10 @@
 import logger from "./logger";
 import * as fs from "fs";
 import * as path from "path";
-import axios from "axios";
 import Bottleneck from "bottleneck";
+import { jsonSchema, tool } from "ai";
 import { CONFIG, getRuntimeConfig } from "./config";
+import { generateStructuredLlm } from "./llmGateway";
 import { getActiveSkillsPrompt } from "./skillRegistry";
 import {
   recordSimulatedTrade,
@@ -49,13 +50,27 @@ import {
   buildTradeMonitoringPoint,
 } from "./postMortemContext";
 import { recordFunnelEvent } from "./decisionFunnelMetrics";
+import { assessAdaptiveEntryProfile, AdaptiveEntryProfile } from "./adaptiveEntryGovernance";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
 const DECISION_CACHE_TTL_MS = 60_000;
-const LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const LLM_MODEL = process.env.LLM_MODEL || "moonshotai/kimi-k2.5";
 const getLlmApiKey = () => process.env.NV_LLM_API_KEY || process.env.NVIDIA_API_KEY || "";
+const EMPTY_OBJECT_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
+const EMPTY_TOOL_SCHEMA = jsonSchema(EMPTY_OBJECT_SCHEMA);
+const AGENT_DECISION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["action", "confidence", "reason"],
+  properties: {
+    action: { type: "string", enum: ["BUY", "SKIP", "WAITING_DIP"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    takeProfitPercent: { type: ["number", "null"] },
+    stopLossPercent: { type: ["number", "null"] },
+  },
+} as const;
 
 const llmLimiter = new Bottleneck({
   minTime: 300, // ~3 req/s
@@ -65,128 +80,280 @@ const llmLimiter = new Bottleneck({
 type CachedDecision = { decision: AgentDecision; ts: number };
 const decisionCache: Map<string, CachedDecision> = new Map();
 
-/**
- * Extract the first valid JSON object from a string that may contain
- * conversational text mixed with JSON. Handles nested braces correctly.
- */
-function extractJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (escape) { escape = false; continue; }
-    if (ch === "\\") { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === "{") depth++;
-    if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        return text.slice(start, i + 1);
-      }
-    }
-  }
-  return null;
+interface AgentLlmOutput {
+  action: "BUY" | "SKIP" | "WAITING_DIP";
+  confidence: number;
+  reason: string;
+  takeProfitPercent?: number | null;
+  stopLossPercent?: number | null;
 }
 
-async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
-  const apiKey = getLlmApiKey();
-  if (!apiKey) {
-    throw new Error("NV_LLM_API_KEY not set");
+interface LearnedPattern {
+  rule?: string;
+  source?: string;
+  createdAt?: string;
+}
+
+function loadLearnedPatterns(): LearnedPattern[] {
+  try {
+    if (!fs.existsSync(LEARNED_PATTERNS_FILE)) return [];
+    const parsed = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, "utf-8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    logger.debug(`⚠️  Could not load learned patterns: ${(err as any).message}`);
+    return [];
+  }
+}
+
+function getLearnedRuleStrings(): string[] {
+  return loadLearnedPatterns()
+    .map((pattern) => pattern?.rule?.trim())
+    .filter((rule): rule is string => !!rule);
+}
+
+function normalizeAgentLlmOutput(raw: any): AgentLlmOutput | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const action = String(raw.action || raw.decision || "").toUpperCase();
+  if (action !== "BUY" && action !== "SKIP" && action !== "WAITING_DIP") {
+    return null;
   }
 
+  const confidence = Number(raw.confidence);
+  const reason = typeof raw.reason === "string"
+    ? raw.reason.trim()
+    : typeof raw.reasoning === "string"
+      ? raw.reasoning.trim()
+      : "";
+
+  if (!reason) return null;
+
+  return {
+    action,
+    confidence: Math.max(0, Math.min(100, Number.isFinite(confidence) ? confidence : 0)),
+    reason,
+    takeProfitPercent: typeof raw.takeProfitPercent === "number" ? raw.takeProfitPercent : null,
+    stopLossPercent: typeof raw.stopLossPercent === "number" ? raw.stopLossPercent : null,
+  };
+}
+
+function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
+  const taSnapshot = tokenAnalysis.taSnapshot;
+  if (!taSnapshot) {
+    return {
+      taScore: tokenAnalysis.taScore ?? null,
+      taScoreBreakdown: tokenAnalysis.taScoreBreakdown ?? null,
+      snapshot: null,
+    };
+  }
+
+  return {
+    taScore: tokenAnalysis.taScore ?? null,
+    taScoreBreakdown: tokenAnalysis.taScoreBreakdown ?? null,
+    snapshot: {
+      regime: (taSnapshot as any).regime ?? null,
+      currentPrice: taSnapshot.currentPrice ?? null,
+      rsi: taSnapshot.rsi ?? null,
+      rsiSlope: taSnapshot.rsiSlope ?? null,
+      ema5: taSnapshot.ema5 ?? null,
+      ema9: taSnapshot.ema9 ?? null,
+      ema13: taSnapshot.ema13 ?? null,
+      emaAligned: taSnapshot.emaAligned ?? null,
+      emaSlope5: taSnapshot.emaSlope5 ?? null,
+      distEMA5Pct: taSnapshot.distEMA5Pct ?? null,
+      macd: taSnapshot.macd
+        ? {
+          macd: taSnapshot.macd.macd,
+          signal: taSnapshot.macd.signal,
+          histogram: taSnapshot.macd.histogram,
+          histogramPrev: taSnapshot.macd.histogramPrev ?? null,
+          histogramAccelerating: taSnapshot.macd.histogramAccelerating ?? null,
+        }
+        : null,
+      vwap: taSnapshot.vwap ?? null,
+      distVWAPPct: taSnapshot.distVWAPPct ?? null,
+      priceAboveVWAP: taSnapshot.priceAboveVWAP ?? null,
+      donchian: taSnapshot.donchian ?? null,
+      roc: taSnapshot.roc ?? null,
+      volumeRelative: taSnapshot.volumeRelative
+        ? {
+          ratio: taSnapshot.volumeRelative.ratio,
+          isBurst: taSnapshot.volumeRelative.isBurst,
+          isSpike: taSnapshot.volumeRelative.isSpike,
+        }
+        : null,
+      microTrend: taSnapshot.microTrend ?? null,
+      trend: taSnapshot.trend ?? null,
+      atrPct: taSnapshot.atrPct ?? null,
+      candlesAvailable1s: taSnapshot.candlesAvailable1s ?? null,
+    },
+  };
+}
+
+function summarizeRiskForTool(tokenAnalysis: TokenAnalysis) {
+  return {
+    riskScore: tokenAnalysis.riskScore,
+    honeypotRisk: tokenAnalysis.honeypotRisk,
+    liquiditySol: tokenAnalysis.liquiditySol,
+    holders: tokenAnalysis.holders,
+    top10HolderPct: tokenAnalysis.top10HolderPct ?? null,
+    tokenAgeSec: tokenAnalysis.tokenAgeSec ?? null,
+    buyCount: tokenAnalysis.buyCount ?? null,
+    sellCount: tokenAnalysis.sellCount ?? null,
+    snifScore: tokenAnalysis.snifScore ?? null,
+    rugCheckXyz: tokenAnalysis.rugCheckXyz || null,
+    rektShield: tokenAnalysis.rektShield || null,
+    goPlus: tokenAnalysis.goPlus || null,
+    onChain: tokenAnalysis.onChain || null,
+    devHistory: tokenAnalysis.devHistory || null,
+    sentiment: tokenAnalysis.sentiment || null,
+  };
+}
+
+function summarizeOrganicityForTool(tokenAnalysis: TokenAnalysis) {
+  const history = getOrganicityWindowData(tokenAnalysis.mint);
+  const curveHistory = getCurveHistory(tokenAnalysis.mint);
+
+  return {
+    available: !!history,
+    tradeCount5s: history?.trades_5s.length ?? 0,
+    tradeCount20s: history?.trades_20s.length ?? 0,
+    tradeCount60s: history?.trades_60s.length ?? 0,
+    uniqueBuyers30s: history?.buyerSet_30s.size ?? 0,
+    uniqueSellers30s: history?.sellerSet_30s.size ?? 0,
+    uniqueWalletsLifetime: history?.totalUniqueWalletsSet.size ?? 0,
+    consecutiveWalletStreak: history?.consecutiveWalletStreak ?? 0,
+    recentSides: history?.recentSides.slice(-10) ?? [],
+    curveMilestones: curveHistory
+      ? Array.from(curveHistory.snapshots.entries()).map(([milestone, snapshot]) => ({
+        milestone,
+        curvePercent: snapshot.curvePercent,
+        tradesCount20s: snapshot.tradesCount_20s,
+        uniqueBuyers30s: snapshot.uniqueBuyers_30s,
+        uniqueSellers30s: snapshot.uniqueSellers_30s,
+        totalUniqueWallets: snapshot.totalUniqueWallets,
+        alternationRatio: snapshot.alternationRatio,
+        top1WalletSharePct: snapshot.top1WalletSharePct,
+      }))
+      : [],
+  };
+}
+
+function buildAgentTools(tokenAnalysis: TokenAnalysis): Record<string, any> {
+  const learnedRules = getLearnedRuleStrings();
+  const runtimeCfg = getRuntimeConfig();
+
+  return {
+    getTechnicalContext: tool({
+      description: "Returns the latest technical snapshot and score for the token.",
+      inputSchema: EMPTY_TOOL_SCHEMA,
+      execute: async () => summarizeTaForTool(tokenAnalysis),
+    }),
+    getRiskContext: tool({
+      description: "Returns aggregated risk, sentiment, wallet concentration and provider risk checks for the token.",
+      inputSchema: EMPTY_TOOL_SCHEMA,
+      execute: async () => summarizeRiskForTool(tokenAnalysis),
+    }),
+    getLearnedRulesContext: tool({
+      description: "Returns the active learned rules extracted from previous losing trades.",
+      inputSchema: EMPTY_TOOL_SCHEMA,
+      execute: async () => ({
+        count: learnedRules.length,
+        rules: learnedRules,
+      }),
+    }),
+    getExecutionPolicy: tool({
+      description: "Returns execution thresholds and risk defaults that govern final entry sizing.",
+      inputSchema: EMPTY_TOOL_SCHEMA,
+      execute: async () => ({
+        agentMode: runtimeCfg.AGENT_MODE || "SIMULATION",
+        minConfidence: runtimeCfg.AGENT_MIN_CONFIDENCE ?? CONFIG.AGENT_MIN_CONFIDENCE ?? 70,
+        buyAmountSol: runtimeCfg.BUY_AMOUNT_SOL ?? CONFIG.BUY_AMOUNT_SOL ?? 0.05,
+        takeProfitPercent: runtimeCfg.TAKE_PROFIT_PERCENT ?? CONFIG.TAKE_PROFIT_PERCENT,
+        stopLossPercent: runtimeCfg.STOP_LOSS_PERCENT ?? CONFIG.STOP_LOSS_PERCENT,
+        adaptiveEntryProfiles: ["FULL", "REDUCED", "PROBE"],
+        hardBlocksRemainAbsolute: [
+          "honeypot risk",
+          "extreme micro dump",
+          "cooldown/consecutive stop protection",
+        ],
+      }),
+    }),
+    getOrganicityContext: tool({
+      description: "Returns live organicity and wallet-distribution context for the token if the monitor has enough history.",
+      inputSchema: EMPTY_TOOL_SCHEMA,
+      execute: async () => summarizeOrganicityForTool(tokenAnalysis),
+    }),
+  };
+}
+
+function buildAgentUserPrompt(tokenAnalysis: TokenAnalysis): string {
   const volSummary = (tokenAnalysis.volWindows || [])
-    .map(v => `${v.windowSec}s:${v.pctChange !== null ? v.pctChange.toFixed(2) + "%" : "n/a"}`)
+    .map((v) => `${v.windowSec}s:${v.pctChange !== null ? `${v.pctChange.toFixed(2)}%` : "n/a"}`)
     .join(", ");
 
-  const sysPrompt = await buildSystemPrompt(tokenAnalysis);
-
-  const userPrompt = [
-    `Token ${tokenAnalysis.symbol} (${tokenAnalysis.mint})`,
+  return [
+    `Analyze token ${tokenAnalysis.symbol} (${tokenAnalysis.mint}).`,
+    "Use the available tools before finalizing borderline or high-confidence decisions.",
+    `Protocol: ${tokenAnalysis.protocol || "pumpfun"}`,
     `Price: ${tokenAnalysis.price}`,
-    `Curve%: ${tokenAnalysis.bondingCurvePercent}`,
+    `Bonding curve: ${tokenAnalysis.bondingCurvePercent}%`,
     `Holders: ${tokenAnalysis.holders}`,
     `Volume1h: ${tokenAnalysis.volumeH1} SOL`,
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
-    `Honeypot: ${tokenAnalysis.honeypotRisk}`,
-    tokenAnalysis.rsi ? `RSI(7,1s): ${tokenAnalysis.rsi.toFixed(1)}` : null,
-    tokenAnalysis.macd5s ? `MACD(4,9,3): L:${tokenAnalysis.macd5s.macd.toFixed(8)} S:${tokenAnalysis.macd5s.signal.toFixed(8)} H:${tokenAnalysis.macd5s.histogram.toFixed(8)}` : null,
-    tokenAnalysis.ema9 ? `EMA5: ${tokenAnalysis.taSnapshot?.ema5?.toFixed(8) ?? "n/a"} EMA9: ${tokenAnalysis.ema9.toFixed(8)} EMA13: ${tokenAnalysis.ema21?.toFixed(8) ?? "n/a"}` : null,
-    tokenAnalysis.taSnapshot?.vwap ? `VWAP(20): ${tokenAnalysis.taSnapshot.vwap.toFixed(8)} distVWAP: ${tokenAnalysis.taSnapshot.distVWAPPct?.toFixed(2) ?? "n/a"}%` : null,
-    tokenAnalysis.taSnapshot?.donchian ? `Donchian(12): breakoutUp=${tokenAnalysis.taSnapshot.donchian.breakoutUp}` : null,
-    tokenAnalysis.taSnapshot?.volumeRelative ? `VolRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x (burst=${tokenAnalysis.taSnapshot.volumeRelative.isBurst})` : null,
-    tokenAnalysis.taSnapshot?.roc !== null ? `ROC(5): ${tokenAnalysis.taSnapshot?.roc?.toFixed(4) ?? "n/a"}%` : null,
-    tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100 regime=${tokenAnalysis.taSnapshot?.['regime'] ?? "n/a"}` : null,
-    tokenAnalysis.trend ? `Trend: ${tokenAnalysis.trend.isRed ? "RED" : "GREEN"} (${tokenAnalysis.trend.bodySize.toFixed(1)}% body)` : null,
-    `Volatility: ${volSummary || "n/a"}`,
-    // Enriched data for better decisions
+    `HoneypotRisk: ${tokenAnalysis.honeypotRisk}`,
+    tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100` : null,
+    tokenAnalysis.taSnapshot?.volumeRelative
+      ? `VolumeRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x`
+      : null,
+    tokenAnalysis.rsi ? `RSI(1s): ${tokenAnalysis.rsi.toFixed(1)}` : null,
+    tokenAnalysis.taSnapshot?.microTrend
+      ? `MicroTrend10s: ${tokenAnalysis.taSnapshot.microTrend.changePct.toFixed(2)}%`
+      : null,
     tokenAnalysis.tokenAgeSec !== undefined ? `TokenAge: ${tokenAnalysis.tokenAgeSec}s` : null,
     tokenAnalysis.buyCount !== undefined ? `RecentBuys: ${tokenAnalysis.buyCount}` : null,
     tokenAnalysis.sellCount !== undefined ? `RecentSells: ${tokenAnalysis.sellCount}` : null,
-    tokenAnalysis.top10HolderPct !== undefined ? `Top10Holders: ${tokenAnalysis.top10HolderPct}%` : null,
-    tokenAnalysis.deployerPrevTokens !== undefined ? `DeployerHistory: ${tokenAnalysis.deployerPrevTokens} previous tokens` : null,
+    `Volatility windows: ${volSummary || "n/a"}`,
   ].filter(Boolean).join("\n");
+}
 
-  const payload = {
-    model: LLM_MODEL,
-    max_tokens: 1024,
-    temperature: 0.3,
-    top_p: 0.9,
-    stream: false,
-    messages: [
-      { role: "system", content: sysPrompt },
-      { role: "user", content: userPrompt },
-    ],
-  };
+async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
+  const apiKey = getLlmApiKey();
+  const hasGoogleKey =
+    !!process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    !!process.env.GOOGLE_API_KEY ||
+    !!process.env.GEMINI_API_KEY;
+  if (!apiKey && !hasGoogleKey) {
+    throw new Error("No LLM API key configured");
+  }
+
+  const sysPrompt = await buildSystemPrompt(tokenAnalysis);
+  const userPrompt = buildAgentUserPrompt(tokenAnalysis);
 
   try {
-    const resp = await axios.post(
-      LLM_API_URL,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        timeout: 45000,
-      }
+    const llmResult = await generateStructuredLlm<AgentLlmOutput>({
+      task: "agent",
+      system: sysPrompt,
+      prompt: userPrompt,
+      schema: AGENT_DECISION_SCHEMA,
+      normalizeOutput: normalizeAgentLlmOutput,
+      temperature: 0.3,
+      maxOutputTokens: 1024,
+      googleModel: process.env.AGENT_GOOGLE_LLM_MODEL || undefined,
+      legacyModel: LLM_MODEL,
+      legacyApiKey: apiKey,
+      legacyTimeoutMs: 45000,
+      tools: buildAgentTools(tokenAnalysis),
+      toolChoice: "auto",
+      stopWhenSteps: 5,
+    });
+
+    logger.info(
+      `[Agent] LLM provider=${llmResult.provider} model=${llmResult.model} tools=${llmResult.toolCalls.join(",") || "none"} steps=${llmResult.steps}`
     );
 
-    const data: any = resp.data;
-    // Kimi K2.5 returns content=null with JSON inside reasoning_content
-    const message = data?.choices?.[0]?.message;
-    const rawContent = (message?.content || "").trim();
-    const rawReasoning = (message?.reasoning_content || message?.reasoning || "").trim();
-
-    // Try to extract JSON from content first, then reasoning_content
-    let parsed: any = null;
-    for (const text of [rawContent, rawReasoning]) {
-      if (!text) continue;
-      // Direct parse
-      try {
-        parsed = JSON.parse(text);
-        if (parsed?.action) break;
-      } catch { }
-      // Extract JSON object with balanced braces
-      const jsonStr = extractJsonObject(text);
-      if (jsonStr) {
-        try {
-          parsed = JSON.parse(jsonStr);
-          if (parsed?.action) break;
-        } catch { }
-      }
-    }
-
-    if (!parsed || !parsed.action) {
-      throw new Error(`LLM returned unparseable content: ${(rawContent || rawReasoning).slice(0, 200)}`);
-    }
+    const parsed = llmResult.output;
 
     const runtimeCfg = getRuntimeConfig();
 
@@ -199,9 +366,9 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
       : (runtimeCfg.STOP_LOSS_PERCENT ?? CONFIG.STOP_LOSS_PERCENT);
 
     const decision: AgentDecision = {
-      action: parsed.action === "BUY" ? "BUY" : "SKIP",
+      action: parsed.action,
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
-      reasoning: parsed.reason || (rawContent || rawReasoning).slice(0, 200),
+      reasoning: parsed.reason,
       entryPrice: tokenAnalysis.price,
       takeProfit: tokenAnalysis.price * (1 + tpPercent / 100),
       stopLoss: tokenAnalysis.price * (1 - slPercent / 100),
@@ -214,7 +381,7 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
     return decision;
   } catch (err: any) {
     const status = err.response?.status;
-    if (status === 429) {
+    if (status === 429 || String(err.message || "").includes("rate limit")) {
       const retry = err.response?.headers?.["retry-after"];
       throw new Error(`rate limit: retry-after=${retry || "unknown"}`);
     }
@@ -341,10 +508,6 @@ function isTemporaryReason(reason: string | null | undefined): boolean {
   );
 }
 
-function isBorderlineScore(score: number, threshold: number, buffer: number): boolean {
-  return score < threshold && score >= Math.max(0, threshold - buffer);
-}
-
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -400,6 +563,13 @@ async function runRecheckLoop<TPayload>(params: {
     payload: last.payload,
     reason: `${params.baseReason} | recheck timeout`,
   };
+}
+
+function confidenceToPositionMultiplier(confidence: number): number {
+  if (confidence >= 90) return 1.0;
+  if (confidence >= 80) return 0.75;
+  if (confidence >= 70) return 0.5;
+  return 0.3;
 }
 
 /**
@@ -691,7 +861,7 @@ export async function getAgentDecision(
 export async function executeAgentTrade(
   tokenAnalysis: TokenAnalysis,
   decision: AgentDecision,
-  executeRealTrade: (force?: boolean) => Promise<void>
+  executeRealTrade: (force?: boolean, buyAmountSol?: number) => Promise<void>
 ): Promise<AgentTradeExecutionResult> {
   // Get agent mode from config
   const runtimeCfg = getRuntimeConfig();
@@ -855,24 +1025,21 @@ export async function executeAgentTrade(
       evaluate: async () => {
         const snap = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
         const execScore = calculateConfluenceScore(snap, taConfigExec);
-        const borderline = !execScore.invalidated &&
-          isBorderlineScore(execScore.score, taConfigExec.scoreMinimo, taConfigExec.taScoreRecheckBuffer);
-
-        let resolution: StageResolution = "BLOCK";
-        if (isUltraAggressive && !execScore.invalidated) {
-          resolution = "ALLOW";
-        } else if (!execScore.invalidated && execScore.score >= taConfigExec.scoreMinimo) {
-          resolution = "ALLOW";
-        } else if (borderline) {
-          resolution = "RECHECK";
-        }
+        const adaptiveProfile = assessAdaptiveEntryProfile({
+          decisionConfidence: decision.confidence,
+          baseMinConfidence: minConfidence,
+          snap,
+          execScore,
+          blockPressure: blockCheck.payload.assessment.pressure,
+          config: taConfigExec,
+        });
+        const borderline = adaptiveProfile.resolution === "RECHECK" &&
+          execScore.score >= adaptiveProfile.probeEntryScore;
 
         return {
-          resolution,
-          reason: execScore.invalidated
-            ? `TA_INVALID:${execScore.invalidReason || "unknown"}`
-            : `TA_SCORE:${execScore.score}/${taConfigExec.scoreMinimo}`,
-          payload: { snap, execScore, borderline },
+          resolution: adaptiveProfile.resolution,
+          reason: adaptiveProfile.reason,
+          payload: { snap, execScore, borderline, adaptiveProfile },
           score: execScore.score,
         };
       },
@@ -884,6 +1051,13 @@ export async function executeAgentTrade(
     logger.info(
       `📊 [TA V2 Post-LLM] ${tokenAnalysis.symbol} Score pós-LLM: ${scoreCheck.payload.execScore.score}/100` +
       (scoreCheck.payload.execScore.invalidated ? ` ⚠️ INVÁLIDO: ${scoreCheck.payload.execScore.invalidReason}` : "")
+    );
+    logger.info(
+      `🧭 [Adaptive Entry] ${tokenAnalysis.symbol} profile=${scoreCheck.payload.adaptiveProfile.profile}` +
+      ` dq=${scoreCheck.payload.adaptiveProfile.dataQualityScore}` +
+      ` conf=${scoreCheck.payload.adaptiveProfile.effectiveConfidence.toFixed(0)}/${scoreCheck.payload.adaptiveProfile.requiredConfidence}` +
+      ` cap=${scoreCheck.payload.adaptiveProfile.confidenceCap}` +
+      ` minScore=${scoreCheck.payload.adaptiveProfile.minEntryScore}`
     );
 
     if (scoreCheck.resolution !== "ALLOW") {
@@ -899,6 +1073,7 @@ export async function executeAgentTrade(
     }
 
     const taSnapNow = scoreCheck.payload.snap;
+    const adaptiveEntryProfile = scoreCheck.payload.adaptiveProfile;
 
     const orgHistory = getOrganicityWindowData(tokenAnalysis.mint);
     if (orgHistory) {
@@ -1115,136 +1290,145 @@ export async function executeAgentTrade(
 
     logger.info(`✅ [Post-LLM Full] ${tokenAnalysis.symbol} TA=${tokenAnalysis.taScore} ORGANIC=✅ APROVADO — executando compra.`);
     logger.info(`[Pipeline 8/8 - Execution] 🚀 ${C_GREEN}EXECUTADO TRADE${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) aprovado em todas as etapas! Enviando Ordem (COMPRA) para a Blockchain.`);
-  }
+    const executionConfidence = Math.round(adaptiveEntryProfile.effectiveConfidence);
 
-
-  // ══════════════════════════════════════════════════
-  // DYNAMIC POSITION SIZING based on confidence
-  // Higher confidence = larger position, lower = smaller
-  // ══════════════════════════════════════════════════
-  const baseBuyAmount = getRuntimeConfig().BUY_AMOUNT_SOL || CONFIG.BUY_AMOUNT_SOL || 0.05;
-  let positionMultiplier = 1.0;
-  if (decision.confidence >= 90) {
-    positionMultiplier = 1.0;   // 100% of BUY_AMOUNT
-  } else if (decision.confidence >= 80) {
-    positionMultiplier = 0.75;  // 75%
-  } else if (decision.confidence >= 70) {
-    positionMultiplier = 0.5;   // 50%
-  } else {
-    positionMultiplier = 0.3;   // 30% (safety net)
-  }
-  const adjustedBuyAmount = baseBuyAmount * positionMultiplier;
-  logger.info(`   💰 Position Size: ${adjustedBuyAmount.toFixed(4)} SOL (${(positionMultiplier * 100).toFixed(0)}% of ${baseBuyAmount} SOL)`);
-
-  // record live price sample for volatility windows
-  recordPriceSample(tokenAnalysis.mint, tokenAnalysis.price);
-  tokenAnalysis.volWindows = getVolatility(tokenAnalysis.mint, [5, 15, 30, 60]);
-
-  if (agentMode === "SIMULATION") {
-    // ════════════════════════════════════════════════════════
-    // SIMULATION MODE: Record fake trade, learn from paths
-    // ════════════════════════════════════════════════════════
-    // Check if we already have an open trade for this token to avoid duplicates
-    const existingTrade = getOpenTradeForToken(tokenAnalysis.mint);
-    if (existingTrade) {
-      logger.info(`⏭️  [SIMULATION] Skipping trade for ${tokenAnalysis.symbol}: Position already open.`);
-      recordFunnelEvent({
-        stage: "execution",
-        outcome: "skipped",
-        reason: "POSITION_ALREADY_OPEN",
-        protocol,
-        mint: tokenAnalysis.mint,
-        symbol: tokenAnalysis.symbol,
-      });
-      return finish({
-        reason: "POSITION_ALREADY_OPEN",
-      });
-    }
-
-    logger.info(`📊 [SIMULATION] Recording simulated trade...`);
-    const decisionContext = buildTradeDecisionContext(decision, agentMode);
-    const entrySnapshot = buildTradeEntrySnapshot({
-      mint: tokenAnalysis.mint,
-      price: decision.entryPrice || tokenAnalysis.price,
-      marketCap: tokenAnalysis.marketCap ?? null,
-      holders: tokenAnalysis.holders,
-      liquiditySol: tokenAnalysis.liquiditySol,
-      bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
-      tokenAgeSec: tokenAnalysis.tokenAgeSec,
-      buyCount: tokenAnalysis.buyCount,
-      sellCount: tokenAnalysis.sellCount,
-      taSnapshot: tokenAnalysis.taSnapshot,
-      taScore: tokenAnalysis.taScore,
-      taScoreBreakdown: tokenAnalysis.taScoreBreakdown,
-      volatilityWindows: tokenAnalysis.volWindows,
-    });
-
-    await recordSimulatedTrade(
-      tokenAnalysis.mint,
-      tokenAnalysis.symbol,
-      decision.entryPrice || tokenAnalysis.price,
-      decision.confidence,
-      {
-        reasoning: decision.reasoning,
-        takeProfit: decision.takeProfit,
-        stopLoss: decision.stopLoss,
-      },
-      tokenAnalysis.holders,
-      tokenAnalysis.marketCap,
-      decisionContext,
-      entrySnapshot
+    // ══════════════════════════════════════════════════
+    // DYNAMIC POSITION SIZING based on confidence + technical score + entry profile
+    // ══════════════════════════════════════════════════
+    const baseBuyAmount = getRuntimeConfig().BUY_AMOUNT_SOL || CONFIG.BUY_AMOUNT_SOL || 0.05;
+    const confidenceMultiplier = confidenceToPositionMultiplier(executionConfidence);
+    const technicalMultiplier = scoreCheck.payload.execScore.sizing;
+    const positionMultiplier = Math.min(confidenceMultiplier, technicalMultiplier, adaptiveEntryProfile.positionCap);
+    const adjustedBuyAmount = baseBuyAmount * positionMultiplier;
+    logger.info(
+      `   💰 Position Size: ${adjustedBuyAmount.toFixed(4)} SOL ` +
+      `(${(positionMultiplier * 100).toFixed(0)}% of ${baseBuyAmount} SOL | profile=${adaptiveEntryProfile.profile} | tech=${(technicalMultiplier * 100).toFixed(0)}% | conf=${executionConfidence}%)`
     );
 
-    // Schedule monitoring for exit (TP/SL/timeout)
-    scheduleSimulationExit(tokenAnalysis, decision);
-    recordFunnelEvent({
-      stage: "execution",
-      outcome: "executed",
-      reason: "SIMULATED_TRADE_RECORDED",
-      protocol,
-      mint: tokenAnalysis.mint,
-      symbol: tokenAnalysis.symbol,
-      score: decision.confidence,
-    });
-    return finish({
-      executed: true,
-      reason: "SIMULATED_TRADE_RECORDED",
-    });
-  } else if (agentMode === "LIVE") {
-    // ════════════════════════════════════════════════════════
-    // LIVE MODE: Execute real transaction on blockchain
-    // ════════════════════════════════════════════════════════
-    logger.info(`💰 [LIVE] Executing real trade...`);
+    // record live price sample for volatility windows
+    recordPriceSample(tokenAnalysis.mint, tokenAnalysis.price);
+    tokenAnalysis.volWindows = getVolatility(tokenAnalysis.mint, [5, 15, 30, 60]);
 
-    try {
-      await executeRealTrade(decision.force);
-      logger.info(`✅ Trade executed successfully for ${tokenAnalysis.symbol}`);
+    if (agentMode === "SIMULATION") {
+      // ════════════════════════════════════════════════════════
+      // SIMULATION MODE: Record fake trade, learn from paths
+      // ════════════════════════════════════════════════════════
+      // Check if we already have an open trade for this token to avoid duplicates
+      const existingTrade = getOpenTradeForToken(tokenAnalysis.mint);
+      if (existingTrade) {
+        logger.info(`⏭️  [SIMULATION] Skipping trade for ${tokenAnalysis.symbol}: Position already open.`);
+        recordFunnelEvent({
+          stage: "execution",
+          outcome: "skipped",
+          reason: "POSITION_ALREADY_OPEN",
+          protocol,
+          mint: tokenAnalysis.mint,
+          symbol: tokenAnalysis.symbol,
+        });
+        return finish({
+          reason: "POSITION_ALREADY_OPEN",
+        });
+      }
+
+      logger.info(`📊 [SIMULATION] Recording simulated trade...`);
+      const decisionContext = buildTradeDecisionContext(
+        { ...decision, confidence: executionConfidence },
+        agentMode,
+        {
+          rawConfidence: decision.confidence,
+          effectiveConfidence: executionConfidence,
+          entryProfile: adaptiveEntryProfile.profile,
+          dataQualityScore: adaptiveEntryProfile.dataQualityScore,
+          technicalScore: tokenAnalysis.taScore ?? null,
+          positionMultiplier,
+          entryAmount: adjustedBuyAmount,
+          requiredConfidence: adaptiveEntryProfile.requiredConfidence,
+        }
+      );
+      const entrySnapshot = buildTradeEntrySnapshot({
+        mint: tokenAnalysis.mint,
+        price: decision.entryPrice || tokenAnalysis.price,
+        marketCap: tokenAnalysis.marketCap ?? null,
+        holders: tokenAnalysis.holders,
+        liquiditySol: tokenAnalysis.liquiditySol,
+        bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+        tokenAgeSec: tokenAnalysis.tokenAgeSec,
+        buyCount: tokenAnalysis.buyCount,
+        sellCount: tokenAnalysis.sellCount,
+        taSnapshot: tokenAnalysis.taSnapshot,
+        taScore: tokenAnalysis.taScore,
+        taScoreBreakdown: tokenAnalysis.taScoreBreakdown,
+        volatilityWindows: tokenAnalysis.volWindows,
+      });
+
+      await recordSimulatedTrade(
+        tokenAnalysis.mint,
+        tokenAnalysis.symbol,
+        decision.entryPrice || tokenAnalysis.price,
+        executionConfidence,
+        {
+          reasoning: decision.reasoning,
+          takeProfit: decision.takeProfit,
+          stopLoss: decision.stopLoss,
+        },
+        tokenAnalysis.holders,
+        tokenAnalysis.marketCap,
+        decisionContext,
+        entrySnapshot,
+        adjustedBuyAmount
+      );
+
+      // Schedule monitoring for exit (TP/SL/timeout)
+      scheduleSimulationExit(tokenAnalysis, decision);
       recordFunnelEvent({
         stage: "execution",
         outcome: "executed",
-        reason: "LIVE_TRADE_EXECUTED",
+        reason: `SIMULATED_TRADE_RECORDED:${adaptiveEntryProfile.profile}`,
         protocol,
         mint: tokenAnalysis.mint,
         symbol: tokenAnalysis.symbol,
-        score: decision.confidence,
+        score: executionConfidence,
       });
       return finish({
         executed: true,
-        reason: "LIVE_TRADE_EXECUTED",
+        reason: "SIMULATED_TRADE_RECORDED",
       });
-    } catch (error: any) {
-      logger.error(`❌ Live trade failed: ${error.message}`);
-      recordFunnelEvent({
-        stage: "execution",
-        outcome: "error",
-        reason: error.message,
-        protocol,
-        mint: tokenAnalysis.mint,
-        symbol: tokenAnalysis.symbol,
-      });
-      return finish({
-        reason: error.message,
-      });
+    } else if (agentMode === "LIVE") {
+      // ════════════════════════════════════════════════════════
+      // LIVE MODE: Execute real transaction on blockchain
+      // ════════════════════════════════════════════════════════
+      logger.info(`💰 [LIVE] Executing real trade...`);
+
+      try {
+        await executeRealTrade(decision.force, adjustedBuyAmount);
+        logger.info(`✅ Trade executed successfully for ${tokenAnalysis.symbol}`);
+        recordFunnelEvent({
+          stage: "execution",
+          outcome: "executed",
+          reason: `LIVE_TRADE_EXECUTED:${adaptiveEntryProfile.profile}`,
+          protocol,
+          mint: tokenAnalysis.mint,
+          symbol: tokenAnalysis.symbol,
+          score: executionConfidence,
+        });
+        return finish({
+          executed: true,
+          reason: "LIVE_TRADE_EXECUTED",
+        });
+      } catch (error: any) {
+        logger.error(`❌ Live trade failed: ${error.message}`);
+        recordFunnelEvent({
+          stage: "execution",
+          outcome: "error",
+          reason: error.message,
+          protocol,
+          mint: tokenAnalysis.mint,
+          symbol: tokenAnalysis.symbol,
+        });
+        return finish({
+          reason: error.message,
+        });
+      }
     }
   }
 
@@ -1532,16 +1716,14 @@ async function buildSystemPrompt(tokenAnalysis: TokenAnalysis): Promise<string> 
   // Load learned patterns from past trade analysis
   let learnedRules = "";
   try {
-    if (fs.existsSync(LEARNED_PATTERNS_FILE)) {
-      const patterns = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, "utf-8"));
-      if (Array.isArray(patterns) && patterns.length > 0) {
-        const rulesList = patterns
-          .filter((p: any) => p.rule)
-          .map((p: any, i: number) => `${i + 1}. ${p.rule}`)
-          .join("\n");
-        if (rulesList) {
-          learnedRules = `\n\n[LEARNED_RULES]\nIMPORTANT – These are rules you learned from past mistakes. ALWAYS obey them:\n${rulesList}`;
-        }
+    const patterns = loadLearnedPatterns();
+    if (patterns.length > 0) {
+      const rulesList = patterns
+        .filter((p) => p.rule)
+        .map((p, i) => `${i + 1}. ${p.rule}`)
+        .join("\n");
+      if (rulesList) {
+        learnedRules = `\n\n[LEARNED_RULES]\nIMPORTANT – These are rules you learned from past mistakes. ALWAYS obey them:\n${rulesList}`;
       }
     }
   } catch (err) {

@@ -13,6 +13,14 @@ export interface TradeDecisionContext {
   takeProfitPercent?: number | null;
   stopLossPercent?: number | null;
   mode?: string;
+  rawConfidence?: number;
+  effectiveConfidence?: number;
+  entryProfile?: "FULL" | "REDUCED" | "PROBE";
+  dataQualityScore?: number | null;
+  technicalScore?: number | null;
+  positionMultiplier?: number | null;
+  entryAmount?: number | null;
+  requiredConfidence?: number | null;
 }
 
 export interface TradeOrganicitySnapshot {

@@ -696,8 +696,14 @@ export async function sellViaJupiter(tokenMint: string, amountToken: number): Pr
  * @param tokenData Dados do token
  * @param tradeType Tipo de trade ("BUY" ou "SELL")
  * @param force Forçar execução (ex: mirror sell)
+ * @param buyAmountOverrideSol Tamanho da compra definido pelo orquestrador
  */
-export async function executeHybridTrade(tokenData: TokenData, tradeType: string = "BUY", force: boolean = false): Promise<void> {
+export async function executeHybridTrade(
+  tokenData: TokenData,
+  tradeType: string = "BUY",
+  force: boolean = false,
+  buyAmountOverrideSol?: number
+): Promise<void> {
   const currentConfig = getRuntimeConfig();
 
   // 🚨 EMERGENCY STOP CHECK 🚨
@@ -743,8 +749,11 @@ export async function executeHybridTrade(tokenData: TokenData, tradeType: string
           return;
         }
 
-        let tradeSolAmount = BUY_AMOUNT_SOL;
-        if (force) {
+        let tradeSolAmount =
+          typeof buyAmountOverrideSol === "number" && Number.isFinite(buyAmountOverrideSol) && buyAmountOverrideSol > 0
+            ? buyAmountOverrideSol
+            : BUY_AMOUNT_SOL;
+        if (force && buyAmountOverrideSol === undefined) {
           tradeSolAmount = (currentConfig as any).COPY_TRADE_AMOUNT_SOL || tradeSolAmount;
         }
 

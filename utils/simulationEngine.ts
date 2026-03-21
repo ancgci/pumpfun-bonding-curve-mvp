@@ -149,10 +149,14 @@ export async function recordSimulatedTrade(
   holders?: number,
   marketCap?: number,
   decisionContext?: TradeDecisionContext | null,
-  entrySnapshot?: TradeMarketSnapshot | null
+  entrySnapshot?: TradeMarketSnapshot | null,
+  entryAmountOverride?: number | null
 ): Promise<void> {
   ensureSimulationDir();
-  const entryAmount = getBuyAmountSol();
+  const entryAmount =
+    typeof entryAmountOverride === "number" && Number.isFinite(entryAmountOverride) && entryAmountOverride > 0
+      ? entryAmountOverride
+      : getBuyAmountSol();
 
   const trade: SimulatedTrade = {
     tokenMint,

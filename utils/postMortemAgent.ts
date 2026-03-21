@@ -1,7 +1,8 @@
-import axios from "axios";
+import { jsonSchema, tool } from "ai";
 import logger from "./logger";
 import { getPendingLossTrades, SimulatedTrade, updateTradePostMortem } from "./simulationEngine";
 import { TradePostMortemReport } from "./postMortemTypes";
+import { generateStructuredLlm } from "./llmGateway";
 
 const DEFAULT_LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const POSTMORTEM_LLM_API_URL = process.env.POSTMORTEM_LLM_API_URL || DEFAULT_LLM_API_URL;
@@ -17,6 +18,30 @@ const POSTMORTEM_LLM_TIMEOUT_MS = Math.max(
 );
 const postMortemLlmEnabled = () => process.env.POSTMORTEM_LLM_ENABLED !== "false";
 const postMortemAgentEnabled = () => process.env.POSTMORTEM_AGENT_ENABLED !== "false";
+const EMPTY_OBJECT_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
+const EMPTY_TOOL_SCHEMA = jsonSchema(EMPTY_OBJECT_SCHEMA);
+const POSTMORTEM_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "findings", "recommendations", "candidateRules", "betterEntry", "llmInsights"],
+  properties: {
+    summary: { type: "string" },
+    findings: { type: "array", items: { type: "string" } },
+    recommendations: { type: "array", items: { type: "string" } },
+    candidateRules: { type: "array", items: { type: "string" } },
+    betterEntry: {
+      type: "object",
+      additionalProperties: false,
+      required: ["verdict", "suggestedAction"],
+      properties: {
+        verdict: { type: "string" },
+        suggestedAction: { type: "string" },
+        waitSeconds: { type: ["number", "null"] },
+      },
+    },
+    llmInsights: { type: ["string", "null"] },
+  },
+} as const;
 
 interface DeterministicAnalysis {
   summary: string;
@@ -286,76 +311,97 @@ async function enrichWithLlm(
   deterministic: DeterministicAnalysis
 ): Promise<Partial<TradePostMortemReport> | null> {
   const apiKey = getPostMortemLlmApiKey();
-  if (!apiKey || !postMortemLlmEnabled()) {
+  const hasGoogleKey =
+    !!process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    !!process.env.GOOGLE_API_KEY ||
+    !!process.env.GEMINI_API_KEY;
+  if ((!apiKey && !hasGoogleKey) || !postMortemLlmEnabled()) {
     return null;
   }
 
-  const payload = {
-    model: POSTMORTEM_LLM_MODEL,
-    temperature: 0.2,
-    max_tokens: 1200,
-    stream: false,
-    messages: [
-      {
-        role: "system",
-        content: [
-          "You are a trading post-mortem analyst.",
-          "Analyze only the supplied evidence and do not invent market data.",
-          "Return strict JSON only with keys:",
-          "summary, findings, recommendations, candidateRules, betterEntry, llmInsights.",
-          "betterEntry must contain verdict, suggestedAction, waitSeconds.",
-        ].join(" "),
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          trade: {
-            tokenMint: trade.tokenMint,
-            tokenSymbol: trade.tokenSymbol,
-            entryTime: trade.entryTime,
-            exitTime: trade.exitTime,
-            entryPrice: trade.entryPrice,
-            exitPrice: trade.exitPrice,
-            pnlPercent: trade.pnlPercent,
-            status: trade.status,
-            reason: trade.reason,
-            decisionContext: trade.decisionContext,
-            entrySnapshot: trade.entrySnapshot,
-            exitSnapshot: trade.exitSnapshot,
-            monitoringTrace: trade.monitoringTrace,
-          },
-          deterministic,
-        }),
-      },
-    ],
+  const tradeEvidence = {
+    trade: {
+      tokenMint: trade.tokenMint,
+      tokenSymbol: trade.tokenSymbol,
+      entryTime: trade.entryTime,
+      exitTime: trade.exitTime,
+      entryPrice: trade.entryPrice,
+      exitPrice: trade.exitPrice,
+      pnlPercent: trade.pnlPercent,
+      status: trade.status,
+      reason: trade.reason,
+      decisionContext: trade.decisionContext,
+      entrySnapshot: trade.entrySnapshot,
+      exitSnapshot: trade.exitSnapshot,
+      monitoringTrace: trade.monitoringTrace,
+    },
+    deterministic,
   };
 
   try {
-    const response = await axios.post(POSTMORTEM_LLM_API_URL, payload, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
+    const llmResult = await generateStructuredLlm<Partial<TradePostMortemReport>>({
+      task: "postmortem",
+      system: [
+        "You are a trading post-mortem analyst.",
+        "Analyze only the supplied evidence and do not invent market data.",
+        "Use the available tools to inspect the deterministic autopsy and the raw trade evidence before refining the report.",
+        "Return strict JSON only with keys:",
+        "summary, findings, recommendations, candidateRules, betterEntry, llmInsights.",
+        "betterEntry must contain verdict, suggestedAction, waitSeconds.",
+      ].join(" "),
+      prompt: JSON.stringify(tradeEvidence),
+      schema: POSTMORTEM_OUTPUT_SCHEMA,
+      normalizeOutput: (raw) => {
+        if (!raw || typeof raw !== "object") return null;
+        const betterEntry = raw.betterEntry && typeof raw.betterEntry === "object"
+          ? {
+            verdict: typeof raw.betterEntry.verdict === "string" ? raw.betterEntry.verdict : "",
+            suggestedAction: typeof raw.betterEntry.suggestedAction === "string" ? raw.betterEntry.suggestedAction : "",
+            waitSeconds: typeof raw.betterEntry.waitSeconds === "number" ? raw.betterEntry.waitSeconds : null,
+          }
+          : null;
+
+        if (!betterEntry || !betterEntry.verdict || !betterEntry.suggestedAction) {
+          return null;
+        }
+
+        return {
+          summary: typeof raw.summary === "string" ? raw.summary : "",
+          findings: Array.isArray(raw.findings) ? raw.findings.filter((entry: any) => typeof entry === "string") : [],
+          recommendations: Array.isArray(raw.recommendations) ? raw.recommendations.filter((entry: any) => typeof entry === "string") : [],
+          candidateRules: Array.isArray(raw.candidateRules) ? raw.candidateRules.filter((entry: any) => typeof entry === "string") : [],
+          betterEntry,
+          llmInsights: typeof raw.llmInsights === "string" ? raw.llmInsights : null,
+        };
       },
-      timeout: POSTMORTEM_LLM_TIMEOUT_MS,
+      temperature: 0.2,
+      maxOutputTokens: 1200,
+      googleModel: process.env.POSTMORTEM_GOOGLE_LLM_MODEL || undefined,
+      legacyModel: POSTMORTEM_LLM_MODEL,
+      legacyApiUrl: POSTMORTEM_LLM_API_URL,
+      legacyApiKey: apiKey,
+      legacyTimeoutMs: POSTMORTEM_LLM_TIMEOUT_MS,
+      tools: {
+        getDeterministicAutopsy: tool({
+          description: "Returns the deterministic post-mortem analysis already computed from the trade trace.",
+          inputSchema: EMPTY_TOOL_SCHEMA,
+          execute: async () => deterministic,
+        }),
+        getTradeEvidence: tool({
+          description: "Returns the raw trade evidence, including entry/exit snapshots, decision context and monitoring trace.",
+          inputSchema: EMPTY_TOOL_SCHEMA,
+          execute: async () => tradeEvidence.trade,
+        }),
+      },
+      toolChoice: "auto",
+      stopWhenSteps: 4,
     });
 
-    const data: any = response.data;
-    const message = data?.choices?.[0]?.message;
-    const raw = (message?.content || message?.reasoning_content || "").trim();
-    if (!raw) return null;
+    logger.info(
+      `🧠 [PostMortemAgent] LLM provider=${llmResult.provider} model=${llmResult.model} tools=${llmResult.toolCalls.join(",") || "none"} steps=${llmResult.steps}`
+    );
 
-    let parsed: any;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const match = raw.match(/\{[\s\S]*\}/);
-      parsed = match ? JSON.parse(match[0]) : null;
-    }
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    return parsed;
+    return llmResult.output;
   } catch (error: any) {
     logger.warn(`🧠 [PostMortemAgent] LLM enrichment failed for ${trade.tokenSymbol}: ${error.message}`);
     return null;

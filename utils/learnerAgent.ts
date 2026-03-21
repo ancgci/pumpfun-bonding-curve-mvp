@@ -1,7 +1,8 @@
 import logger from "./logger";
 import * as fs from "fs";
 import * as path from "path";
-import axios from "axios";
+import { jsonSchema, tool } from "ai";
+import { generateStructuredLlm } from "./llmGateway";
 
 /**
  * LEARNER AGENT – Self-Reflection Loop
@@ -12,9 +13,30 @@ import axios from "axios";
  * injected into the main decision prompt by agentOrchestrator.ts.
  */
 
-const LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const LLM_MODEL = process.env.LLM_MODEL || "moonshotai/kimi-k2.5";
 const getLlmApiKey = () => process.env.NV_LLM_API_KEY || process.env.NVIDIA_API_KEY || "";
+const EMPTY_OBJECT_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
+const EMPTY_TOOL_SCHEMA = jsonSchema(EMPTY_OBJECT_SCHEMA);
+const LEARNER_OUTPUT_SCHEMA = {
+    type: "object",
+    additionalProperties: false,
+    required: ["insights", "learnedRules"],
+    properties: {
+        insights: { type: "string" },
+        learnedRules: {
+            type: "array",
+            items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["rule"],
+                properties: {
+                    rule: { type: "string" },
+                    weight: { type: ["number", "null"] },
+                },
+            },
+        },
+    },
+} as const;
 
 const SIMULATION_TRADES_FILE = path.join(__dirname, "../data/simulation/trades.json");
 const PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -31,6 +53,11 @@ interface LearnedRule {
 interface LearnerState {
     lastAnalyzedIndex: number; // index of last trade we analyzed
     lastRunAt: string;
+}
+
+interface LearnerLlmOutput {
+    insights: string;
+    learnedRules: Array<{ rule: string; weight?: number | null }>;
 }
 
 /**
@@ -95,7 +122,11 @@ function loadTrades(): any[] {
  */
 async function analyzeLosses(losses: any[]): Promise<string[]> {
     const apiKey = getLlmApiKey();
-    if (!apiKey) {
+    const hasGoogleKey =
+        !!process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+        !!process.env.GOOGLE_API_KEY ||
+        !!process.env.GEMINI_API_KEY;
+    if (!apiKey && !hasGoogleKey) {
         logger.warn("[LearnerAgent] No LLM API key set, skipping analysis");
         return [];
     }
@@ -124,66 +155,86 @@ async function analyzeLosses(losses: any[]): Promise<string[]> {
         "A trade is a FAILURE if it hits 'CLOSED_SL' or 'EXPIRED' without ever providing a rapid exit spike.",
         "Look for patterns in WHY the bot failed (e.g., 'bought after the curve already peaked', 'volume wasn't high enough for a real pump', etc.)",
         "Look for indicators of SUCCESS (e.g., 'entered when buyCount was surging faster than sellCount').",
+        "Use the available tools to inspect the loss batch and the currently active learned rules before proposing new rules.",
         "Synthesize your findings into a maximum of 3 strict new rules for the trading agent to avoid future losses or repeat past successes.",
         "These rules will be injected directly into the trading agent's prompt.",
         `Format your output STRICTLY as valid JSON with this structure: { "insights": "string", "learnedRules": [ {"rule": "string", "weight": number } ] }`,
         "No markdown formatting, no conversational text."
     ].join(" ");
 
-    const payload = {
-        model: LLM_MODEL,
-        max_tokens: 1024,
-        temperature: 0.4,
-        stream: false,
-        messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: `Here are the recent losing trades:\n\n${tradesSummary}` },
-        ],
-    };
-
     try {
-        const resp = await axios.post(LLM_API_URL, payload, {
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-                Accept: "application/json",
+        const llmResult = await generateStructuredLlm<LearnerLlmOutput>({
+            task: "learner",
+            system: systemPrompt,
+            prompt: `Here are the recent losing trades:\n\n${tradesSummary}`,
+            schema: LEARNER_OUTPUT_SCHEMA,
+            normalizeOutput: (raw) => {
+                if (Array.isArray(raw)) {
+                    return {
+                        insights: "",
+                        learnedRules: raw
+                            .filter((rule) => typeof rule === "string" && rule.length > 5)
+                            .map((rule) => ({ rule, weight: null })),
+                    };
+                }
+
+                if (!raw || typeof raw !== "object" || !Array.isArray(raw.learnedRules)) {
+                    return null;
+                }
+
+                return {
+                    insights: typeof raw.insights === "string" ? raw.insights : "",
+                    learnedRules: raw.learnedRules
+                        .filter((entry: any) => typeof entry?.rule === "string" && entry.rule.length > 5)
+                        .map((entry: any) => ({
+                            rule: entry.rule.trim(),
+                            weight: typeof entry.weight === "number" ? entry.weight : null,
+                        })),
+                };
             },
-            timeout: 15000,
+            temperature: 0.4,
+            maxOutputTokens: 1024,
+            googleModel: process.env.LEARNER_GOOGLE_LLM_MODEL || undefined,
+            legacyModel: LLM_MODEL,
+            legacyApiKey: apiKey,
+            legacyTimeoutMs: 15000,
+            tools: {
+                getLossBatch: tool({
+                    description: "Returns the recent losing trades with post-mortem evidence and execution context.",
+                    inputSchema: EMPTY_TOOL_SCHEMA,
+                    execute: async () => losses,
+                }),
+                getExistingRules: tool({
+                    description: "Returns the currently active learned rules to avoid duplicates and contradictions.",
+                    inputSchema: EMPTY_TOOL_SCHEMA,
+                    execute: async () => ({
+                        rules: loadPatterns().map((pattern) => pattern.rule),
+                    }),
+                }),
+            },
+            toolChoice: "auto",
+            stopWhenSteps: 4,
         });
 
-        const data: any = resp.data;
-        const message = data?.choices?.[0]?.message;
-        const content = (message?.content || message?.reasoning_content || "").trim();
+        logger.info(
+            `[LearnerAgent] LLM provider=${llmResult.provider} model=${llmResult.model} tools=${llmResult.toolCalls.join(",") || "none"} steps=${llmResult.steps}`
+        );
 
-        let parsed: any;
-        try {
-            // Try to parse the full JSON object
-            parsed = JSON.parse(content);
-        } catch {
-            // Fallback: find the first JSON block in the content
-            const match = content.match(/\{[\s\S]*\}/);
-            try { parsed = match ? JSON.parse(match[0]) : null; } catch { parsed = null; }
-        }
+        const parsed = llmResult.output;
 
-        // Handle {insights, learnedRules: [{rule, weight}]} format
         if (parsed && Array.isArray(parsed.learnedRules)) {
             return parsed.learnedRules
                 .filter((r: any) => typeof r.rule === "string" && r.rule.length > 5)
                 .map((r: any) => r.rule)
                 .slice(0, 5);
         }
-
-        // Handle plain array of strings (legacy format)
-        if (Array.isArray(parsed)) {
-            return parsed.filter((r: any) => typeof r === "string" && r.length > 5).slice(0, 5);
-        }
-
-        logger.warn(`[LearnerAgent] Unexpected LLM response format. Content: ${content.substring(0, 200)}`);
-        return [];
     } catch (err: any) {
         logger.error(`[LearnerAgent] LLM call failed: ${err.message}`);
         return [];
     }
+
+    logger.warn("[LearnerAgent] Unexpected LLM response format.");
+    return [];
 }
 
 /**

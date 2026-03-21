@@ -111,7 +111,6 @@ export function checkEntryBlocks(
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG,
     mint: string = ""
 ): BlockResult[] {
-    const isUltraAggressive = config.scoreMinimo <= 5; // Modo Killer
     const blocks: BlockResult[] = [];
     const now = Date.now();
 
@@ -163,7 +162,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_VWAP_DISTANCE",
             reason: `Preço ${snap.distVWAPPct.toFixed(2)}% longe da VWAP(max ${config.maxDistVWAPPct} %)`,
-            severity: isUltraAggressive ? "SOFT" : "HARD",
+            severity: "SOFT",
         });
     }
 
@@ -173,7 +172,7 @@ export function checkEntryBlocks(
             blocks.push({
                 code: "BLOCK_CANDLE_STRETCHED",
                 reason: `Candle range ${snap.candleRangePct.toFixed(2)}% > ${config.candleStretchMultiplier}x ATR(${(snap.atrPct * config.candleStretchMultiplier).toFixed(2)}%)`,
-                severity: isUltraAggressive ? "SOFT" : "HARD",
+                severity: "SOFT",
             });
         }
     }
@@ -183,7 +182,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_ATR_DEAD",
             reason: `Mercado morto: ATR ${snap.atrPct.toFixed(4)}% <mínimo ${config.atrMinPct}% `,
-            severity: "HARD",
+            severity: "SOFT",
         });
     }
 
@@ -192,7 +191,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_ATR_EXTREME",
             reason: `Volatilidade extrema: ATR ${snap.atrPct.toFixed(2)}% > máximo ${config.atrMaxPct}% `,
-            severity: isUltraAggressive ? "SOFT" : "HARD",
+            severity: "SOFT",
         });
     }
 
@@ -201,7 +200,7 @@ export function checkEntryBlocks(
         blocks.push({
             code: "BLOCK_RSI_OVERBOUGHT",
             reason: `RSI sobrecomprado: ${snap.rsi.toFixed(1)} > ${config.rsiOverboughtBlock} `,
-            severity: isUltraAggressive ? "SOFT" : "HARD",
+            severity: "SOFT",
         });
     }
 
@@ -212,7 +211,7 @@ export function checkEntryBlocks(
             blocks.push({
                 code: "BLOCK_3RD_LEG",
                 reason: `${legs} pernas consecutivas sem pullback(max ${config.maxLegsWithoutPullback})`,
-                severity: isUltraAggressive ? "SOFT" : "HARD",
+                severity: "SOFT",
             });
         }
     }
@@ -224,7 +223,7 @@ export function checkEntryBlocks(
             blocks.push({
                 code: "BLOCK_VOLUME_SPIKE_NO_FOLLOW",
                 reason: `Volume spike(${snap.volumeRelative.ratio.toFixed(1)}x) mas preço avançou apenas ${microChangePct.toFixed(3)}% (min ${config.volumeSpikeFollowMinPct}%)`,
-                severity: isUltraAggressive ? "SOFT" : "HARD",
+                severity: "SOFT",
             });
         }
     }
@@ -303,12 +302,12 @@ const ENTRY_FATAL_CODES = new Set([
     "BLOCK_COOLDOWN",
     "BLOCK_CONSECUTIVE_STOPS",
     "BLOCK_INSUFFICIENT_DATA",
-    "BLOCK_ATR_DEAD",
 ]);
 
 const ENTRY_WEIGHTS: Record<string, number> = {
     BLOCK_VWAP_DISTANCE: 22,
     BLOCK_CANDLE_STRETCHED: 22,
+    BLOCK_ATR_DEAD: 18,
     BLOCK_ATR_EXTREME: 28,
     BLOCK_RSI_OVERBOUGHT: 20,
     BLOCK_3RD_LEG: 18,

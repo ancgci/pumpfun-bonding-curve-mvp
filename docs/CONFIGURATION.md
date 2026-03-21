@@ -310,6 +310,143 @@ AGENT_MODE=LIVE       # Executa análise e envia transação real na Solana
 
 ---
 
+## Camada LLM
+
+### `LLM_PROVIDER_ORDER`
+Ordem de tentativa dos providers para o gateway unificado de LLM.
+
+**Padrão recomendado:** `legacy,google`
+
+```bash
+LLM_PROVIDER_ORDER=legacy,google
+```
+
+Valores aceitos: `google`, `legacy`, `nvidia`.
+
+---
+
+### `GOOGLE_GENERATIVE_AI_API_KEY`
+Chave da API do Google Generative AI usada pelo provider `@ai-sdk/google`.
+
+```bash
+GOOGLE_GENERATIVE_AI_API_KEY=YOUR_GEMINI_KEY
+```
+
+Se não estiver definida, o gateway pula o provider Google e tenta o provider legado seguinte.
+Se a ordem estiver em `legacy,google`, o passo Google simplesmente será ignorado quando chegar a vez dele.
+
+---
+
+### `GOOGLE_LLM_MODEL`
+Modelo Gemini padrão para o gateway estruturado.
+
+**Padrão atual:** `gemini-2.5-flash`
+
+```bash
+GOOGLE_LLM_MODEL=gemini-2.5-flash
+```
+
+---
+
+### `AGENT_GOOGLE_LLM_MODEL`
+Override opcional do modelo Gemini apenas para o agente principal de decisão de entrada.
+
+```bash
+AGENT_GOOGLE_LLM_MODEL=gemini-2.5-pro
+```
+
+---
+
+### `LEARNER_LLM_PROVIDER_ORDER`
+Override opcional da ordem de providers somente para o `LearnerAgent`.
+
+```bash
+LEARNER_LLM_PROVIDER_ORDER=legacy,google
+```
+
+---
+
+### `LEARNER_GOOGLE_LLM_MODEL`
+Override opcional do modelo Gemini somente para o `LearnerAgent`.
+
+```bash
+LEARNER_GOOGLE_LLM_MODEL=gemini-2.5-flash
+```
+
+---
+
+### `POSTMORTEM_LLM_PROVIDER_ORDER`
+Override opcional da ordem de providers somente para o enriquecimento do `PostMortemAgent`.
+
+```bash
+POSTMORTEM_LLM_PROVIDER_ORDER=legacy,google
+```
+
+---
+
+### `POSTMORTEM_GOOGLE_LLM_MODEL`
+Override opcional do modelo Gemini somente para o enriquecimento LLM do post-mortem.
+
+```bash
+POSTMORTEM_GOOGLE_LLM_MODEL=gemini-2.5-flash
+```
+
+---
+
+### `LLM_MODEL`
+Modelo do provider legado compatível com Chat Completions. No perfil local atual, ele é o provider principal do gateway.
+
+```bash
+LLM_MODEL=meta/llama-3.1-70b-instruct
+```
+
+---
+
+### `NV_LLM_API_KEY`
+Chave do provider legado atualmente usada no fallback NVIDIA-compatible.
+
+```bash
+NV_LLM_API_KEY=YOUR_NVIDIA_API_KEY
+```
+
+---
+
+### `POSTMORTEM_LLM_API_URL`
+Endpoint legado específico do post-mortem. Mantido para compatibilidade com o provedor anterior.
+
+```bash
+POSTMORTEM_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions
+```
+
+---
+
+### `POSTMORTEM_LLM_MODEL`
+Modelo legado específico do post-mortem.
+
+```bash
+POSTMORTEM_LLM_MODEL=qwen/qwen3.5-122b-a10b
+```
+
+---
+
+### `POSTMORTEM_LLM_API_KEY`
+Chave dedicada opcional para o provider legado do post-mortem.
+
+```bash
+POSTMORTEM_LLM_API_KEY=
+```
+
+---
+
+### `POSTMORTEM_LLM_TIMEOUT_MS`
+Timeout do provider legado para enriquecimento offline de autópsias.
+
+```bash
+POSTMORTEM_LLM_TIMEOUT_MS=20000
+```
+
+---
+
 ## Circuit Breaker
 
 ### `CB_MAX_DAILY_LOSS_SOL`

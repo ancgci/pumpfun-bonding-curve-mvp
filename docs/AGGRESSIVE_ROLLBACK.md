@@ -27,6 +27,22 @@ Identificamos que as atualizações de segurança e organicidade introduzidas ap
   - Se a LLM decidir por **BUY**, o bot agora segue para execução imediata mesmo se o setup técnico tiver oscilado levemente durante a resposta.
   - **Price Spike Tolerance**: Aumentada de 10% para **25%** durante a janela de decisão da IA.
 
+## Atualização Posterior - 20/03/2026 (Local, sem deploy)
+
+Após a análise das perdas observadas entre a noite de `19/03/2026` e a madrugada de `20/03/2026`, este rollback deixou de ser interpretado como "passagem livre total" para compras agressivas.
+
+Refinamentos aplicados localmente:
+
+- riscos estruturais voltaram a bloquear de forma absoluta no `RiskEngine`;
+- sinais técnicos fracos deixaram de ser veto binário e passaram a virar penalidade, `RECHECK` ou redução de tamanho;
+- a compra pós-LLM agora passa por governança adaptativa com perfis `FULL`, `REDUCED` e `PROBE`;
+- a confiança da IA pode ser limitada quando o setup ainda tem pouco candle, pouco volume ou pouca confirmação real.
+
+Em resumo:
+
+- o modo agressivo continua existindo para não perder lançamentos fortes;
+- mas ele não pode mais ignorar risco estrutural nem justificar posição cheia em contexto técnico pobre.
+
 ## Conclusão
 O bot foi re-calibrado para priorizar **velocidade e frequência** em detrimento da filtragem ultra-conservadora de riscos orgânicos. A infraestrutura atual preserva a estabilidade do gRPC, mas com a "alma" agressiva das versões iniciais.
 

@@ -20,6 +20,8 @@ All project documentation is in the `/docs` folder:
 - **[📚 VPS_DEPLOYMENT](docs/VPS_DEPLOYMENT.md)** - Guia de instalação e acesso à VPS
 - **[📉 AVALIACAO_BANDA_CONTABO](docs/AVALIACAO_BANDA_CONTABO_2026-03-20.md)** - Diagnóstico local + VPS do throttle de banda
 - **[🧯 MITIGACAO_BANDA](docs/MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md)** - O que foi ajustado no bot e no VPS após o alerta
+- **[🎯 GOVERNANCA_ADAPTATIVA_ENTRADA](docs/GOVERNANCA_ADAPTATIVA_ENTRADA_2026-03-20.md)** - Ajuste local do funil de BUY, sizing adaptativo e recheck
+- **[🧠 AI_SDK_GOOGLE_INTEGRATION](docs/AI_SDK_GOOGLE_INTEGRATION_2026-03-20.md)** - Gateway LLM unificado, structured output, fallback e tool calling local
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
@@ -41,6 +43,8 @@ As of **March 20, 2026**, the recommended low-bandwidth production profile is:
 - `ANONCOIN_MONITORING_ENABLED=false`
 - `VERBOSE_TRANSACTION_LOGS=false`
 - `AGENT_MODE=SIMULATION` by default on VPS, while `LIVE` remains available when you explicitly switch to mainnet operation
+- adaptive entry governance implemented in the local codebase (`FULL`, `REDUCED`, `PROBE`, and `RECHECK` for low-data setups)
+- unified LLM gateway available locally with `legacy -> google`, structured outputs, and tool calling for agent workflows
 - `vnstat` installed on VPS with a Telegram alert threshold of `5 GiB/day`
 - `tools/vnstat_daily_alert.py` scheduled via `cron` every 15 minutes on the VPS
 
@@ -65,6 +69,8 @@ DAOS_FUN_MONITORING_ENABLED=false
 MOONSHOT_MONITORING_ENABLED=false
 BANDWIDTH_ALERT_THRESHOLD_GIB=5
 BANDWIDTH_ALERT_IFACE=eth0
+LLM_PROVIDER_ORDER=legacy,google
+GOOGLE_LLM_MODEL=gemini-2.5-flash
 
 # 3. Start bot + dashboard simultaneously
 npm run start:all
@@ -442,12 +448,13 @@ JITO_ENDPOINT_REFRESH_MINUTES=20
 ```env
 AGENT_ENABLED=true
 AGENT_MODE=SIMULATION       # or LIVE
-AGENT_LEARNING_ENABLED=true
-AGENT_AUTO_SELL=true
 AGENT_MIN_CONFIDENCE=70
-AGENT_MAX_CONFIDENCE=95
-LLM_PROVIDER=gemini
-LEARNING_OPTIMIZE_INTERVAL=50
+LLM_PROVIDER_ORDER=legacy,google
+GOOGLE_LLM_MODEL=gemini-2.5-flash
+GOOGLE_GENERATIVE_AI_API_KEY=
+LLM_MODEL=meta/llama-3.1-70b-instruct
+NV_LLM_API_KEY=
+POSTMORTEM_LLM_ENABLED=false
 ```
 
 ### 🧪 Real-Time Token Simulation

@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] - 2026-03-20
+### Added
+- **Adaptive Entry Governance**: New local-only governance layer for post-LLM BUY approval with `FULL`, `REDUCED` and `PROBE` profiles, plus dedicated unit coverage in `test/unit/adaptiveEntryGovernance.test.ts`.
+- **Unified LLM Gateway**: New `utils/llmGateway.ts` standardizes provider routing, structured outputs, tool-call telemetry and task-specific fallback handling for agent, learner and post-mortem flows.
+
+### Changed
+- **Technical Entry Logic**: Converted several non-structural technical vetoes into penalties and soft pressure instead of hard invalidation.
+- **Execution Sizing**: Final buy size is now the minimum of confidence sizing, technical sizing and adaptive profile cap.
+- **Post-Mortem Context**: Simulation trade context now persists `rawConfidence`, `effectiveConfidence`, `entryProfile`, `positionMultiplier`, `entryAmount` and related governance metadata.
+- **AI Agents**: `agentOrchestrator`, `learnerAgent` and `postMortemAgent` now share the same structured LLM layer; Google paths can use tool calling while the legacy provider remains available as fallback.
+- **LLM Priority**: The local baseline now keeps the NVIDIA-compatible legacy provider first (`legacy,google`), with Gemini reserved as fallback until a production rollout is explicitly approved.
+
+### Fixed
+- **Ultra-Aggressive Risk Bypass**: Removed local pass-through behavior that previously allowed high-risk or unlocked-LP discoveries to cross the Risk Engine in aggressive mode.
+
 ## [1.4.4] - 2026-03-18
 ### 🚀 Added
 - **Multiuser Admin Endpoints**: Introduced full CRUD capabilities in `dashboard-api` for User Management (`GET /api/admin/users`, `POST /api/admin/users`, `PATCH /api/admin/users/:id/status`, `PATCH /api/admin/users/:id/role`, `GET /api/admin/users/:id/wallets`).

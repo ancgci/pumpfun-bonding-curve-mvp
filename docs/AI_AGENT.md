@@ -50,9 +50,27 @@ Before spending latency on an LLM call, obvious bad tokens are instantly rejecte
 
 ---
 
-## 2. LLM Analysis (Qwen3 / Kimi K2.5)
+## 2. LLM Analysis (Unified Gateway)
 
-Tokens that pass the pre-filter are sent to the LLM via NVIDIA's API.
+Tokens that pass the pre-filter are now routed through a unified gateway in `utils/llmGateway.ts`.
+
+### Provider Order and Fallback
+
+- the default order is `legacy,google`;
+- the local profile currently keeps NVIDIA-compatible legacy as the primary brain for runtime decisions;
+- Google uses `ai` + `@ai-sdk/google`;
+- the legacy fallback keeps compatibility with the previous NVIDIA-compatible Chat Completions flow;
+- each task can override the order independently (`LLM_PROVIDER_ORDER`, `LEARNER_LLM_PROVIDER_ORDER`, `POSTMORTEM_LLM_PROVIDER_ORDER`).
+
+### Structured Output
+
+The gateway now enforces structured JSON output per task:
+
+- entry decision;
+- learner insights and learned rules;
+- post-mortem enrichment.
+
+Google uses `generateText()` + `Output.object(...)`; the legacy fallback still parses JSON from chat-completions responses and normalizes it into the same shape.
 
 ### System Prompt
 
@@ -66,6 +84,18 @@ The agent is instructed to return JSON with:
   "stopLossPercent": 5-20
 }
 ```
+
+### Tool Calling
+
+When the Google provider is active, the main agent can call internal tools before deciding. The current tool set exposes:
+
+- technical context;
+- risk stack and sentiment;
+- learned rules;
+- execution policy;
+- organicity context.
+
+The learner and post-mortem flows also expose tools for raw loss batches, current rules, deterministic autopsy, and trade evidence. This keeps prompts smaller and lets the model pull detailed context on demand.
 
 ### User Prompt (Enriched Data)
 
@@ -99,18 +129,64 @@ IMPORTANT – These are rules you learned from past mistakes. ALWAYS obey them:
 
 ---
 
-## 3. Dynamic Position Sizing
+## 3. Adaptive Entry Governance & Position Sizing
 
-Trade size scales with the AI's confidence level:
+The post-LLM path is no longer purely binary (`BUY` vs `BLOCK`). It now applies an adaptive entry profile before execution:
 
-| Confidence | Multiplier | Example (0.1 SOL base) |
-|------------|------------|------------------------|
+- `FULL`
+- `REDUCED`
+- `PROBE`
+
+The orchestrator evaluates:
+
+- effective candle maturity;
+- presence or absence of relative volume data;
+- momentum confirmation;
+- post-LLM technical score;
+- accumulated block pressure.
+
+### Confidence Is Capped by Data Quality
+
+The LLM's raw confidence is treated as an input, not as the final authority.
+
+Examples:
+
+- 1 candle + no relative volume + weak score -> confidence is capped and the setup tends to `RECHECK`
+- medium confirmation -> `ALLOW` with `REDUCED`
+- strong confirmation -> `ALLOW` with `FULL`
+
+### Position Size Formula
+
+The final size is now:
+
+`positionMultiplier = min(confidenceMultiplier, technicalMultiplier, profileCap)`
+
+Where:
+
+- `confidenceMultiplier` still comes from the effective confidence band;
+- `technicalMultiplier` comes from the TA score sizing;
+- `profileCap` is imposed by the adaptive profile.
+
+### Confidence Multiplier
+
+| Effective Confidence | Multiplier | Example (0.1 SOL base) |
+|----------------------|------------|------------------------|
 | 90-100% | 100% | 0.1000 SOL |
 | 80-89% | 75% | 0.0750 SOL |
 | 70-79% | 50% | 0.0500 SOL |
 | < 70% | 30% | 0.0300 SOL |
 
-**Log:** `💰 Position Size: 0.0750 SOL (75% of 0.1 SOL)`
+### Adaptive Profile Cap
+
+| Profile | Cap | Meaning |
+|---------|-----|---------|
+| `FULL` | `1.00` | Full-size execution allowed |
+| `REDUCED` | `0.60` | Medium-quality setup, enter smaller |
+| `PROBE` | `0.35` | Exploratory entry only when still acceptable |
+
+This prevents a high-confidence LLM output from forcing full size when the technical context is still immature.
+
+**Log example:** `💰 Position Size: 0.0600 SOL (60% of 0.1 SOL | profile=REDUCED | tech=75% | conf=84%)`
 
 ---
 
@@ -241,9 +317,17 @@ The report contains:
 | `AGENT_ENABLED` | `false` | Enable/disable the AI agent |
 | `AGENT_MODE` | `SIMULATION` | `SIMULATION` or `LIVE` |
 | `AGENT_MIN_CONFIDENCE` | `70` | Minimum confidence to execute a trade |
-| `LLM_MODEL` | `moonshotai/kimi-k2.5` | LLM model identifier |
-| `NV_LLM_API_KEY` | — | NVIDIA API key for LLM access |
+| `LLM_PROVIDER_ORDER` | `legacy,google` | Default provider order for the unified LLM gateway |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | — | Google Generative AI key used by `@ai-sdk/google` |
+| `GOOGLE_LLM_MODEL` | `gemini-2.5-flash` | Default Gemini model for structured generation |
+| `AGENT_GOOGLE_LLM_MODEL` | — | Optional Gemini override for the main trading agent |
+| `LEARNER_LLM_PROVIDER_ORDER` | inherits `LLM_PROVIDER_ORDER` | Optional provider order override for the learner |
+| `LEARNER_GOOGLE_LLM_MODEL` | inherits `GOOGLE_LLM_MODEL` | Optional Gemini override for the learner |
+| `LLM_MODEL` | `moonshotai/kimi-k2.5` | Legacy fallback model identifier |
+| `NV_LLM_API_KEY` | — | Legacy NVIDIA-compatible API key |
 | `POSTMORTEM_LLM_ENABLED` | `true` | Enables optional LLM enrichment for offline post-mortem reports |
+| `POSTMORTEM_LLM_PROVIDER_ORDER` | inherits `LLM_PROVIDER_ORDER` | Optional provider order override for post-mortem enrichment |
+| `POSTMORTEM_GOOGLE_LLM_MODEL` | inherits `GOOGLE_LLM_MODEL` | Optional Gemini override for post-mortem enrichment |
 | `TAKE_PROFIT_PERCENT` | `40` | Default TP % (fallback if LLM omits) |
 | `STOP_LOSS_PERCENT` | `25` | Default SL % (fallback if LLM omits) |
 | `BUY_AMOUNT_SOL` | `0.1` | Base buy amount (scaled by confidence) |
@@ -266,6 +350,7 @@ The report contains:
 |------------|---------|
 | `⚡ [PreFilter]` | Token instantly rejected without LLM |
 | `🎯 Dynamic Risk` | LLM-defined TP/SL values for this trade |
+| `[Agent] LLM provider=...` | Provider/model/tools used by the unified gateway |
 | `💰 Position Size` | Confidence-adjusted trade amount |
 | `📈 Trailing SL raised` | Stop loss moved up following price |
 | `🚨 WHALE DUMP DETECTED` | Emergency exit on sudden price crash |

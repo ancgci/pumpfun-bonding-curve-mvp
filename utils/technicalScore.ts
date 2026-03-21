@@ -33,6 +33,10 @@ export interface ScoreBreakdown {
     vwapDistancePenalty: number;
     rsiOverboughtPenalty: number;
     macdDecelPenalty: number;
+    limitedCandlesPenalty: number;
+    missingVolumePenalty: number;
+    weakFollowThroughPenalty: number;
+    thinConfirmationPenalty: number;
 }
 
 export interface ScoreResult {
@@ -51,7 +55,7 @@ export function calculateConfluenceScore(
     snap: TASnapshotV2,
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
 ): ScoreResult {
-    // Guard: dados insuficientes (baixado para 2 candles para pegar o 'instante zero')
+    // Guard: ausência total de dados segue como invalidação estrutural.
     if (snap.candlesAvailable1s < 1) {
         return {
             score: 0,
@@ -159,6 +163,13 @@ export function calculateConfluenceScore(
     // PENALIDADES (não invalidam, mas reduzem score)
     // ============================================================
 
+    const preferredCandles = Math.max(3, config.sustainCandles || 3);
+    if (snap.candlesAvailable1s < 2) {
+        bd.limitedCandlesPenalty = -18;
+    } else if (snap.candlesAvailable1s < preferredCandles) {
+        bd.limitedCandlesPenalty = -10;
+    }
+
     if (snap.distVWAPPct !== null) {
         const absDistVWAP = Math.abs(snap.distVWAPPct);
         if (absDistVWAP > config.maxDistVWAPPct / 2) bd.vwapDistancePenalty = -5;
@@ -175,45 +186,26 @@ export function calculateConfluenceScore(
         if (histDecel) bd.macdDecelPenalty = -5;
     }
 
-    // ============================================================
-    // INVALIDAÇÕES ABSOLUTAS (bloqueio total)
-    // ============================================================
-
-    // Distância excessiva da VWAP
-    if (snap.distVWAPPct !== null && Math.abs(snap.distVWAPPct) > config.maxDistVWAPPct) {
-        invalidReason = `BLOCK_VWAP_DISTANCE: preço ${snap.distVWAPPct.toFixed(2)}% longe da VWAP (max ${config.maxDistVWAPPct}%)`;
+    if (snap.volumeRelative === null) {
+        bd.missingVolumePenalty = -12;
+    } else if (snap.volumeRelative.ratio < Math.max(1, config.volumeRelativeMin * 0.7)) {
+        bd.missingVolumePenalty = -6;
     }
 
-    // Candle esticado demais
-    if (snap.candleRangePct !== null && snap.atrPct !== null && snap.atrPct > 0) {
-        const atrAbs = snap.atr ?? 0;
-        const lastCandle = snap.currentPrice ?? 0;
-        // Se range > 2.5x ATR em termos absolutos
-        if (snap.candleRangePct > snap.atrPct * config.candleStretchMultiplier) {
-            invalidReason = invalidReason ?? `BLOCK_CANDLE_STRETCHED: range ${snap.candleRangePct.toFixed(2)}% > ${config.candleStretchMultiplier}x ATR`;
-        }
+    const microTrendPct = snap.microTrend?.changePct ?? 0;
+    if (snap.microTrend === null || microTrendPct < config.minFollowThroughPct) {
+        bd.weakFollowThroughPenalty = -10;
+    } else if (microTrendPct < config.minFollowThroughPct * 1.5) {
+        bd.weakFollowThroughPenalty = -4;
     }
 
-    // RSI em sobrecompra extrema
-    if (snap.rsi !== null && snap.rsi > config.rsiOverboughtBlock) {
-        invalidReason = invalidReason ?? `BLOCK_RSI_OVERBOUGHT: RSI ${snap.rsi.toFixed(1)} > ${config.rsiOverboughtBlock}`;
-    }
-
-    // ATR morto (mercado parado)
-    if (snap.atrPct !== null && snap.atrPct < config.atrMinPct) {
-        invalidReason = invalidReason ?? `BLOCK_ATR_DEAD: ATR ${snap.atrPct.toFixed(4)}% < mínimo ${config.atrMinPct}%`;
-    }
-
-    // ATR extremo (caos)
-    if (snap.atrPct !== null && snap.atrPct > config.atrMaxPct) {
-        invalidReason = invalidReason ?? `BLOCK_ATR_EXTREME: ATR ${snap.atrPct.toFixed(2)}% > máximo ${config.atrMaxPct}%`;
-    }
-
-    // Volume spike sem follow-through (burst excessivo sem avanço de preço)
-    if (snap.volumeRelative?.isSpike && snap.microTrend !== null) {
-        if (Math.abs(snap.microTrend.changePct) < ((config as any).volumeSpikeFollowMinPct ?? 0.1)) {
-            invalidReason = invalidReason ?? `BLOCK_VOLUME_SPIKE_NO_FOLLOW: spike de volume sem movimento de preço`;
-        }
+    const hasPositiveMomentumSignal =
+        snap.priceAboveVWAP ||
+        snap.donchian?.breakoutUp === true ||
+        (snap.macd?.histogram ?? 0) > 0 ||
+        (snap.rsi ?? 0) >= config.rsiBullishMin;
+    if (!hasPositiveMomentumSignal) {
+        bd.thinConfirmationPenalty = -8;
     }
 
     // ============================================================
@@ -233,14 +225,11 @@ export function calculateConfluenceScore(
     else if (snap.emaAligned && snap.priceAboveVWAP && snap.macd?.histogram !== undefined && snap.macd.histogram > 0) regime = "BULLISH";
     else if (!snap.emaAligned && !snap.priceAboveVWAP) regime = "BEARISH";
 
-    const isUltraAggressive = config.scoreMinimo <= 5;
-    const finalInvalidated = isUltraAggressive ? false : (invalidReason !== undefined);
-
     return {
         score,
         breakdown: bd,
-        invalidated: finalInvalidated,
-        invalidReason: isUltraAggressive && invalidReason ? `[Killer-Pass-thru] ${invalidReason}` : invalidReason,
+        invalidated: invalidReason !== undefined,
+        invalidReason,
         sizing,
         regime,
     };
@@ -267,6 +256,10 @@ function makeEmptyBreakdown(): ScoreBreakdown {
         vwapDistancePenalty: 0,
         rsiOverboughtPenalty: 0,
         macdDecelPenalty: 0,
+        limitedCandlesPenalty: 0,
+        missingVolumePenalty: 0,
+        weakFollowThroughPenalty: 0,
+        thinConfirmationPenalty: 0,
     };
 }
 
@@ -284,6 +277,6 @@ export function formatScoreLog(result: ScoreResult): string {
         `  T2(impulso): MACD=${b.macdHistPositive}/${b.macdHistAccelerating} zero=${b.macdNearZeroBonus} RSI=${b.rsiInBullZone}/${b.rsiSlopePositive} ROC=${b.rocPositiveAndGrowing}`,
         `  T3(confirm): VOL=${b.volumeBurst}/${b.volumeBurstExtra} DCH=${b.donchianBreakout} ATR=${b.atrHealthy}`,
         `  BÔNUS: micro=${b.microTrendPositive}`,
-        `  PENALIDADES: vwap=${b.vwapDistancePenalty} rsi=${b.rsiOverboughtPenalty} macdDecel=${b.macdDecelPenalty}`,
+        `  PENALIDADES: vwap=${b.vwapDistancePenalty} rsi=${b.rsiOverboughtPenalty} macdDecel=${b.macdDecelPenalty} candles=${b.limitedCandlesPenalty} volume=${b.missingVolumePenalty} follow=${b.weakFollowThroughPenalty} confirm=${b.thinConfirmationPenalty}`,
     ].join("\n");
 }

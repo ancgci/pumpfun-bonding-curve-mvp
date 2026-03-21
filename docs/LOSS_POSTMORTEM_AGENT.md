@@ -68,7 +68,8 @@ This layer captures:
 - recent 1-second candles;
 - volatility windows;
 - organicity snapshot when available;
-- decision metadata such as confidence, TP, SL and reasoning.
+- decision metadata such as confidence, TP, SL and reasoning;
+- adaptive execution metadata such as raw confidence, effective confidence, entry profile, data quality, technical score, final position multiplier and final entry amount.
 
 ---
 
@@ -104,6 +105,7 @@ New runtime capabilities:
 - save enriched entry snapshot on simulated BUY;
 - append monitoring points during trade life;
 - save exit snapshot on closure;
+- persist adaptive entry metadata inside `decision_context`;
 - mark trades as pending/processed for post-mortem;
 - query pending losing trades and recent analyzed post-mortems.
 
@@ -185,7 +187,8 @@ So the learned rules are generated from richer reconstructed losses, not only sh
 
 - capture an enriched entry snapshot before recording the simulated trade;
 - capture monitoring points while the trade is open;
-- capture an enriched exit snapshot on TP, SL or timeout.
+- capture an enriched exit snapshot on TP, SL or timeout;
+- persist `rawConfidence`, `effectiveConfidence`, `entryProfile`, `positionMultiplier`, `entryAmount` and `requiredConfidence` for later autopsy.
 
 Important: the online execution pipeline was not slowed down with extra blocking analysis. The heavy reasoning remains offline.
 

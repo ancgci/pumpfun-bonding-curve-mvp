@@ -117,7 +117,11 @@ export function buildTradeMonitoringPoint(
   };
 }
 
-export function buildTradeDecisionContext(decision: DecisionLike, agentMode: string): TradeDecisionContext {
+export function buildTradeDecisionContext(
+  decision: DecisionLike,
+  agentMode: string,
+  extras?: Partial<TradeDecisionContext>
+): TradeDecisionContext {
   const entryPrice = decision.entryPrice || 0;
   const takeProfitPercent =
     entryPrice > 0 && decision.takeProfit
@@ -137,6 +141,7 @@ export function buildTradeDecisionContext(decision: DecisionLike, agentMode: str
     takeProfitPercent,
     stopLossPercent,
     mode: agentMode,
+    ...extras,
   };
 }
 
