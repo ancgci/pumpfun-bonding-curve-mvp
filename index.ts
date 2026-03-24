@@ -182,8 +182,8 @@ setInterval(() => {
 }, 300_000);
 
 // Initialize the Dip Waitlist Monitor
-dipMonitor.initialize(async (mint: string) => {
-  logger.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint}`);
+dipMonitor.initialize(async (mint: string, token) => {
+  logger.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint} (kind=${token?.kind || "LEGACY_DIP"})`);
   const tokenData: TokenData = {
     mint,
     bondingCurve: "", // Will be resolved by hybridExecutor if needed, or skipped if not critical
@@ -873,7 +873,10 @@ async function runProtocolSimulationDiscovery(params: {
       holders: riskAnalysis?.metrics?.totalHolders ?? 0,
       volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
       liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+      liquiditySource: riskAnalysis?.metrics?.liquiditySource ?? "UNKNOWN",
+      liquidityVerified: riskAnalysis?.metrics?.liquidityVerified ?? false,
       marketCap: tokenMetadata?.marketCap ?? null,
+      holderDataReliable: riskAnalysis?.metrics?.holderDataReliable ?? false,
       top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
       protocol: protocolId,
       timeframe: "1s",
@@ -1218,7 +1221,10 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         holders: riskAnalysis?.metrics?.totalHolders ?? 0,
         volumeH1: riskAnalysis?.metrics?.volumeH1 ?? 0,
         liquiditySol: riskAnalysis?.metrics?.liquiditySol ?? 0,
+        liquiditySource: riskAnalysis?.metrics?.liquiditySource ?? "UNKNOWN",
+        liquidityVerified: riskAnalysis?.metrics?.liquidityVerified ?? false,
         marketCap: tokenMetadata?.marketCap ?? null,
+        holderDataReliable: riskAnalysis?.metrics?.holderDataReliable ?? false,
         top10HolderPct: riskAnalysis?.metrics?.top10Percent ?? 0,
         protocol: "pumpfun",
         timeframe: "1s"

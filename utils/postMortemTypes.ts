@@ -21,6 +21,13 @@ export interface TradeDecisionContext {
   positionMultiplier?: number | null;
   entryAmount?: number | null;
   requiredConfidence?: number | null;
+  fastLaneVerdict?: "BUY" | "SKIP" | "NEUTRAL" | null;
+  fastLaneScore?: number | null;
+  fastLaneReason?: string | null;
+  preflightStatus?: "ALLOW" | "RECHECK" | "BLOCK" | null;
+  preflightReason?: string | null;
+  portfolioOpenPositions?: number | null;
+  portfolioExposureSol?: number | null;
 }
 
 export interface TradeOrganicitySnapshot {

@@ -5,7 +5,8 @@
 Implementação concluída **somente no ambiente local**.
 
 - nenhum deploy foi feito para a VPS nesta etapa;
-- o objetivo foi preparar a camada de LLM para uso com `ai` + `@ai-sdk/google` sem perder o fallback legado já existente.
+- o objetivo foi preparar a camada de LLM para uso com `ai` + `@ai-sdk/google` sem perder o fallback legado já existente;
+- em `2026-03-23`, a conectividade local foi revisada e corrigida para o provider NVIDIA-compatible principal e para o fallback Gemini.
 
 ---
 
@@ -51,10 +52,11 @@ Aplicações:
 - `utils/postMortemAgent.ts`
   - `summary`, `findings`, `recommendations`, `candidateRules`, `betterEntry`, `llmInsights`.
 
-No caminho Google, isso usa:
+No caminho Google, isso agora usa:
 
-- `generateText()`
-- `Output.object(...)`
+- `generateText()` + parse de JSON quando há tool calling;
+- `generateObject()` quando não há tools;
+- fallback local para parse de texto quando o provider não devolve objeto limpo mesmo sem tools.
 
 No caminho legado, a resposta JSON continua sendo parseada da API compatível com Chat Completions e normalizada para o mesmo formato.
 
@@ -94,10 +96,12 @@ No ambiente local, a decisão final ficou:
 - `LLM_PROVIDER_ORDER=legacy,google`
 - `LEARNER_LLM_PROVIDER_ORDER=legacy,google`
 - `POSTMORTEM_LLM_PROVIDER_ORDER=legacy,google`
+- `LLM_MODEL=z-ai/glm5`
+- `LEGACY_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions`
 - `GOOGLE_LLM_MODEL=gemini-2.5-flash`
-- `GOOGLE_GENERATIVE_AI_API_KEY=` vazio por enquanto
+- `GOOGLE_GENERATIVE_AI_API_KEY` configurada apenas no `.env` local privado
 
-Isso mantém o provider NVIDIA-compatible como cérebro principal e deixa Gemini apenas como fallback opcional.
+Isso mantém o provider NVIDIA-compatible como cérebro principal e deixa Gemini como fallback operacional validado localmente.
 
 ---
 
@@ -178,7 +182,9 @@ Uso esperado:
 ### Com chave Google
 
 - o gateway continua tentando `legacy` primeiro;
-- se o provider legado falhar, o gateway pode usar `generateText()` com schema estruturado;
+- se o provider legado falhar, o gateway pode usar Gemini como fallback;
+- com tools, o gateway usa `generateText()` e faz parse do JSON textual;
+- sem tools, o gateway prefere `generateObject()` e recua para parse textual se necessário;
 - os agentes podem chamar tools internas;
 - logs passam a exibir provider, modelo, quantidade de steps e tools chamadas.
 

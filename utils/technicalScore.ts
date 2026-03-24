@@ -44,6 +44,8 @@ export interface ScoreResult {
     breakdown: ScoreBreakdown;
     invalidated: boolean;
     invalidReason?: string;
+    classification: "VALID" | "LOW_DATA" | "WEAK_SETUP";
+    classificationReason: string;
     sizing: number; // 0.5, 0.75 ou 1.0 baseado no score
     regime: "BULLISH" | "NEUTRAL" | "BEARISH" | "INSUFFICIENT_DATA";
 }
@@ -62,6 +64,8 @@ export function calculateConfluenceScore(
             breakdown: makeEmptyBreakdown(),
             invalidated: true,
             invalidReason: `INSUFFICIENT_DATA: 0 candles de 1s disponíveis`,
+            classification: "LOW_DATA",
+            classificationReason: "LOW_DATA:0/1 candles_1s",
             sizing: 0,
             regime: "INSUFFICIENT_DATA",
         };
@@ -225,11 +229,31 @@ export function calculateConfluenceScore(
     else if (snap.emaAligned && snap.priceAboveVWAP && snap.macd?.histogram !== undefined && snap.macd.histogram > 0) regime = "BULLISH";
     else if (!snap.emaAligned && !snap.priceAboveVWAP) regime = "BEARISH";
 
+    let classification: ScoreResult["classification"] = "VALID";
+    let classificationReason = `VALID:${regime}`;
+    if (snap.candlesAvailable1s < preferredCandles || regime === "INSUFFICIENT_DATA") {
+        const lowDataReasons = [`candles=${snap.candlesAvailable1s}/${preferredCandles}`];
+        if (snap.volumeRelative === null) lowDataReasons.push("volume_baseline_missing");
+        if (snap.microTrend === null) lowDataReasons.push("microtrend_missing");
+        classification = "LOW_DATA";
+        classificationReason = `LOW_DATA:${lowDataReasons.join(",")}`;
+    } else if (score === 0) {
+        const setupReasons: string[] = [];
+        if (!snap.priceAboveVWAP) setupReasons.push("below_vwap");
+        if ((snap.macd?.histogram ?? 0) <= 0) setupReasons.push("macd_non_positive");
+        if ((snap.rsi ?? 0) < config.rsiBullishMin) setupReasons.push("rsi_below_bull_zone");
+        if (!snap.donchian?.breakoutUp) setupReasons.push("no_breakout");
+        classification = "WEAK_SETUP";
+        classificationReason = `WEAK_SETUP:${setupReasons.join(",") || "no_positive_confluence"}`;
+    }
+
     return {
         score,
         breakdown: bd,
         invalidated: invalidReason !== undefined,
         invalidReason,
+        classification,
+        classificationReason,
         sizing,
         regime,
     };
@@ -268,11 +292,12 @@ function makeEmptyBreakdown(): ScoreBreakdown {
 // ============================================================
 export function formatScoreLog(result: ScoreResult): string {
     if (result.invalidated) {
-        return `🚫 SCORE INVALIDADO: ${result.invalidReason}`;
+        return `🚫 SCORE INVALIDADO: ${result.invalidReason} | Status: ${result.classification}`;
     }
     const b = result.breakdown;
     return [
-        `📊 Score: ${result.score}/100 | Sizing: ${(result.sizing * 100).toFixed(0)}% | Regime: ${result.regime}`,
+        `📊 Score: ${result.score}/100 | Sizing: ${(result.sizing * 100).toFixed(0)}% | Regime: ${result.regime} | Status: ${result.classification}`,
+        `  CLASSIFICAÇÃO: ${result.classificationReason}`,
         `  T1(trend): EMA=${b.emaAligned} slp=${b.emaSlope}/${b.emaSlopeAccelerating} sprd=${b.emaSpreadOpening} vwap=${b.priceAboveVWAP}`,
         `  T2(impulso): MACD=${b.macdHistPositive}/${b.macdHistAccelerating} zero=${b.macdNearZeroBonus} RSI=${b.rsiInBullZone}/${b.rsiSlopePositive} ROC=${b.rocPositiveAndGrowing}`,
         `  T3(confirm): VOL=${b.volumeBurst}/${b.volumeBurstExtra} DCH=${b.donchianBreakout} ATR=${b.atrHealthy}`,

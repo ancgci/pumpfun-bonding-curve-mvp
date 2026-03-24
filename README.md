@@ -21,7 +21,9 @@ All project documentation is in the `/docs` folder:
 - **[📉 AVALIACAO_BANDA_CONTABO](docs/AVALIACAO_BANDA_CONTABO_2026-03-20.md)** - Diagnóstico local + VPS do throttle de banda
 - **[🧯 MITIGACAO_BANDA](docs/MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md)** - O que foi ajustado no bot e no VPS após o alerta
 - **[🎯 GOVERNANCA_ADAPTATIVA_ENTRADA](docs/GOVERNANCA_ADAPTATIVA_ENTRADA_2026-03-20.md)** - Ajuste local do funil de BUY, sizing adaptativo e recheck
+- **[⚡ FAST_LANE_E_PREFLIGHT](docs/FAST_LANE_E_EXECUTION_PREFLIGHT_2026-03-23.md)** - Camada determinística local inspirada em go-trader e Hummingbot para filtrar setups ruins e travar excesso de exposição
 - **[🧠 AI_SDK_GOOGLE_INTEGRATION](docs/AI_SDK_GOOGLE_INTEGRATION_2026-03-20.md)** - Gateway LLM unificado, structured output, fallback e tool calling local
+- **[🔌 LLM_CONNECTIVITY_FIX](docs/LLM_CONNECTIVITY_FIX_2026-03-23.md)** - Correção local da conectividade NVIDIA/Gemini e validação do fallback
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
@@ -44,7 +46,10 @@ As of **March 20, 2026**, the recommended low-bandwidth production profile is:
 - `VERBOSE_TRANSACTION_LOGS=false`
 - `AGENT_MODE=SIMULATION` by default on VPS, while `LIVE` remains available when you explicitly switch to mainnet operation
 - adaptive entry governance implemented in the local codebase (`FULL`, `REDUCED`, `PROBE`, and `RECHECK` for low-data setups)
+- deterministic fast lane, portfolio governor, and execution preflight implemented locally to reduce bad entries before capital is allocated
 - unified LLM gateway available locally with `legacy -> google`, structured outputs, and tool calling for agent workflows
+- NVIDIA-compatible primary provider fixed locally with `LLM_MODEL=z-ai/glm5` and explicit `LEGACY_LLM_API_URL`
+- Google fallback validated locally for both structured output and tool-calling flows
 - `vnstat` installed on VPS with a Telegram alert threshold of `5 GiB/day`
 - `tools/vnstat_daily_alert.py` scheduled via `cron` every 15 minutes on the VPS
 
@@ -70,7 +75,12 @@ MOONSHOT_MONITORING_ENABLED=false
 BANDWIDTH_ALERT_THRESHOLD_GIB=5
 BANDWIDTH_ALERT_IFACE=eth0
 LLM_PROVIDER_ORDER=legacy,google
+LLM_MODEL=z-ai/glm5
+LEGACY_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions
 GOOGLE_LLM_MODEL=gemini-2.5-flash
+FAST_LANE_ENABLED=true
+PORTFOLIO_GOVERNOR_ENABLED=true
+EXECUTION_PREFLIGHT_ENABLED=true
 
 # 3. Start bot + dashboard simultaneously
 npm run start:all
@@ -450,9 +460,10 @@ AGENT_ENABLED=true
 AGENT_MODE=SIMULATION       # or LIVE
 AGENT_MIN_CONFIDENCE=70
 LLM_PROVIDER_ORDER=legacy,google
+LEGACY_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions
 GOOGLE_LLM_MODEL=gemini-2.5-flash
 GOOGLE_GENERATIVE_AI_API_KEY=
-LLM_MODEL=meta/llama-3.1-70b-instruct
+LLM_MODEL=z-ai/glm5
 NV_LLM_API_KEY=
 POSTMORTEM_LLM_ENABLED=false
 ```

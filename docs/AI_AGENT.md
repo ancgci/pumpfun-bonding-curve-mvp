@@ -58,6 +58,7 @@ Tokens that pass the pre-filter are now routed through a unified gateway in `uti
 
 - the default order is `legacy,google`;
 - the local profile currently keeps NVIDIA-compatible legacy as the primary brain for runtime decisions;
+- the current local NVIDIA-compatible baseline is `LLM_MODEL=z-ai/glm5` with `LEGACY_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions`;
 - Google uses `ai` + `@ai-sdk/google`;
 - the legacy fallback keeps compatibility with the previous NVIDIA-compatible Chat Completions flow;
 - each task can override the order independently (`LLM_PROVIDER_ORDER`, `LEARNER_LLM_PROVIDER_ORDER`, `POSTMORTEM_LLM_PROVIDER_ORDER`).
@@ -70,7 +71,12 @@ The gateway now enforces structured JSON output per task:
 - learner insights and learned rules;
 - post-mortem enrichment.
 
-Google uses `generateText()` + `Output.object(...)`; the legacy fallback still parses JSON from chat-completions responses and normalizes it into the same shape.
+Google now uses two local paths in the gateway:
+
+- with tools: `generateText()` + JSON text parsing, because Gemini function calling does not support `application/json` response mime type together with tool calling;
+- without tools: `generateObject()`, with a fallback text-to-JSON parse if the provider returns plain text instead of a clean object.
+
+The legacy fallback still parses JSON from chat-completions responses and normalizes it into the same shape.
 
 ### System Prompt
 
@@ -190,7 +196,72 @@ This prevents a high-confidence LLM output from forcing full size when the techn
 
 ---
 
-## 4. Dynamic Take Profit / Stop Loss
+## 4. Fast Lane, Portfolio Governor and Execution Preflight
+
+The current local branch adds a deterministic execution layer inspired by:
+
+- `go-trader`: strategy fast lane and portfolio-level risk governor;
+- `Hummingbot`: preflight checks before an order is allowed to consume capital.
+
+This layer runs in three moments:
+
+1. **Fast Lane before the LLM**
+   - rejects clearly bad setups before spending LLM latency;
+   - examples: insufficient 1-second candle maturity, exhaustion, stretched price, and distribution.
+
+2. **Fast Lane after the LLM**
+   - re-scores the fresh technical snapshot after the agent says `BUY`;
+   - can either keep the trade, reduce effective conviction, or route the token back to `RECHECK`.
+
+3. **Execution Preflight**
+   - validates entry price sanity;
+   - checks live wallet balance when the bot is in `LIVE`;
+   - applies portfolio-level caps before the trade is executed.
+
+### Fast Lane Strategies
+
+The deterministic fast lane currently recognizes:
+
+- `momentum_breakout`
+- `trend_reclaim`
+- `exhaustion_guard`
+- `distribution_guard`
+- `insufficient_data`
+
+Bad setups can be blocked even before the LLM. Good setups can add a small confidence bonus and preserve a higher size cap.
+
+### Portfolio Governor
+
+The portfolio governor limits concentration and aggregate exposure using:
+
+- max total open positions;
+- max active SOL exposure;
+- max simultaneous live positions for the same creator wallet;
+- soft exposure zone that returns `RECHECK` instead of blindly forcing a new entry.
+
+The sizing cap from this layer is combined with adaptive sizing:
+
+`finalPositionMultiplier = min(confidenceMultiplier, technicalMultiplier, profileCap, fastLaneCap, portfolioCap)`
+
+### Execution Preflight
+
+The execution preflight now acts as the last deterministic gate before capital is allocated:
+
+- `ALLOW`
+- `RECHECK`
+- `BLOCK`
+
+Examples:
+
+- price spike exceeds tolerance -> `BLOCK`
+- portfolio is close to limit -> `RECHECK`
+- wallet balance is insufficient in `LIVE` -> `BLOCK`
+
+This lowers the dependency on the LLM for operational safety and reduces the chance of buying into a technically valid but operationally bad setup.
+
+---
+
+## 5. Dynamic Take Profit / Stop Loss
 
 Instead of using fixed values from `.env`, the LLM decides per-trade based on perceived volatility:
 
@@ -203,7 +274,7 @@ Instead of using fixed values from `.env`, the LLM decides per-trade based on pe
 
 ---
 
-## 5. Trailing Stop Loss
+## 6. Trailing Stop Loss
 
 The stop loss is **not fixed** — it rises with the price:
 
@@ -223,7 +294,7 @@ If the price falls from the peak, the trailing stop catches the profit. The log 
 
 ---
 
-## 6. Whale Dump Fast-Exit
+## 7. Whale Dump Fast-Exit
 
 If the price drops **>30%** from the high water mark in a single 10-second check, the position is closed immediately:
 
@@ -235,7 +306,7 @@ This protects against sudden rug pulls and massive sell-offs.
 
 ---
 
-## 7. PostMortemAgent - Loss Autopsy Loop
+## 8. PostMortemAgent - Loss Autopsy Loop
 
 **Files:** `utils/postMortemAgent.ts`, `utils/postMortemContext.ts`, `utils/postMortemTypes.ts`
 
@@ -308,7 +379,7 @@ The report contains:
 
 ---
 
-## 9. Configuration Reference
+## 10. Configuration Reference
 
 ### `.env` Variables
 
@@ -317,13 +388,24 @@ The report contains:
 | `AGENT_ENABLED` | `false` | Enable/disable the AI agent |
 | `AGENT_MODE` | `SIMULATION` | `SIMULATION` or `LIVE` |
 | `AGENT_MIN_CONFIDENCE` | `70` | Minimum confidence to execute a trade |
+| `FAST_LANE_ENABLED` | `true` | Enables deterministic fast-lane screening before and after the LLM |
+| `FAST_LANE_SKIP_SCORE` | `80` | Minimum fast-lane block score to hard-skip a setup |
+| `FAST_LANE_BUY_CONFIDENCE_BONUS` | `5` | Base confidence bonus added when the fast lane confirms a BUY setup |
+| `PORTFOLIO_GOVERNOR_ENABLED` | `true` | Enables portfolio-level exposure and concentration checks |
+| `MAX_OPEN_POSITIONS` | `4` | Maximum total open positions considered by the portfolio governor |
+| `MAX_ACTIVE_EXPOSURE_SOL` | `0.35` | Max projected SOL exposure before the governor blocks a new trade |
+| `MAX_SAME_CREATOR_POSITIONS` | `1` | Max simultaneous live positions for the same creator wallet |
+| `PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT` | `0.8` | Exposure percentage that degrades new trades to `RECHECK` |
+| `EXECUTION_PREFLIGHT_ENABLED` | `true` | Enables deterministic preflight checks before execution |
+| `EXECUTION_PREFLIGHT_SOL_BUFFER` | `0.015` | Extra SOL buffer required for live wallet-balance validation |
 | `LLM_PROVIDER_ORDER` | `legacy,google` | Default provider order for the unified LLM gateway |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | — | Google Generative AI key used by `@ai-sdk/google` |
 | `GOOGLE_LLM_MODEL` | `gemini-2.5-flash` | Default Gemini model for structured generation |
 | `AGENT_GOOGLE_LLM_MODEL` | — | Optional Gemini override for the main trading agent |
 | `LEARNER_LLM_PROVIDER_ORDER` | inherits `LLM_PROVIDER_ORDER` | Optional provider order override for the learner |
 | `LEARNER_GOOGLE_LLM_MODEL` | inherits `GOOGLE_LLM_MODEL` | Optional Gemini override for the learner |
-| `LLM_MODEL` | `moonshotai/kimi-k2.5` | Legacy fallback model identifier |
+| `LLM_MODEL` | `z-ai/glm5` | Current local NVIDIA-compatible primary model identifier |
+| `LEGACY_LLM_API_URL` | `https://integrate.api.nvidia.com/v1/chat/completions` | Explicit URL for the NVIDIA-compatible Chat Completions endpoint |
 | `NV_LLM_API_KEY` | — | Legacy NVIDIA-compatible API key |
 | `POSTMORTEM_LLM_ENABLED` | `true` | Enables optional LLM enrichment for offline post-mortem reports |
 | `POSTMORTEM_LLM_PROVIDER_ORDER` | inherits `LLM_PROVIDER_ORDER` | Optional provider order override for post-mortem enrichment |
@@ -335,7 +417,7 @@ The report contains:
 
 ---
 
-## 10. API and Log Reference
+## 11. API and Log Reference
 
 ### API
 
@@ -349,9 +431,11 @@ The report contains:
 | Log Prefix | Meaning |
 |------------|---------|
 | `⚡ [PreFilter]` | Token instantly rejected without LLM |
+| `[Pipeline Fast Lane]` | Deterministic fast-lane approval or rejection |
 | `🎯 Dynamic Risk` | LLM-defined TP/SL values for this trade |
 | `[Agent] LLM provider=...` | Provider/model/tools used by the unified gateway |
 | `💰 Position Size` | Confidence-adjusted trade amount |
+| `[Pipeline 8/8 - Execution Preflight]` | Portfolio, price and balance validation immediately before execution |
 | `📈 Trailing SL raised` | Stop loss moved up following price |
 | `🚨 WHALE DUMP DETECTED` | Emergency exit on sudden price crash |
 | `🧠 [PostMortemAgent]` | Offline autopsy of losing trades |

@@ -1,5 +1,5 @@
 import axios from "axios";
-import { generateText, Output, stepCountIs } from "ai";
+import { generateObject, generateText, jsonSchema, stepCountIs } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import logger from "./logger";
 
@@ -95,6 +95,28 @@ function getGoogleModel(task: LlmTask, override?: string): string {
     return process.env.POSTMORTEM_GOOGLE_LLM_MODEL;
   }
   return process.env.GOOGLE_LLM_MODEL || "gemini-2.5-flash";
+}
+
+function getLegacyApiUrl(override?: string): string {
+  return (
+    override ||
+    process.env.LEGACY_LLM_API_URL ||
+    process.env.NVIDIA_LLM_API_URL ||
+    DEFAULT_LEGACY_API_URL
+  ).trim();
+}
+
+function normalizeLegacyModel(model: string): string {
+  const normalized = model.trim();
+  if (!normalized) return normalized;
+
+  // NVIDIA currently exposes GLM-5 under `z-ai/glm5`. Keep this alias to avoid
+  // silent 404 regressions when older envs still use the dashed variant.
+  if (normalized === "z-ai/glm-5") {
+    return "z-ai/glm5";
+  }
+
+  return normalized;
 }
 
 function extractBalancedSegment(text: string, start: number, openChar: string, closeChar: string): string | null {
@@ -222,34 +244,62 @@ export async function generateStructuredLlm<TOutput>(
       try {
         const google = createGoogleGenerativeAI({ apiKey });
         const toolCalls = new Set<string>();
-        const params: any = {
-          model: google(model as any),
-          system: request.system,
-          prompt: request.prompt,
-          output: Output.object({
-            schema: request.schema,
-            name: `${request.task}Response`,
-            description: `Structured response for ${request.task} task`,
-          }),
-          temperature: request.temperature ?? 0.2,
-          maxOutputTokens: request.maxOutputTokens ?? 1024,
-          onStepFinish({ toolCalls: stepToolCalls }: any) {
-            for (const toolCall of stepToolCalls || []) {
-              if (toolCall?.toolName) toolCalls.add(toolCall.toolName);
-            }
-          },
-        };
+        let normalized: TOutput | null = null;
+        let steps = 1;
+        let rawText = "";
 
         if (hasTools) {
-          params.tools = request.tools;
-          params.toolChoice = request.toolChoice ?? "auto";
-          params.stopWhen = stepCountIs(request.stopWhenSteps ?? 4);
+          const result: any = await generateText({
+            model: google(model as any),
+            system: `${request.system}\n\nAfter using tools, return exactly one JSON object and no markdown fences.`,
+            prompt: request.prompt,
+            temperature: request.temperature ?? 0.2,
+            maxOutputTokens: request.maxOutputTokens ?? 1024,
+            tools: request.tools,
+            toolChoice: request.toolChoice ?? "auto",
+            stopWhen: stepCountIs(request.stopWhenSteps ?? 4),
+            onStepFinish({ toolCalls: stepToolCalls }: any) {
+              for (const toolCall of stepToolCalls || []) {
+                if (toolCall?.toolName) toolCalls.add(toolCall.toolName);
+              }
+            },
+          });
+
+          rawText = String(result.text || "").trim();
+          normalized = request.normalizeOutput(tryParseJson(rawText));
+          steps = Array.isArray(result.steps) ? result.steps.length : 1;
+        } else {
+          try {
+            const result: any = await generateObject({
+              model: google(model as any),
+              system: request.system,
+              prompt: request.prompt,
+              schema: jsonSchema(request.schema),
+              schemaName: `${request.task}Response`,
+              schemaDescription: `Structured response for ${request.task} task`,
+              temperature: request.temperature ?? 0.2,
+              maxOutputTokens: request.maxOutputTokens ?? 1024,
+            });
+
+            normalized = request.normalizeOutput(result.object);
+            rawText = JSON.stringify(result.object);
+          } catch {
+            const result: any = await generateText({
+              model: google(model as any),
+              system: `${request.system}\n\nReturn exactly one JSON object and no markdown fences.`,
+              prompt: request.prompt,
+              temperature: request.temperature ?? 0.2,
+              maxOutputTokens: request.maxOutputTokens ?? 1024,
+            });
+
+            rawText = String(result.text || "").trim();
+            normalized = request.normalizeOutput(tryParseJson(rawText));
+            steps = Array.isArray(result.steps) ? result.steps.length : 1;
+          }
         }
 
-        const result: any = await generateText(params);
-        const normalized = request.normalizeOutput(result.output);
         if (!normalized) {
-          throw new Error("google_structured_output_invalid");
+          throw new Error(`google_structured_output_invalid:${rawText.slice(0, 120)}`);
         }
 
         attempts.push({ provider, model, success: true });
@@ -260,7 +310,8 @@ export async function generateStructuredLlm<TOutput>(
           model,
           attempts,
           toolCalls: Array.from(toolCalls),
-          steps: Array.isArray(result.steps) ? result.steps.length : 1,
+          steps,
+          rawText,
         };
       } catch (error: any) {
         attempts.push({ provider, model, success: false, reason: error.message });
@@ -269,7 +320,8 @@ export async function generateStructuredLlm<TOutput>(
       }
     }
 
-    const model = request.legacyModel;
+    const model = normalizeLegacyModel(request.legacyModel);
+    const legacyApiUrl = getLegacyApiUrl(request.legacyApiUrl);
     const apiKey = (request.legacyApiKey || "").trim();
     if (!apiKey) {
       attempts.push({ provider, model, success: false, reason: "missing_legacy_api_key" });
@@ -278,7 +330,7 @@ export async function generateStructuredLlm<TOutput>(
 
     try {
       const response = await axios.post(
-        request.legacyApiUrl || DEFAULT_LEGACY_API_URL,
+        legacyApiUrl,
         {
           model,
           max_tokens: request.maxOutputTokens ?? 1024,

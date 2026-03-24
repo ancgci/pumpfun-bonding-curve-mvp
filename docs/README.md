@@ -12,7 +12,9 @@ Após os ajustes de banda aplicados em **20/03/2026**, o perfil recomendado para
 - `AGENT_MODE=SIMULATION` no baseline operacional
 - `AGENT_MODE=LIVE` continua disponível quando houver decisão explícita de operar em mainnet
 - governança adaptativa de entrada implementada no código local (`FULL`, `REDUCED`, `PROBE` e `RECHECK` para setups precoces)
+- camada determinística local inspirada em `go-trader` e `Hummingbot` com `fast lane`, `portfolio governor` e `execution preflight`
 - gateway LLM unificado disponível localmente com `legacy -> google`, saída estruturada e tool calling por agente
+- conectividade LLM local validada com NVIDIA primário (`z-ai/glm5`) e Gemini como fallback operacional
 - `vnstat` instalado na VPS para histórico de tráfego
 - alerta diário em Telegram configurado para `5 GiB/dia`
 - `tools/vnstat_daily_alert.py` executado via `cron` a cada 15 minutos na VPS
@@ -92,6 +94,11 @@ AGENT_MODE=SIMULATION
 BANDWIDTH_ALERT_THRESHOLD_GIB=5
 BANDWIDTH_ALERT_IFACE=eth0
 
+# Camada local de execução mais determinística
+FAST_LANE_ENABLED=true
+PORTFOLIO_GOVERNOR_ENABLED=true
+EXECUTION_PREFLIGHT_ENABLED=true
+
 # Ver docs/CONFIGURATION.md para todas as opções
 ```
 
@@ -145,7 +152,9 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 - [Avaliação de Banda Contabo](AVALIACAO_BANDA_CONTABO_2026-03-20.md) - Diagnóstico do throttle de banda
 - [Mitigação de Banda e Monitoramento](MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md) - Registro do que foi ajustado
 - [Governança Adaptativa de Entrada](GOVERNANCA_ADAPTATIVA_ENTRADA_2026-03-20.md) - Ajuste local do funil de BUY, sizing adaptativo e recheck
+- [Fast Lane e Execution Preflight](FAST_LANE_E_EXECUTION_PREFLIGHT_2026-03-23.md) - Camada local inspirada em go-trader e Hummingbot para decisão determinística, exposição e preflight operacional
 - [Integração AI SDK Google](AI_SDK_GOOGLE_INTEGRATION_2026-03-20.md) - Gateway LLM unificado, fallback, saída estruturada e tool calling local
+- [Correção de Conectividade LLM](LLM_CONNECTIVITY_FIX_2026-03-23.md) - Ajuste local do modelo NVIDIA, URL legada explícita e validação do fallback Google
 - [Hardening de Segurança](SECURITY_HARDENING.md) - Protocolo de proteção e auditoria da VPS
 - [API do Dashboard](API.md) - Endpoints REST
 - [Configuração](CONFIGURATION.md) - Todas as variáveis de ambiente

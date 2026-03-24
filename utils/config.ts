@@ -76,6 +76,16 @@ export const CONFIG = {
   SLIPPAGE_BPS: parseInt(process.env.SLIPPAGE_BPS || "50"),
   AGENT_MIN_CONFIDENCE: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
   JITO_TIP_AMOUNT: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
+  FAST_LANE_ENABLED: process.env.FAST_LANE_ENABLED !== "false",
+  FAST_LANE_SKIP_SCORE: parseInt(process.env.FAST_LANE_SKIP_SCORE || "80"),
+  FAST_LANE_BUY_CONFIDENCE_BONUS: parseInt(process.env.FAST_LANE_BUY_CONFIDENCE_BONUS || "5"),
+  PORTFOLIO_GOVERNOR_ENABLED: process.env.PORTFOLIO_GOVERNOR_ENABLED !== "false",
+  MAX_OPEN_POSITIONS: parseInt(process.env.MAX_OPEN_POSITIONS || "4"),
+  MAX_ACTIVE_EXPOSURE_SOL: parseFloat(process.env.MAX_ACTIVE_EXPOSURE_SOL || "0.35"),
+  MAX_SAME_CREATOR_POSITIONS: parseInt(process.env.MAX_SAME_CREATOR_POSITIONS || "1"),
+  PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT: parseFloat(process.env.PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT || "0.8"),
+  EXECUTION_PREFLIGHT_ENABLED: process.env.EXECUTION_PREFLIGHT_ENABLED !== "false",
+  EXECUTION_PREFLIGHT_SOL_BUFFER: parseFloat(process.env.EXECUTION_PREFLIGHT_SOL_BUFFER || "0.015"),
 
   // Auto Trading
   AGENT_ENABLED: process.env.AGENT_ENABLED === "true",
@@ -164,6 +174,11 @@ export const CONFIG = {
   WHALE_WATCHER_ENABLED: process.env.WHALE_WATCHER_ENABLED === "true",
   WHALE_ALERT_THRESHOLD_SOL: parseFloat(process.env.WHALE_ALERT_THRESHOLD_SOL || "50"),
   SIMULATION_TIMEOUT_MIN: parseInt(process.env.SIMULATION_TIMEOUT_MIN || "20"),
+  DIP_MONITOR_SCAN_INTERVAL_MS: parseInt(process.env.DIP_MONITOR_SCAN_INTERVAL_MS || "2000"),
+  DIP_WAITLIST_MAX_AGE_MS: parseInt(process.env.DIP_WAITLIST_MAX_AGE_MS || "300000"),
+  MICRO_WAITLIST_MAX_TOKENS: parseInt(process.env.MICRO_WAITLIST_MAX_TOKENS || "8"),
+  MICRO_WAITLIST_MIN_DELAY_MS: parseInt(process.env.MICRO_WAITLIST_MIN_DELAY_MS || "8000"),
+  MICRO_WAITLIST_MAX_AGE_MS: parseInt(process.env.MICRO_WAITLIST_MAX_AGE_MS || "15000"),
 };
 
 /**
@@ -192,6 +207,23 @@ export function getRuntimeConfig() {
     if (saved.sellPercentOnTp !== undefined) runtimeConfig.SELL_PERCENT_ON_TP = saved.sellPercentOnTp;
     if (saved.jitoTipAmount !== undefined) runtimeConfig.JITO_TIP_AMOUNT = saved.jitoTipAmount;
     if (saved.agentMinConfidence !== undefined) runtimeConfig.AGENT_MIN_CONFIDENCE = saved.agentMinConfidence;
+    if (saved.fastLaneEnabled !== undefined) (runtimeConfig as any).FAST_LANE_ENABLED = saved.fastLaneEnabled;
+    if (saved.fastLaneSkipScore !== undefined) (runtimeConfig as any).FAST_LANE_SKIP_SCORE = saved.fastLaneSkipScore;
+    if (saved.fastLaneBuyConfidenceBonus !== undefined) (runtimeConfig as any).FAST_LANE_BUY_CONFIDENCE_BONUS = saved.fastLaneBuyConfidenceBonus;
+    if (saved.portfolioGovernorEnabled !== undefined) (runtimeConfig as any).PORTFOLIO_GOVERNOR_ENABLED = saved.portfolioGovernorEnabled;
+    if (saved.maxOpenPositions !== undefined) (runtimeConfig as any).MAX_OPEN_POSITIONS = saved.maxOpenPositions;
+    if (saved.maxActiveExposureSol !== undefined) (runtimeConfig as any).MAX_ACTIVE_EXPOSURE_SOL = saved.maxActiveExposureSol;
+    if (saved.maxSameCreatorPositions !== undefined) (runtimeConfig as any).MAX_SAME_CREATOR_POSITIONS = saved.maxSameCreatorPositions;
+    if (saved.portfolioSoftExposureThresholdPct !== undefined) {
+      (runtimeConfig as any).PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT = saved.portfolioSoftExposureThresholdPct;
+    }
+    if (saved.executionPreflightEnabled !== undefined) (runtimeConfig as any).EXECUTION_PREFLIGHT_ENABLED = saved.executionPreflightEnabled;
+    if (saved.executionPreflightSolBuffer !== undefined) (runtimeConfig as any).EXECUTION_PREFLIGHT_SOL_BUFFER = saved.executionPreflightSolBuffer;
+    if (saved.dipMonitorScanIntervalMs !== undefined) (runtimeConfig as any).DIP_MONITOR_SCAN_INTERVAL_MS = saved.dipMonitorScanIntervalMs;
+    if (saved.dipWaitlistMaxAgeMs !== undefined) (runtimeConfig as any).DIP_WAITLIST_MAX_AGE_MS = saved.dipWaitlistMaxAgeMs;
+    if (saved.microWaitlistMaxTokens !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MAX_TOKENS = saved.microWaitlistMaxTokens;
+    if (saved.microWaitlistMinDelayMs !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MIN_DELAY_MS = saved.microWaitlistMinDelayMs;
+    if (saved.microWaitlistMaxAgeMs !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MAX_AGE_MS = saved.microWaitlistMaxAgeMs;
     if (saved.copyTradeEnabled !== undefined) runtimeConfig.COPY_TRADE_ENABLED = saved.copyTradeEnabled;
     if (saved.copyTradeAmountSol !== undefined) runtimeConfig.COPY_TRADE_AMOUNT_SOL = saved.copyTradeAmountSol;
     if (saved.followWallets !== undefined) {

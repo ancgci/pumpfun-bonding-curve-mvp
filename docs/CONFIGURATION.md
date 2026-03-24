@@ -310,6 +310,189 @@ AGENT_MODE=LIVE       # Executa análise e envia transação real na Solana
 
 ---
 
+## Camada Determinística de Execução
+
+### `FAST_LANE_ENABLED`
+Ativa a camada determinística inspirada em `go-trader` para detectar setups muito ruins ou muito claros antes e depois do LLM.
+
+**Padrão recomendado:** `true`
+
+```bash
+FAST_LANE_ENABLED=true
+```
+
+---
+
+### `FAST_LANE_SKIP_SCORE`
+Pontuação mínima do `fast lane` para transformar um sinal ruim em bloqueio duro.
+
+**Padrão recomendado:** `80`
+
+```bash
+FAST_LANE_SKIP_SCORE=80
+```
+
+---
+
+### `FAST_LANE_BUY_CONFIDENCE_BONUS`
+Bônus base de confiança aplicado quando o `fast lane` confirma um setup de compra.
+
+**Padrão recomendado:** `5`
+
+```bash
+FAST_LANE_BUY_CONFIDENCE_BONUS=5
+```
+
+---
+
+### `PORTFOLIO_GOVERNOR_ENABLED`
+Ativa o governador de portfólio inspirado em `go-trader`, limitando excesso de exposição e concentração por criador.
+
+**Padrão recomendado:** `true`
+
+```bash
+PORTFOLIO_GOVERNOR_ENABLED=true
+```
+
+---
+
+### `MAX_OPEN_POSITIONS`
+Máximo de posições abertas consideradas pelo governador.
+
+**Padrão recomendado:** `4`
+
+```bash
+MAX_OPEN_POSITIONS=4
+```
+
+---
+
+### `MAX_ACTIVE_EXPOSURE_SOL`
+Exposição agregada máxima em SOL antes de bloquear uma nova entrada.
+
+**Padrão recomendado:** `0.35`
+
+```bash
+MAX_ACTIVE_EXPOSURE_SOL=0.35
+```
+
+---
+
+### `MAX_SAME_CREATOR_POSITIONS`
+Máximo de posições simultâneas em tokens do mesmo criador no modo live.
+
+**Padrão recomendado:** `1`
+
+```bash
+MAX_SAME_CREATOR_POSITIONS=1
+```
+
+---
+
+### `PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT`
+Faixa de exposição em que o bot degrada uma nova entrada para `RECHECK` em vez de bloquear ou comprar imediatamente.
+
+**Padrão recomendado:** `0.8`
+
+```bash
+PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT=0.8
+```
+
+---
+
+### `EXECUTION_PREFLIGHT_ENABLED`
+Ativa o preflight operacional inspirado em `Hummingbot` imediatamente antes da execução.
+
+Ele valida:
+- sanidade do preço de entrada;
+- exposição projetada;
+- saldo disponível da wallet no modo `LIVE`.
+
+**Padrão recomendado:** `true`
+
+```bash
+EXECUTION_PREFLIGHT_ENABLED=true
+```
+
+---
+
+### `EXECUTION_PREFLIGHT_SOL_BUFFER`
+Buffer extra de SOL exigido no modo `LIVE` para evitar entradas que deixariam a wallet sem margem para fees e operação segura.
+
+**Padrão recomendado:** `0.015`
+
+```bash
+EXECUTION_PREFLIGHT_SOL_BUFFER=0.015
+```
+
+---
+
+## Dip Monitor & Waitlists (Dip Sniper + Micro-Recheck)
+
+O `DipMonitorService` mantém filas em memória para reentradas rápidas após `RECHECK`.
+
+Existem dois tipos:
+- `LEGACY_DIP`: fila legada do Dip Sniper (timing / pullback).
+- `MICRO_RECHECK`: micro-waitlist curta (8-15s) para rechecks near-execution de `PROBE` frágil.
+
+### `DIP_MONITOR_SCAN_INTERVAL_MS`
+Intervalo do loop de varredura do Dip Monitor (ms).
+
+**Padrão:** `2000`
+
+```bash
+DIP_MONITOR_SCAN_INTERVAL_MS=2000
+```
+
+---
+
+### `DIP_WAITLIST_MAX_AGE_MS`
+TTL máximo (ms) para itens na fila legada (`LEGACY_DIP`).
+
+**Padrão:** `300000` (5 minutos)
+
+```bash
+DIP_WAITLIST_MAX_AGE_MS=300000
+```
+
+---
+
+### `MICRO_WAITLIST_MAX_TOKENS`
+Teto rígido de itens simultâneos na micro-waitlist (`MICRO_RECHECK`).
+
+**Padrão:** `8`
+
+```bash
+MICRO_WAITLIST_MAX_TOKENS=8
+```
+
+---
+
+### `MICRO_WAITLIST_MIN_DELAY_MS`
+Delay mínimo (ms) antes de um item `MICRO_RECHECK` ficar elegível para reentrar.
+
+**Padrão:** `8000`
+
+```bash
+MICRO_WAITLIST_MIN_DELAY_MS=8000
+```
+
+---
+
+### `MICRO_WAITLIST_MAX_AGE_MS`
+TTL máximo (ms) por item na micro-waitlist (`MICRO_RECHECK`).
+
+**Padrão:** `15000`
+
+```bash
+MICRO_WAITLIST_MAX_AGE_MS=15000
+```
+
+---
+
+> [!NOTE]
+> A micro-waitlist foi desenhada para não saturar o bot: ela exige `eligibleForMicroWaitlist=true`, deduplica por mint, prioriza por score e, com backlog cheio, rejeita itens fracos ou pode expulsar o pior item quando chega um candidato melhor.
+
 ## Camada LLM
 
 ### `LLM_PROVIDER_ORDER`
@@ -334,6 +517,8 @@ GOOGLE_GENERATIVE_AI_API_KEY=YOUR_GEMINI_KEY
 
 Se não estiver definida, o gateway pula o provider Google e tenta o provider legado seguinte.
 Se a ordem estiver em `legacy,google`, o passo Google simplesmente será ignorado quando chegar a vez dele.
+
+No perfil local atual, essa chave já foi validada apenas para testes locais de conectividade e fallback. O valor real não deve ser documentado nem commitado fora do `.env` privado.
 
 ---
 
@@ -397,7 +582,18 @@ POSTMORTEM_GOOGLE_LLM_MODEL=gemini-2.5-flash
 Modelo do provider legado compatível com Chat Completions. No perfil local atual, ele é o provider principal do gateway.
 
 ```bash
-LLM_MODEL=meta/llama-3.1-70b-instruct
+LLM_MODEL=z-ai/glm5
+```
+
+---
+
+### `LEGACY_LLM_API_URL`
+URL explícita do endpoint legado compatível com Chat Completions.
+
+Esse campo foi promovido a variável de ambiente para evitar regressões silenciosas de conectividade entre modelo, rota e provider após deploys. No perfil local atual ele aponta para o endpoint NVIDIA-compatible principal.
+
+```bash
+LEGACY_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions
 ```
 
 ---
@@ -711,6 +907,25 @@ BONK_FUN_MONITORING_ENABLED=false
 DAOS_FUN_MONITORING_ENABLED=false
 MOONSHOT_MONITORING_ENABLED=false
 ANONCOIN_MONITORING_ENABLED=false
+
+# === Deterministic execution layer ===
+FAST_LANE_ENABLED=true
+FAST_LANE_SKIP_SCORE=80
+FAST_LANE_BUY_CONFIDENCE_BONUS=5
+PORTFOLIO_GOVERNOR_ENABLED=true
+MAX_OPEN_POSITIONS=4
+MAX_ACTIVE_EXPOSURE_SOL=0.35
+MAX_SAME_CREATOR_POSITIONS=1
+PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT=0.8
+EXECUTION_PREFLIGHT_ENABLED=true
+EXECUTION_PREFLIGHT_SOL_BUFFER=0.015
+
+# === Dip Monitor (waitlists) ===
+DIP_MONITOR_SCAN_INTERVAL_MS=2000
+DIP_WAITLIST_MAX_AGE_MS=300000
+MICRO_WAITLIST_MAX_TOKENS=8
+MICRO_WAITLIST_MIN_DELAY_MS=8000
+MICRO_WAITLIST_MAX_AGE_MS=15000
 
 # === Circuit Breaker ===
 CB_MAX_DAILY_LOSS_SOL=1.0

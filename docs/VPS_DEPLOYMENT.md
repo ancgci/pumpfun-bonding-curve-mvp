@@ -102,6 +102,20 @@ Se houver necessidade de ampliar o escopo:
 2. acompanhe `vnstat` por pelo menos 24h
 3. só então abra a próxima frente
 
+### Verificação de LLM antes do próximo deploy
+
+Antes de subir o stack de IA atualizado para a VPS, confirme que o `.env` de produção está alinhado com o baseline local validado:
+
+```bash
+LLM_PROVIDER_ORDER=legacy,google
+LLM_MODEL=z-ai/glm5
+LEGACY_LLM_API_URL=https://integrate.api.nvidia.com/v1/chat/completions
+GOOGLE_LLM_MODEL=gemini-2.5-flash
+GOOGLE_GENERATIVE_AI_API_KEY=<preencher apenas se o fallback Gemini for desejado na VPS>
+```
+
+Esse checklist existe porque a combinação errada entre modelo, rota e provider legado pode gerar `404` e fazer o bot cair em `SKIP` para todos os tokens mesmo com o processo em execução.
+
 ---
 
 ## 4. Gerenciamento Financeiro e de Processos (PM2)

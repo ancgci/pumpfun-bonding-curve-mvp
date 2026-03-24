@@ -17,6 +17,8 @@ export interface TokenMetadata {
   price?: number;
   volume24h?: number;
   liquidity?: number;
+  volume24hSource?: "pumpfun" | "dexscreener" | null;
+  liquiditySource?: "pumpfun" | "dexscreener" | null;
 }
 
 interface SolanaFmTokenResponse {
@@ -169,7 +171,9 @@ export async function fetchPumpFunMetadata(mint: string): Promise<TokenMetadata 
         marketCap: tokenData.market_cap,
         price: tokenData.price,
         volume24h: tokenData.volume_24h,
-        liquidity: tokenData.liquidity
+        liquidity: tokenData.liquidity,
+        volume24hSource: tokenData.volume_24h != null ? "pumpfun" : null,
+        liquiditySource: tokenData.liquidity != null ? "pumpfun" : null,
       };
     }
     
@@ -204,7 +208,9 @@ export async function fetchDexScreenerMetadata(mint: string): Promise<TokenMetad
           marketCap: pair.marketCap,
           price: parseFloat(pair.priceNative),
           volume24h: pair.volume?.h24,
-          liquidity: pair.liquidity?.usd
+          liquidity: pair.liquidity?.usd,
+          volume24hSource: pair.volume?.h24 != null ? "dexscreener" : null,
+          liquiditySource: pair.liquidity?.usd != null ? "dexscreener" : null,
         };
       }
     }
@@ -230,12 +236,28 @@ export async function fetchCombinedMetadata(mint: string): Promise<TokenMetadata
       try {
         const dexMetadata = await fetchDexScreenerMetadata(mint);
         if (dexMetadata) {
+          const preferredLiquidity = pumpFunMetadata.liquidity ?? dexMetadata.liquidity;
+          const preferredLiquiditySource =
+            pumpFunMetadata.liquidity != null
+              ? "pumpfun"
+              : dexMetadata.liquidity != null
+                ? "dexscreener"
+                : null;
+          const preferredVolume24h = dexMetadata.volume24h ?? pumpFunMetadata.volume24h;
+          const preferredVolume24hSource =
+            dexMetadata.volume24h != null
+              ? "dexscreener"
+              : pumpFunMetadata.volume24h != null
+                ? "pumpfun"
+                : null;
           return {
             ...pumpFunMetadata,
-            marketCap: dexMetadata.marketCap || pumpFunMetadata.marketCap,
-            price: dexMetadata.price || pumpFunMetadata.price,
-            volume24h: dexMetadata.volume24h || pumpFunMetadata.volume24h,
-            liquidity: dexMetadata.liquidity || pumpFunMetadata.liquidity
+            marketCap: dexMetadata.marketCap ?? pumpFunMetadata.marketCap,
+            price: dexMetadata.price ?? pumpFunMetadata.price,
+            volume24h: preferredVolume24h,
+            liquidity: preferredLiquidity,
+            volume24hSource: preferredVolume24hSource,
+            liquiditySource: preferredLiquiditySource,
           };
         }
       } catch (dexError: any) {
@@ -257,7 +279,9 @@ export async function fetchCombinedMetadata(mint: string): Promise<TokenMetadata
             marketCap: dexMetadata.marketCap,
             price: dexMetadata.price,
             volume24h: dexMetadata.volume24h,
-            liquidity: dexMetadata.liquidity
+            liquidity: dexMetadata.liquidity,
+            volume24hSource: dexMetadata.volume24hSource ?? null,
+            liquiditySource: dexMetadata.liquiditySource ?? null,
           };
         }
       } catch (dexError: any) {

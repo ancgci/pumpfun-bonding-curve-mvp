@@ -4,13 +4,21 @@
 ### Added
 - **Adaptive Entry Governance**: New local-only governance layer for post-LLM BUY approval with `FULL`, `REDUCED` and `PROBE` profiles, plus dedicated unit coverage in `test/unit/adaptiveEntryGovernance.test.ts`.
 - **Unified LLM Gateway**: New `utils/llmGateway.ts` standardizes provider routing, structured outputs, tool-call telemetry and task-specific fallback handling for agent, learner and post-mortem flows.
+- **Fast Lane + Portfolio Governor + Execution Preflight**: New local deterministic layer inspired by `go-trader` and `Hummingbot`, implemented in `utils/strategyFastLane.ts`, `utils/portfolioGovernor.ts` and `utils/executionPreflight.ts`, with targeted unit coverage.
+- **Probe Quality Governor**: New local guard in `utils/probeQualityGovernor.ts` to reduce or recheck fragile `PROBE` setups after recurring weak post-mortems and to reject suspicious `price x marketCap` ticks during monitoring.
 
 ### Changed
 - **Technical Entry Logic**: Converted several non-structural technical vetoes into penalties and soft pressure instead of hard invalidation.
 - **Execution Sizing**: Final buy size is now the minimum of confidence sizing, technical sizing and adaptive profile cap.
+- **Execution Funnel**: Added deterministic gating before and after the LLM, plus portfolio-aware preflight checks before any simulated or live capital allocation.
+- **Fragile Probe Handling**: Near-migration PumpFun `PROBE` entries with `LOW_DATA`, `taScore` near zero and only 1 candle now operate with smaller size, short follow-through validation and temporary cooldown when recent post-mortems repeat `WEAK_MOMENTUM` or `NO_FOLLOW_THROUGH`.
+- **Micro-Confirm**: The micro-confirmation window now reads live `1s` candles during the wait window and can fail with `MC_NO_FOLLOW_THROUGH` instead of approving stale single-candle momentum.
+- **Micro-Waitlist Governor (MICRO_RECHECK)**: Added a short, capped micro-waitlist (8-15s) inside `DipMonitorService` for near-execution rechecks. It enforces explicit eligibility, hard caps (`MICRO_WAITLIST_MAX_TOKENS`), priority ordering/eviction, dedupe-by-mint, min-delay and short TTL, and is currently used by `probe_loss_pressure` and `MC_NO_FOLLOW_THROUGH` paths.
+- **Simulation Monitoring**: Early-stage simulation monitoring now polls faster, arms break-even earlier and ignores incoherent feed ticks before updating P&L or firing TP/SL.
 - **Post-Mortem Context**: Simulation trade context now persists `rawConfidence`, `effectiveConfidence`, `entryProfile`, `positionMultiplier`, `entryAmount` and related governance metadata.
 - **AI Agents**: `agentOrchestrator`, `learnerAgent` and `postMortemAgent` now share the same structured LLM layer; Google paths can use tool calling while the legacy provider remains available as fallback.
 - **LLM Priority**: The local baseline now keeps the NVIDIA-compatible legacy provider first (`legacy,google`), with Gemini reserved as fallback until a production rollout is explicitly approved.
+- **LLM Connectivity (Local)**: Updated the local NVIDIA-compatible primary model to `z-ai/glm5`, exposed `LEGACY_LLM_API_URL`, and validated Google fallback with both structured output and tool-calling flows.
 
 ### Fixed
 - **Ultra-Aggressive Risk Bypass**: Removed local pass-through behavior that previously allowed high-risk or unlocked-LP discoveries to cross the Risk Engine in aggressive mode.

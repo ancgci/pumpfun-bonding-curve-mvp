@@ -70,6 +70,19 @@ const SIMULATION_DATA_DIR = path.join(__dirname, "../data/simulation");
 const SIMULATION_TRADES_FILE = path.join(SIMULATION_DATA_DIR, "trades.json");
 const SIMULATION_METRICS_FILE = path.join(SIMULATION_DATA_DIR, "metrics.json");
 
+export function getSimulationTimeoutMs(): number {
+  const cfg = getRuntimeConfig();
+  const timeoutMin = Number(cfg.SIMULATION_TIMEOUT_MIN || CONFIG.SIMULATION_TIMEOUT_MIN || 20);
+  return Math.max(1, timeoutMin) * 60 * 1000;
+}
+
+export function isSimulationTradeStale(
+  trade: Pick<SimulatedTrade, "status" | "entryTime">,
+  now: number = Date.now()
+): boolean {
+  return trade.status === "OPEN" && now - Number(trade.entryTime || 0) >= getSimulationTimeoutMs();
+}
+
 function serializeJson(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   return JSON.stringify(value);
@@ -497,7 +510,7 @@ export function getRecentPostMortemTrades(limit: number = 20): SimulatedTrade[] 
 /**
  * Fetch all OPEN simulated trades from the database
  */
-export function getOpenTradesFromDb(): SimulatedTrade[] {
+export function getOpenTradesFromDb(options?: { includeStale?: boolean }): SimulatedTrade[] {
   try {
     const rows = db.prepare(`
       SELECT 
@@ -528,7 +541,10 @@ export function getOpenTradesFromDb(): SimulatedTrade[] {
       WHERE status = 'OPEN'
     `).all() as any[];
 
-    return rows.map(normalizeTradeRow);
+    const includeStale = options?.includeStale === true;
+    const now = Date.now();
+    const trades = rows.map(normalizeTradeRow);
+    return includeStale ? trades : trades.filter((trade) => !isSimulationTradeStale(trade, now));
   } catch (error) {
     logger.error(`Error fetching open trades from DB:`, error);
     return [];
@@ -668,7 +684,8 @@ export function getOpenTradeForToken(tokenMint: string): SimulatedTrade | null {
     if (fs.existsSync(SIMULATION_TRADES_FILE)) {
       const data = fs.readFileSync(SIMULATION_TRADES_FILE, "utf-8");
       const trades: SimulatedTrade[] = JSON.parse(data);
-      return trades.find((t) => t.tokenMint === tokenMint && t.status === "OPEN") || null;
+      const openTrade = trades.find((t) => t.tokenMint === tokenMint && t.status === "OPEN") || null;
+      return openTrade && !isSimulationTradeStale(openTrade) ? openTrade : null;
     }
   } catch (error) {
     logger.error(`Error loading simulation trades:`, error);

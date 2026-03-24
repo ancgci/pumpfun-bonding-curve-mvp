@@ -1,4 +1,7 @@
-import { assessAdaptiveEntryProfile } from "../../utils/adaptiveEntryGovernance";
+import {
+  assessAdaptiveEntryProfile,
+  shouldForceLaunchProbeOnScoreTimeout,
+} from "../../utils/adaptiveEntryGovernance";
 import { DEFAULT_TA_CONFIG } from "../../utils/technicalConfig";
 import { calculateConfluenceScore, ScoreResult } from "../../utils/technicalScore";
 import { TASnapshotV2 } from "../../utils/volatilityMonitor";
@@ -65,6 +68,8 @@ function makeScoreResult(overrides: Partial<ScoreResult> = {}): ScoreResult {
     score: 0,
     breakdown: calculateConfluenceScore(makeSnapshot(), DEFAULT_TA_CONFIG).breakdown,
     invalidated: false,
+    classification: "VALID",
+    classificationReason: "VALID:NEUTRAL",
     sizing: 0.5,
     regime: "NEUTRAL",
     ...overrides,
@@ -123,6 +128,141 @@ describe("adaptive entry governance", () => {
     expect(profile.profile).toBe("PROBE");
     expect(profile.effectiveConfidence).toBeLessThan(92);
     expect(profile.requiredConfidence).toBeGreaterThan(profile.effectiveConfidence);
+  });
+
+  test("allows probe entries for near-migration PumpFun launches with strong volume and unverified curve liquidity", () => {
+    const aggressiveConfig = {
+      ...DEFAULT_TA_CONFIG,
+      scoreMinimo: 1,
+      sustainCandles: 1,
+      minFollowThroughPct: 0.1,
+    };
+
+    const profile = assessAdaptiveEntryProfile({
+      decisionConfidence: 72,
+      baseMinConfidence: 50,
+      snap: makeSnapshot({
+        candlesAvailable1s: 1,
+        volumeRelative: null,
+        microTrend: null,
+        priceAboveVWAP: false,
+        donchian: null,
+        macd: null,
+        rsi: null,
+        roc: null,
+      }),
+      execScore: makeScoreResult({
+        score: 0,
+        classification: "LOW_DATA",
+        classificationReason: "LOW_DATA:candles=1/3,volume_baseline_missing,microtrend_missing",
+      }),
+      blockPressure: 0,
+      config: aggressiveConfig,
+      launchContext: {
+        protocol: "pumpfun",
+        bondingCurvePercent: 96.8,
+        riskScore: 0,
+        volumeH1: 10337,
+        liquidityVerified: false,
+        liquiditySource: "PUMPFUN_CURVE",
+        liquiditySol: 0,
+        buyCount: 14,
+        sellCount: 6,
+      },
+    });
+
+    expect(profile.resolution).toBe("ALLOW");
+    expect(profile.profile).toBe("PROBE");
+    expect(profile.reason).toContain("ADAPTIVE_ALLOW_LAUNCH_PROBE");
+    expect(profile.positionCap).toBe(0.2);
+  });
+
+  test("accepts UNKNOWN liquidity source as unverified PumpFun curve context near migration", () => {
+    const aggressiveConfig = {
+      ...DEFAULT_TA_CONFIG,
+      scoreMinimo: 1,
+      sustainCandles: 1,
+      minFollowThroughPct: 0.1,
+    };
+
+    const profile = assessAdaptiveEntryProfile({
+      decisionConfidence: 78,
+      baseMinConfidence: 50,
+      snap: makeSnapshot({
+        candlesAvailable1s: 2,
+        volumeRelative: null,
+        microTrend: null,
+        priceAboveVWAP: false,
+        donchian: null,
+        macd: null,
+        rsi: null,
+        roc: null,
+      }),
+      execScore: makeScoreResult({
+        score: 0,
+        classification: "LOW_DATA",
+        classificationReason: "LOW_DATA:candles=2/3,volume_baseline_missing,microtrend_missing",
+      }),
+      blockPressure: 0,
+      config: aggressiveConfig,
+      launchContext: {
+        protocol: "pumpfun",
+        bondingCurvePercent: 93.1,
+        riskScore: 15,
+        volumeH1: 15700,
+        liquidityVerified: false,
+        liquiditySource: "UNKNOWN",
+        liquiditySol: 0,
+        buyCount: 0,
+        sellCount: 0,
+      },
+    });
+
+    expect(profile.resolution).toBe("ALLOW");
+    expect(profile.reason).toContain("ADAPTIVE_ALLOW_LAUNCH_PROBE");
+  });
+
+  test("forces launch probe on score timeout for low-data PumpFun simulation entries near migration", () => {
+    const aggressiveConfig = {
+      ...DEFAULT_TA_CONFIG,
+      scoreMinimo: 1,
+      sustainCandles: 1,
+      minFollowThroughPct: 0.1,
+    };
+
+    const shouldForce = shouldForceLaunchProbeOnScoreTimeout({
+      agentMode: "SIMULATION",
+      decisionConfidence: 72,
+      baseMinConfidence: 50,
+      snap: makeSnapshot({
+        candlesAvailable1s: 2,
+        volumeRelative: null,
+        microTrend: null,
+        priceAboveVWAP: false,
+        donchian: null,
+        macd: null,
+        rsi: null,
+        roc: null,
+      }),
+      execScore: makeScoreResult({
+        score: 0,
+        invalidated: false,
+        classification: "LOW_DATA",
+        classificationReason: "LOW_DATA:candles=2/3,volume_baseline_missing,microtrend_missing",
+      }),
+      config: aggressiveConfig,
+      launchContext: {
+        protocol: "pumpfun",
+        bondingCurvePercent: 93.0,
+        riskScore: 15,
+        volumeH1: 15700,
+        liquidityVerified: false,
+        liquiditySource: "UNKNOWN",
+        liquiditySol: 0,
+      },
+    });
+
+    expect(shouldForce).toBe(true);
   });
 
   test("allows reduced sizing for medium-quality setups without hard blocking", () => {

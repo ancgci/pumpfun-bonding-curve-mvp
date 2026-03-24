@@ -6,6 +6,7 @@ const axios = require("axios");
 
 export interface TradingSanityResult {
     volumeToHoldersRatio: number;
+    volumeH1: number;
     buySellRatio: number;
     priceImpactPercent: number;
     honeypotDetected: boolean;
@@ -24,6 +25,7 @@ export async function checkTradingSanity(
 ): Promise<TradingSanityResult> {
     const result: TradingSanityResult = {
         volumeToHoldersRatio: 0,
+        volumeH1: 0,
         buySellRatio: 1,
         priceImpactPercent: 0,
         honeypotDetected: false,
@@ -42,6 +44,7 @@ export async function checkTradingSanity(
 
         // ── Volume/Holders Ratio ──
         const volumeH1 = dexData.volume?.h1 || 0;
+        result.volumeH1 = volumeH1;
         if (totalHolders > 0 && volumeH1 > 0) {
             result.volumeToHoldersRatio = volumeH1 / totalHolders;
 

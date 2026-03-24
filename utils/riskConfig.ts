@@ -113,8 +113,12 @@ export interface RiskMetrics {
     liquiditySol: number;
     liquidityUsd: number;
     liquidityToMcap: number;
+    liquiditySource?: "PUMPFUN_CURVE" | "DEX_LP" | "UNKNOWN";
+    liquidityVerified?: boolean;
     totalHolders: number;
     top10Percent: number;
+    holderSource?: "OWNER_AGGREGATED_API" | "TOKEN_ACCOUNTS_RPC" | "UNKNOWN";
+    holderDataReliable?: boolean;
     devWalletPercent: number;
     volumeH1: number;
     buySellRatio: number;
@@ -163,8 +167,12 @@ export function getDefaultMetrics(): RiskMetrics {
         liquiditySol: 0,
         liquidityUsd: 0,
         liquidityToMcap: 0,
+        liquiditySource: "UNKNOWN",
+        liquidityVerified: false,
         totalHolders: 0,
         top10Percent: 0,
+        holderSource: "UNKNOWN",
+        holderDataReliable: false,
         devWalletPercent: 0,
         volumeH1: 0,
         buySellRatio: 1,

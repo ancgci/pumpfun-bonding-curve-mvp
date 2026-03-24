@@ -121,9 +121,11 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
         metrics.liquiditySol = liq.liquiditySol;
         metrics.liquidityUsd = liq.liquidityUsd;
         metrics.liquidityToMcap = liq.liquidityToMcap;
+        metrics.liquiditySource = liq.source;
+        metrics.liquidityVerified = liq.verified;
         flags.LP_LOCKED = liq.lpLocked;
         flags.LP_BURNED = liq.lpBurned;
-        flags.LOW_LIQUIDITY = liq.liquiditySol < RISK_CONFIG.detection.minLiquiditySol;
+        flags.LOW_LIQUIDITY = liq.verified && liq.liquiditySol < RISK_CONFIG.detection.minLiquiditySol;
         logger.debug(`[RiskEngine] Liquidity check: score+${liq.score} (${liq.liquiditySol.toFixed(2)} SOL)`);
     } else {
         logger.error(`[RiskEngine] Liquidity check falhou: ${liqRes.reason.message}`);
@@ -135,9 +137,11 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
         reasons.push(...holder.reasons);
         metrics.totalHolders = holder.totalHolders;
         metrics.top10Percent = holder.top10Percent;
+        metrics.holderSource = holder.source;
+        metrics.holderDataReliable = holder.reliable;
         metrics.devWalletPercent = holder.devWalletPercent;
-        flags.TOP_HOLDERS_HIGH = holder.top10Percent > RISK_CONFIG.detection.top10MaxPercent;
-        flags.DEV_WALLET_HIGH = holder.devWalletPercent > RISK_CONFIG.detection.devMaxPercent;
+        flags.TOP_HOLDERS_HIGH = holder.reliable && holder.top10Percent > RISK_CONFIG.detection.top10MaxPercent;
+        flags.DEV_WALLET_HIGH = holder.reliable && holder.devWalletPercent > RISK_CONFIG.detection.devMaxPercent;
         flags.CLUSTERING = holder.clustering;
         logger.debug(`[RiskEngine] Holder check: score+${holder.score} (holders=${holder.totalHolders})`);
     } else {
@@ -158,7 +162,9 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
 
     if (moralisRes.status === "fulfilled" && moralisRes.value) {
         const moralis = moralisRes.value;
-        metrics.totalHolders = metrics.totalHolders || moralis.totalHolders;
+        if (!metrics.holderDataReliable || metrics.totalHolders <= 0) {
+            metrics.totalHolders = moralis.totalHolders;
+        }
         metrics.priceUsd = moralis.priceUsd;
         logger.debug(`[RiskEngine] Moralis check: holders=${moralis.totalHolders}, price=${moralis.priceUsd}`);
     }
@@ -170,6 +176,7 @@ export async function analyzeToken(tokenAddr: string, cachedMetadata?: TokenMeta
         const tradingResult = await checkTradingSanity(tokenAddr, metrics.totalHolders, tokenMetadata);
         totalScore += tradingResult.score;
         reasons.push(...tradingResult.reasons);
+        metrics.volumeH1 = tradingResult.volumeH1;
         metrics.buySellRatio = tradingResult.buySellRatio;
         metrics.priceImpactPercent = tradingResult.priceImpactPercent;
         flags.VOLUME_FAKE = tradingResult.volumeToHoldersRatio > RISK_CONFIG.detection.volumeToHoldersThreshold;
@@ -295,7 +302,9 @@ export function formatRiskForTelegram(analysis: RiskAnalysis): string {
     // Build metrics string
     const lpStr = metrics.liquiditySol > 0
         ? `${metrics.liquiditySol.toFixed(1)} SOL`
-        : "N/A";
+        : metrics.liquiditySource === "PUMPFUN_CURVE"
+            ? "Curve/N.A."
+            : "N/A";
     const lmStr = metrics.liquidityToMcap > 0
         ? metrics.liquidityToMcap.toFixed(3)
         : "N/A";
@@ -305,7 +314,12 @@ export function formatRiskForTelegram(analysis: RiskAnalysis): string {
     let msg = `\n${riskEmoji} <b>Risk: ${score}/100 (${riskLabel})</b>\n`;
     msg += `🔒 Flags: ${flagParts.join(" | ")}\n`;
     msg += `💧 LP: ${lpStr} | L/M: ${lmStr} | Age: ${ageStr}\n`;
-    msg += `👥 Holders: ${metrics.totalHolders} | Top10: ${metrics.top10Percent.toFixed(1)}%`;
+    msg += `👥 Holders: ${metrics.totalHolders}`;
+    if (metrics.holderDataReliable) {
+        msg += ` | Top10: ${metrics.top10Percent.toFixed(1)}%`;
+    } else if (metrics.holderSource && metrics.holderSource !== "UNKNOWN") {
+        msg += ` | Top10: N/A (${metrics.holderSource})`;
+    }
     if (metrics.devWalletPercent > 0) {
         msg += ` | Dev: ${metrics.devWalletPercent.toFixed(1)}%`;
     }

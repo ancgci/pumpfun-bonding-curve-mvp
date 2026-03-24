@@ -7,10 +7,18 @@ export interface HolderAnalysisResult {
     totalHolders: number;
     top10Percent: number;
     devWalletPercent: number;
+    source: "OWNER_AGGREGATED_API" | "TOKEN_ACCOUNTS_RPC" | "UNKNOWN";
+    reliable: boolean;
     clustering: "LIKELY" | "POSSIBLE" | "NO";
     clusterDetails: string[];
     score: number;
     reasons: RiskReason[];
+}
+
+interface HolderFetchResult {
+    holders: any[];
+    source: HolderAnalysisResult["source"];
+    ownerAggregated: boolean;
 }
 
 /**
@@ -25,6 +33,8 @@ export async function analyzeHolders(
         totalHolders: 0,
         top10Percent: 0,
         devWalletPercent: 0,
+        source: "UNKNOWN",
+        reliable: false,
         clustering: "NO",
         clusterDetails: [],
         score: 0,
@@ -33,14 +43,17 @@ export async function analyzeHolders(
 
     try {
         // Fetch top holders from Helius DAS API (more detailed than Shyft)
-        const holders = await fetchTopHolders(tokenAddr);
+        const holderData = await fetchTopHolders(tokenAddr);
+        const holders = holderData.holders;
+        result.source = holderData.source;
+        result.reliable = holderData.ownerAggregated;
 
         if (!holders || holders.length === 0) {
             logger.debug(`⚠️  [RiskEngine/Holders] Sem dados de holders para ${tokenAddr}`);
             return result;
         }
 
-        result.totalHolders = holders.length;
+        result.totalHolders = holderData.ownerAggregated ? holders.length : 0;
 
         // Calculate total supply from all holders
         const totalSupply = holders.reduce((sum: number, h: any) => sum + (h.amount || 0), 0);
@@ -50,9 +63,10 @@ export async function analyzeHolders(
         // ── Top-10 Concentration ──
         const top10 = holders.slice(0, 10);
         const top10Amount = top10.reduce((sum: number, h: any) => sum + (h.amount || 0), 0);
-        result.top10Percent = (top10Amount / totalSupply) * 100;
+        const computedTop10Percent = (top10Amount / totalSupply) * 100;
+        result.top10Percent = holderData.ownerAggregated ? computedTop10Percent : 0;
 
-        if (result.top10Percent > RISK_CONFIG.detection.top10MaxPercent) {
+        if (holderData.ownerAggregated && result.top10Percent > RISK_CONFIG.detection.top10MaxPercent) {
             result.score += RISK_CONFIG.weights.top10Concentration;
             result.reasons.push({
                 filter: "TOP10_CONCENTRATION",
@@ -62,7 +76,7 @@ export async function analyzeHolders(
         }
 
         // ── Dev Wallet Check ──
-        if (creatorAddr) {
+        if (creatorAddr && holderData.ownerAggregated) {
             const devHolder = holders.find((h: any) => h.address === creatorAddr);
             if (devHolder) {
                 result.devWalletPercent = (devHolder.amount / totalSupply) * 100;
@@ -79,24 +93,32 @@ export async function analyzeHolders(
         }
 
         // ── Cluster Detection (heuristic) ──
-        const clusterResult = detectClusters(holders, top10);
-        result.clustering = clusterResult.clustering;
-        result.clusterDetails = clusterResult.details;
+        if (holderData.ownerAggregated) {
+            const clusterResult = detectClusters(holders, top10);
+            result.clustering = clusterResult.clustering;
+            result.clusterDetails = clusterResult.details;
 
-        if (clusterResult.clustering === "LIKELY") {
-            result.score += RISK_CONFIG.weights.clustering;
+            if (clusterResult.clustering === "LIKELY") {
+                result.score += RISK_CONFIG.weights.clustering;
+                result.reasons.push({
+                    filter: "CLUSTERING_LIKELY",
+                    impact: RISK_CONFIG.weights.clustering,
+                    detail: `Possível bundling detectado: ${clusterResult.details.join("; ")}`,
+                });
+            } else if (clusterResult.clustering === "POSSIBLE") {
+                const partialPenalty = Math.floor(RISK_CONFIG.weights.clustering / 2);
+                result.score += partialPenalty;
+                result.reasons.push({
+                    filter: "CLUSTERING_POSSIBLE",
+                    impact: partialPenalty,
+                    detail: `Padrão de clustering possível: ${clusterResult.details.join("; ")}`,
+                });
+            }
+        } else {
             result.reasons.push({
-                filter: "CLUSTERING_LIKELY",
-                impact: RISK_CONFIG.weights.clustering,
-                detail: `Possível bundling detectado: ${clusterResult.details.join("; ")}`,
-            });
-        } else if (clusterResult.clustering === "POSSIBLE") {
-            const partialPenalty = Math.floor(RISK_CONFIG.weights.clustering / 2);
-            result.score += partialPenalty;
-            result.reasons.push({
-                filter: "CLUSTERING_POSSIBLE",
-                impact: partialPenalty,
-                detail: `Padrão de clustering possível: ${clusterResult.details.join("; ")}`,
+                filter: "HOLDER_CONCENTRATION_UNVERIFIED",
+                impact: 0,
+                detail: "Concentração de holders não verificada por owner agregado; dados de top holders foram ignorados",
             });
         }
     } catch (error: any) {
@@ -109,7 +131,7 @@ export async function analyzeHolders(
 /**
  * Fetch top token holders using available RPC providers (Shyft, Helius, or Standard RPC).
  */
-async function fetchTopHolders(tokenAddr: string): Promise<any[]> {
+async function fetchTopHolders(tokenAddr: string): Promise<HolderFetchResult> {
     const endpoints = [
         process.env.SHYFT_RPC,
         process.env.RPC_URL,
@@ -138,10 +160,14 @@ async function fetchTopHolders(tokenAddr: string): Promise<any[]> {
                 );
 
                 if (response.data?.success && response.data?.result) {
-                    return response.data.result.map((h: any) => ({
-                        address: h.owner || h.address,
-                        amount: parseFloat(h.balance || h.amount || "0"),
-                    }));
+                    return {
+                        source: "OWNER_AGGREGATED_API",
+                        ownerAggregated: true,
+                        holders: response.data.result.map((h: any) => ({
+                            address: h.owner || h.address,
+                            amount: parseFloat(h.balance || h.amount || "0"),
+                        })),
+                    };
                 }
             } else {
                 // Standard RPC or Helius
@@ -155,10 +181,14 @@ async function fetchTopHolders(tokenAddr: string): Promise<any[]> {
                 }, { timeout: 5000 });
 
                 if (response.data?.result?.value) {
-                    return response.data.result.value.map((h: any) => ({
-                        address: h.address,
-                        amount: parseFloat(h.uiAmount || h.amount || "0"),
-                    }));
+                    return {
+                        source: "TOKEN_ACCOUNTS_RPC",
+                        ownerAggregated: false,
+                        holders: response.data.result.value.map((h: any) => ({
+                            address: h.address,
+                            amount: parseFloat(h.uiAmount || h.amount || "0"),
+                        })),
+                    };
                 }
             }
         } catch (err: any) {
@@ -167,7 +197,11 @@ async function fetchTopHolders(tokenAddr: string): Promise<any[]> {
     }
 
     logger.warn(`❌ [RiskEngine/Holders] Todos os provedores falharam para ${tokenAddr}`);
-    return [];
+    return {
+        holders: [],
+        source: "UNKNOWN",
+        ownerAggregated: false,
+    };
 }
 
 /**

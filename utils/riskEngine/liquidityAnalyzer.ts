@@ -6,11 +6,67 @@ export interface LiquidityAnalysisResult {
     liquiditySol: number;
     liquidityUsd: number;
     liquidityToMcap: number;
+    source: "PUMPFUN_CURVE" | "DEX_LP" | "UNKNOWN";
+    verified: boolean;
     lpLocked: boolean;
     lpBurned: boolean;
     lpConcentrationPercent: number;
     score: number;
     reasons: RiskReason[];
+}
+
+export function resolveLiquidityObservation(params: {
+    liquidityUsd?: number | null;
+    marketCap?: number | null;
+    price?: number | null;
+    liquiditySource?: "pumpfun" | "dexscreener" | null;
+    isPumpFunPreGraduation?: boolean;
+}): {
+    liquidityUsd: number;
+    liquiditySol: number;
+    liquidityToMcap: number;
+    source: LiquidityAnalysisResult["source"];
+    verified: boolean;
+    shouldApplyLowLiquidityPenalty: boolean;
+} {
+    const {
+        liquidityUsd,
+        marketCap,
+        price,
+        liquiditySource,
+        isPumpFunPreGraduation = false,
+    } = params;
+
+    const normalizedLiquidityUsd = typeof liquidityUsd === "number" && isFinite(liquidityUsd) ? liquidityUsd : 0;
+    const source =
+        liquiditySource === "pumpfun"
+            ? "PUMPFUN_CURVE"
+            : liquiditySource === "dexscreener"
+                ? "DEX_LP"
+                : (isPumpFunPreGraduation ? "PUMPFUN_CURVE" : "UNKNOWN");
+    const verified = normalizedLiquidityUsd > 0;
+    const referenceSolPrice =
+        typeof marketCap === "number" &&
+        marketCap > 0 &&
+        typeof price === "number" &&
+        price > 0
+            ? Math.max(1, marketCap / Math.max(1, price * 1e9))
+            : 150;
+    const liquiditySol = verified ? normalizedLiquidityUsd / referenceSolPrice : 0;
+    const liquidityToMcap =
+        verified && typeof marketCap === "number" && marketCap > 0
+            ? normalizedLiquidityUsd / marketCap
+            : 0;
+    const shouldApplyLowLiquidityPenalty = verified && (!isPumpFunPreGraduation || source === "DEX_LP");
+
+    return {
+        liquidityUsd: normalizedLiquidityUsd,
+        liquiditySol,
+        liquidityToMcap,
+        source,
+        verified,
+        shouldApplyLowLiquidityPenalty,
+    };
 }
 
 /**
@@ -26,6 +82,8 @@ export async function analyzeLiquidity(
         liquiditySol: 0,
         liquidityUsd: 0,
         liquidityToMcap: 0,
+        source: "UNKNOWN",
+        verified: false,
         lpLocked: false,
         lpBurned: false,
         lpConcentrationPercent: 0,
@@ -36,12 +94,24 @@ export async function analyzeLiquidity(
     try {
         // Use existing metadata if available, otherwise fetch from DexScreener
         let dexData = existingMetadata;
-        if (!dexData || !dexData.liquidity) {
+        if (!dexData || dexData.liquidity == null) {
             dexData = await fetchDexScreenerMetadata(tokenAddr);
         }
 
         if (!dexData) {
             logger.debug(`⚠️  [RiskEngine/Liquidity] Sem dados de liquidez para ${tokenAddr}`);
+            if (isPumpFunPreGraduation) {
+                result.source = "PUMPFUN_CURVE";
+                result.verified = false;
+                result.lpLocked = true;
+                result.lpBurned = false;
+                result.reasons.push({
+                    filter: "PUMPFUN_CURVE_LIQUIDITY_UNVERIFIED",
+                    impact: 0,
+                    detail: "Liquidez LP tradicional não se aplica ou não pôde ser verificada em Pump.fun pré-graduação",
+                });
+                return result;
+            }
             // No data = can't verify = mild penalty
             result.score += Math.floor(RISK_CONFIG.weights.lowLiquidity / 2);
             result.reasons.push({
@@ -52,27 +122,32 @@ export async function analyzeLiquidity(
             return result;
         }
 
-        // Extract liquidity values
-        result.liquidityUsd = dexData.liquidity || 0;
-        // Approximate SOL from USD (rough estimate, or use priceNative if available)
-        // DexScreener provides liquidity in USD
-        const solPrice = dexData.price && dexData.marketCap
-            ? dexData.marketCap / (dexData.price * 1e9) // rough estimate
-            : 150; // fallback SOL price estimate
-        result.liquiditySol = result.liquidityUsd / solPrice;
-
-        // Liquidity-to-MarketCap ratio
-        if (dexData.marketCap && dexData.marketCap > 0) {
-            result.liquidityToMcap = result.liquidityUsd / dexData.marketCap;
-        }
+        const observation = resolveLiquidityObservation({
+            liquidityUsd: dexData.liquidity,
+            marketCap: dexData.marketCap,
+            price: dexData.price,
+            liquiditySource: dexData.liquiditySource ?? null,
+            isPumpFunPreGraduation,
+        });
+        result.liquidityUsd = observation.liquidityUsd;
+        result.liquiditySol = observation.liquiditySol;
+        result.liquidityToMcap = observation.liquidityToMcap;
+        result.source = observation.source;
+        result.verified = observation.verified;
 
         // ── Check: Low Liquidity ──
-        if (result.liquiditySol < RISK_CONFIG.detection.minLiquiditySol) {
+        if (observation.shouldApplyLowLiquidityPenalty && result.liquiditySol < RISK_CONFIG.detection.minLiquiditySol) {
             result.score += RISK_CONFIG.weights.lowLiquidity;
             result.reasons.push({
                 filter: "LOW_LIQUIDITY",
                 impact: RISK_CONFIG.weights.lowLiquidity,
                 detail: `Liquidez baixa: ${result.liquiditySol.toFixed(2)} SOL (mín: ${RISK_CONFIG.detection.minLiquiditySol} SOL)`,
+            });
+        } else if (isPumpFunPreGraduation && !observation.verified) {
+            result.reasons.push({
+                filter: "PUMPFUN_CURVE_LIQUIDITY_UNVERIFIED",
+                impact: 0,
+                detail: "Liquidez LP tradicional não se aplica ou não pôde ser verificada em Pump.fun pré-graduação",
             });
         }
 

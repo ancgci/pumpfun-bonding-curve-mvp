@@ -14,6 +14,7 @@ import { getOrganicityWindowData, computeTop1WalletShare } from "./organicityMon
 import { calculateOrganicityScore } from "./organicityScore";
 import { SHADOW_MODE } from "./organicityShadowLogger";
 import logger from "./logger";
+import { getRecentPeriods1s } from "./volatilityMonitor";
 
 // ============================================================
 // CONFIGURAÇÃO
@@ -25,6 +26,7 @@ export interface MicroConfirmationConfig {
     maxPriceAdvancePct: number;          // avanço máximo de preço na janela (default: 3.0)
     maxNewWalletSharePct: number;        // concentração explosiva de nova wallet (default: 60)
     minTradeActivity: number;            // mínimo de trades no período para confirmar atividade (default: 1)
+    minFollowThroughPct: number;         // follow-through mínimo na janela (default: 0)
 }
 
 export const DEFAULT_MICRO_CONFIRM_CONFIG: MicroConfirmationConfig = {
@@ -34,6 +36,7 @@ export const DEFAULT_MICRO_CONFIRM_CONFIG: MicroConfirmationConfig = {
     maxPriceAdvancePct: 3.0,
     maxNewWalletSharePct: 75,
     minTradeActivity: 1,
+    minFollowThroughPct: 0,
 };
 
 // ============================================================
@@ -54,7 +57,15 @@ export async function runMicroConfirmation(
     cfg: MicroConfirmationConfig = DEFAULT_MICRO_CONFIRM_CONFIG
 ): Promise<MicroConfirmResult> {
     const t0 = performance.now();
-    const startPrice = prices.length > 0 ? prices[prices.length - 1] : 0;
+    const readLivePrices = () => {
+        const recentPeriods = getRecentPeriods1s(mint, Math.max(12, prices.length || 0));
+        return recentPeriods.map((period) => period.close);
+    };
+    const initialLivePrices = readLivePrices();
+    const startPrice = initialLivePrices.length > 0
+        ? initialLivePrices[initialLivePrices.length - 1]
+        : (prices.length > 0 ? prices[prices.length - 1] : 0);
+    let highestObservedPrice = startPrice;
 
     const history = getOrganicityWindowData(mint);
     if (!history) {
@@ -63,7 +74,8 @@ export async function runMicroConfirmation(
     }
 
     // Score inicial (snapshot do início da janela)
-    const initialResult = calculateOrganicityScore(history, prices, bondingCurvePercent);
+    const initialPrices = initialLivePrices.length > 0 ? initialLivePrices : prices;
+    const initialResult = calculateOrganicityScore(history, initialPrices, bondingCurvePercent);
     const initialScore = initialResult.organicMarketScore;
 
     const checks = Math.floor(cfg.windowMs / cfg.intervalMs);
@@ -73,6 +85,12 @@ export async function runMicroConfirmation(
 
         const h = getOrganicityWindowData(mint);
         if (!h) continue;
+        const livePrices = readLivePrices();
+        const currentPrices = livePrices.length > 0 ? livePrices : prices;
+        const currentPrice = currentPrices.length > 0 ? currentPrices[currentPrices.length - 1] : startPrice;
+        if (currentPrice > highestObservedPrice) {
+            highestObservedPrice = currentPrice;
+        }
 
         // Verificar atividade mínima
         if (h.trades_5s.length < cfg.minTradeActivity && i >= 2) {
@@ -82,7 +100,7 @@ export async function runMicroConfirmation(
         }
 
         // Verificar deterioração do score orgânico
-        const currentResult = calculateOrganicityScore(h, prices, bondingCurvePercent);
+        const currentResult = calculateOrganicityScore(h, currentPrices, bondingCurvePercent);
         const scoreDrop = initialScore - currentResult.organicMarketScore;
         if (scoreDrop > cfg.maxOrganicScoreDrop) {
             const msg = `OrganicScore caiu ${scoreDrop.toFixed(0)} pts durante janela (${initialScore} → ${currentResult.organicMarketScore})`;
@@ -99,8 +117,7 @@ export async function runMicroConfirmation(
         }
 
         // Verificar avanço de preço excessivo durante a janela (já esticou)
-        if (startPrice > 0 && prices.length > 0) {
-            const currentPrice = prices[prices.length - 1];
+        if (startPrice > 0 && currentPrices.length > 0) {
             const advance = ((currentPrice - startPrice) / startPrice) * 100;
             if (advance > cfg.maxPriceAdvancePct) {
                 const msg = `Preço avançou ${advance.toFixed(1)}% durante janela de confirmação (max ${cfg.maxPriceAdvancePct}%)`;
@@ -110,10 +127,20 @@ export async function runMicroConfirmation(
         }
     }
 
+    if (cfg.minFollowThroughPct > 0 && startPrice > 0) {
+        const followThroughPct = ((highestObservedPrice - startPrice) / startPrice) * 100;
+        if (followThroughPct < cfg.minFollowThroughPct) {
+            const msg = `Follow-through insuficiente durante microjanela (${followThroughPct.toFixed(1)}% < ${cfg.minFollowThroughPct.toFixed(1)}%)`;
+            logger.warn(`⏱️ [MicroConfirm] ${symbol} FALHOU: ${msg}`);
+            return { passed: false, reason: msg, code: "MC_NO_FOLLOW_THROUGH", latencyMs: performance.now() - t0 };
+        }
+    }
+
     // ✅ Passou em todos os checks
-    const finalResult = calculateOrganicityScore(history, prices, bondingCurvePercent);
+    const finalPrices = readLivePrices();
+    const finalResult = calculateOrganicityScore(history, finalPrices.length > 0 ? finalPrices : prices, bondingCurvePercent);
     const latencyMs = performance.now() - t0;
-    logger.info(`✅ [MicroConfirm] ${symbol} CONFIRMADO (score=${finalResult.organicMarketScore} → ${finalResult.organicMarketScore}, ${latencyMs.toFixed(0)}ms total)`);
+    logger.info(`✅ [MicroConfirm] ${symbol} CONFIRMADO (score=${initialScore} → ${finalResult.organicMarketScore}, ${latencyMs.toFixed(0)}ms total)`);
     return { passed: true, finalScore: finalResult.organicMarketScore, latencyMs };
 }
 
