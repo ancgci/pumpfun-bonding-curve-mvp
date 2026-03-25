@@ -43,6 +43,7 @@ import { RISK_CONFIG } from "./utils/riskConfig";
 import logger from "./utils/logger";
 import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
 import { dipMonitor } from "./utils/dipMonitor";
+import { winnerReentryAgent } from "./utils/winnerReentryAgent";
 import { circuitBreaker } from "./utils/circuitBreaker";
 import {
   BOT_HEARTBEAT_INTERVAL_MS,
@@ -197,6 +198,26 @@ dipMonitor.initialize(async (mint: string, token) => {
     await executeHybridTrade(tokenData, "BUY", true);
   } catch (err: any) {
     logger.error(`❌ Dip Sniper failed to execute trade: ${err.message}`);
+  }
+});
+
+winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
+  logger.info(
+    `🧠 [index.ts] Winner Reentry executing BUY for ${candidate.mint} ` +
+    `(priority=${candidate.priorityScore.toFixed(1)}, force=${force === true})`
+  );
+  const tokenData: TokenData = {
+    mint: candidate.mint,
+    bondingCurve: "",
+    curvePercent: candidate.bondingCurvePercent || 0,
+    isLaunched: false,
+    mode: "REENTRY",
+  };
+
+  try {
+    await executeHybridTrade(tokenData, "BUY", force === true, buyAmountSol);
+  } catch (err: any) {
+    logger.error(`❌ Winner Reentry failed to execute trade: ${err.message}`);
   }
 });
 
@@ -2582,9 +2603,14 @@ function getWorkerIntervalMs(envVar: string, fallbackMs: number): number {
 
 const POSTMORTEM_INTERVAL_MS = getWorkerIntervalMs("POSTMORTEM_INTERVAL_MS", 5 * 60 * 1000);
 const LEARNER_INTERVAL_MS = getWorkerIntervalMs("LEARNER_INTERVAL_MS", 60 * 60 * 1000);
+const WINNER_REENTRY_DISCOVERY_INTERVAL_MS = getWorkerIntervalMs(
+  "WINNER_REENTRY_DISCOVERY_INTERVAL_MS",
+  CONFIG.WINNER_REENTRY_DISCOVERY_INTERVAL_MS || 2 * 60 * 1000
+);
 
 logger.info(
-  `🧠 [LearningWorkers] Configured post-mortem interval=${POSTMORTEM_INTERVAL_MS}ms learner interval=${LEARNER_INTERVAL_MS}ms`
+  `🧠 [LearningWorkers] Configured post-mortem interval=${POSTMORTEM_INTERVAL_MS}ms ` +
+  `learner interval=${LEARNER_INTERVAL_MS}ms winner-reentry interval=${WINNER_REENTRY_DISCOVERY_INTERVAL_MS}ms`
 );
 
 // Post-mortem worker: runs frequently to drain losing-trade backlog.
@@ -2605,6 +2631,14 @@ setInterval(async () => {
   }
 }, LEARNER_INTERVAL_MS);
 
+setInterval(async () => {
+  try {
+    await winnerReentryAgent.runDiscoveryCycle();
+  } catch (error: any) {
+    logger.error(`❌ [WinnerReentryWorker] Cycle error: ${error.message}`);
+  }
+}, WINNER_REENTRY_DISCOVERY_INTERVAL_MS);
+
 // Run first post-mortem pass shortly after boot so backlog starts draining immediately.
 setTimeout(async () => {
   try {
@@ -2622,6 +2656,14 @@ setTimeout(async () => {
     logger.error(`❌ [LearnerWorker] Initial cycle error: ${error.message}`);
   }
 }, 60000);
+
+setTimeout(async () => {
+  try {
+    await winnerReentryAgent.runDiscoveryCycle();
+  } catch (error: any) {
+    logger.error(`❌ [WinnerReentryWorker] Initial cycle error: ${error.message}`);
+  }
+}, 45000);
 
 // Testar o envio imediatamente ao iniciar
 setTimeout(async () => {

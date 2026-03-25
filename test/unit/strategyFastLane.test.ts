@@ -128,4 +128,39 @@ describe("strategyFastLane", () => {
     expect(signal.positionCap).toBeLessThan(1);
     expect(signal.reason).toContain("FAST_LANE_INSUFFICIENT_DATA_SOFT");
   });
+
+  it("approves compact PumpFun launch breakouts without waiting for mature EMA/MACD confirmation", () => {
+    const signal = evaluateFastLaneSignal({
+      mint: "mint",
+      symbol: "TEST",
+      taSnapshot: makeSnapshot({
+        candlesAvailable1s: 2,
+        emaAligned: false,
+        macd: null,
+        rsi: null,
+        rsiSlope: 0,
+        priceAboveVWAP: true,
+        distVWAPPct: 1.1,
+        volumeRelative: {
+          ratio: 1.3,
+          currentVol: 130,
+          avgVol: 100,
+          isBurst: false,
+          isSpike: false,
+        },
+        microTrend: { changePct: 1.2, samples: 8 },
+      }),
+      taScore: 72,
+      riskScore: 8,
+      liquiditySol: 0,
+      buyCount: 10,
+      sellCount: 7,
+      protocol: "pumpfun",
+      bondingCurvePercent: 94.6,
+    });
+
+    expect(signal.verdict).toBe("BUY");
+    expect(signal.blocking).toBe(false);
+    expect(signal.reason).toContain("FAST_LANE_COMPACT");
+  });
 });

@@ -6,14 +6,19 @@
 - **Unified LLM Gateway**: New `utils/llmGateway.ts` standardizes provider routing, structured outputs, tool-call telemetry and task-specific fallback handling for agent, learner and post-mortem flows.
 - **Fast Lane + Portfolio Governor + Execution Preflight**: New local deterministic layer inspired by `go-trader` and `Hummingbot`, implemented in `utils/strategyFastLane.ts`, `utils/portfolioGovernor.ts` and `utils/executionPreflight.ts`, with targeted unit coverage.
 - **Probe Quality Governor**: New local guard in `utils/probeQualityGovernor.ts` to reduce or recheck fragile `PROBE` setups after recurring weak post-mortems and to reject suspicious `price x marketCap` ticks during monitoring.
+- **Winner Reentry Agent**: New async worker in `utils/winnerReentryAgent.ts` that scans recent `CLOSED_TP` trades, keeps only top reentry candidates in a bounded queue and re-runs them through the main decision pipeline.
+- **Pipeline 3 Technical Analysis Doc**: Added `docs/PIPELINE_3_TECHNICAL_ANALYSIS.md` documenting every item evaluated in Step 3 and adopting `21/03/2026 10:04` as the operational comparison baseline for future regressions.
 
 ### Changed
+ - **PumpFun Near-Migration Scalper Mode**: Step 3 now has a compact launch-scoring path for `pumpfun` tokens between `90%` and `<100%` of the bonding curve, prioritizing `microTrend`, `VWAP`, `volume` and minimal candle count instead of waiting for mature EMA/MACD confluence.
+ - **Technical Redundancy Reduction**: `entryBlocker`, `Fast Lane`, post-LLM score rechecks and `Micro-Confirm` now operate with lighter, lower-latency rules in the same PumpFun near-migration regime, reducing missed launch breakouts caused by repeated slow confirmations.
 - **Technical Entry Logic**: Converted several non-structural technical vetoes into penalties and soft pressure instead of hard invalidation.
 - **Execution Sizing**: Final buy size is now the minimum of confidence sizing, technical sizing and adaptive profile cap.
 - **Execution Funnel**: Added deterministic gating before and after the LLM, plus portfolio-aware preflight checks before any simulated or live capital allocation.
 - **Fragile Probe Handling**: Near-migration PumpFun `PROBE` entries with `LOW_DATA`, `taScore` near zero and only 1 candle now operate with smaller size, short follow-through validation and temporary cooldown when recent post-mortems repeat `WEAK_MOMENTUM` or `NO_FOLLOW_THROUGH`.
 - **Micro-Confirm**: The micro-confirmation window now reads live `1s` candles during the wait window and can fail with `MC_NO_FOLLOW_THROUGH` instead of approving stale single-candle momentum.
 - **Micro-Waitlist Governor (MICRO_RECHECK)**: Added a short, capped micro-waitlist (8-15s) inside `DipMonitorService` for near-execution rechecks. It enforces explicit eligibility, hard caps (`MICRO_WAITLIST_MAX_TOKENS`), priority ordering/eviction, dedupe-by-mint, min-delay and short TTL, and is currently used by `probe_loss_pressure` and `MC_NO_FOLLOW_THROUGH` paths.
+- **Async Winner Reentry Governance**: Reentries in recent winners now use a dedicated queue with cap, eviction by priority, cooldown per mint, TTL and a maximum number of reentries per mint before another attempt is allowed.
 - **Simulation Monitoring**: Early-stage simulation monitoring now polls faster, arms break-even earlier and ignores incoherent feed ticks before updating P&L or firing TP/SL.
 - **Post-Mortem Context**: Simulation trade context now persists `rawConfidence`, `effectiveConfidence`, `entryProfile`, `positionMultiplier`, `entryAmount` and related governance metadata.
 - **AI Agents**: `agentOrchestrator`, `learnerAgent` and `postMortemAgent` now share the same structured LLM layer; Google paths can use tool calling while the legacy provider remains available as fallback.

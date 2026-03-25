@@ -56,7 +56,9 @@ function buildOrganicitySnapshot(mint: string, curvePercent: number, closes1s: n
 function buildSnapshot(input: TradeSnapshotInput): TradeMarketSnapshot {
   const taConfig = getTAConfig();
   const taSnapshot = input.taSnapshot || getTASnapshotV2(input.mint, taConfig);
-  const scoreResult = calculateConfluenceScore(taSnapshot, taConfig);
+  const scoreResult = calculateConfluenceScore(taSnapshot, taConfig, {
+    bondingCurvePercent: input.bondingCurvePercent,
+  });
   const candles1s = getRecentPeriods1s(input.mint, 120);
   const closes1s = candles1s.map(candle => candle.close);
   const curvePercent = input.bondingCurvePercent || 0;

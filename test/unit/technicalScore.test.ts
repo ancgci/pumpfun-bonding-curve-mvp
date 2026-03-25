@@ -33,16 +33,18 @@ function makeSnapshot(overrides: Partial<TASnapshotV2> = {}): TASnapshotV2 {
   };
 }
 
-describe("technical score classification", () => {
-  test("classifies low-data snapshots separately from weak setups", () => {
+describe("technical score", () => {
+  test("keeps single-candle snapshots as insufficient-data regime without hard invalidation", () => {
     const result = calculateConfluenceScore(makeSnapshot(), DEFAULT_TA_CONFIG);
 
     expect(result.score).toBe(0);
+    expect(result.invalidated).toBe(false);
+    expect(result.regime).toBe("INSUFFICIENT_DATA");
     expect(result.classification).toBe("LOW_DATA");
-    expect(result.classificationReason).toContain("candles=1/3");
+    expect(result.mode).toBe("FULL");
   });
 
-  test("classifies mature zero-score snapshots as weak setups", () => {
+  test("keeps mature weak snapshots as low score without structural invalidation", () => {
     const result = calculateConfluenceScore(
       makeSnapshot({
         candlesAvailable1s: 5,
@@ -66,15 +68,63 @@ describe("technical score classification", () => {
     );
 
     expect(result.score).toBe(0);
+    expect(result.invalidated).toBe(false);
+    expect(result.regime).toBe("BEARISH");
     expect(result.classification).toBe("WEAK_SETUP");
-    expect(result.classificationReason).toContain("below_vwap");
   });
 
-  test("includes classification in formatted score logs", () => {
+  test("formats legacy score log output without classification fields", () => {
     const result = calculateConfluenceScore(makeSnapshot(), DEFAULT_TA_CONFIG);
     const formatted = formatScoreLog(result);
 
-    expect(formatted).toContain("Status: LOW_DATA");
-    expect(formatted).toContain("CLASSIFICAÇÃO: LOW_DATA");
+    expect(formatted).toContain("Score: 0/100");
+    expect(formatted).toContain("Regime: INSUFFICIENT_DATA");
+    expect(formatted).toContain("Class: LOW_DATA");
+    expect(formatted).toContain("Mode: FULL");
+  });
+
+  test("keeps 1-candle PumpFun launches without flow as low data", () => {
+    const result = calculateConfluenceScore(
+      makeSnapshot({
+        candlesAvailable1s: 1,
+        priceAboveVWAP: false,
+        volumeRelative: null,
+        microTrend: null,
+      }),
+      DEFAULT_TA_CONFIG,
+      { protocol: "pumpfun", bondingCurvePercent: 92 }
+    );
+
+    expect(result.mode).toBe("PUMPFUN_COMPACT");
+    expect(result.classification).toBe("LOW_DATA");
+    expect(result.regime).toBe("INSUFFICIENT_DATA");
+    expect(result.score).toBe(0);
+  });
+
+  test("uses compact PumpFun scoring to validate launch momentum early", () => {
+    const result = calculateConfluenceScore(
+      makeSnapshot({
+        candlesAvailable1s: 1,
+        priceAboveVWAP: true,
+        volumeRelative: {
+          ratio: 1.2,
+          currentVol: 120,
+          avgVol: 100,
+          isBurst: false,
+          isSpike: false,
+        },
+        microTrend: {
+          changePct: 0.6,
+          samples: 3,
+        },
+      }),
+      DEFAULT_TA_CONFIG,
+      { protocol: "pumpfun", bondingCurvePercent: 92 }
+    );
+
+    expect(result.mode).toBe("PUMPFUN_COMPACT");
+    expect(result.classification).toBe("VALID");
+    expect(result.regime).toBe("BULLISH");
+    expect(result.score).toBeGreaterThanOrEqual(20);
   });
 });

@@ -4,18 +4,6 @@ import { TASnapshotV2 } from "./volatilityMonitor";
 
 export type AdaptiveEntryResolution = "ALLOW" | "RECHECK" | "BLOCK";
 
-export interface AdaptiveLaunchContext {
-  protocol?: string | null;
-  bondingCurvePercent?: number | null;
-  riskScore?: number | null;
-  volumeH1?: number | null;
-  liquidityVerified?: boolean | null;
-  liquiditySource?: string | null;
-  liquiditySol?: number | null;
-  buyCount?: number | null;
-  sellCount?: number | null;
-}
-
 export interface AdaptiveEntryProfile {
   resolution: AdaptiveEntryResolution;
   reason: string;
@@ -31,37 +19,6 @@ export interface AdaptiveEntryProfile {
   confirmationSignals: number;
 }
 
-export function shouldForceLaunchProbeOnScoreTimeout(params: {
-  agentMode?: string | null;
-  decisionConfidence: number;
-  baseMinConfidence: number;
-  snap: TASnapshotV2;
-  execScore: ScoreResult;
-  config: TechnicalAnalysisConfig;
-  launchContext?: AdaptiveLaunchContext;
-}): boolean {
-  const { agentMode, decisionConfidence, baseMinConfidence, snap, execScore, config, launchContext } = params;
-  const normalizedMode = String(agentMode || "").toUpperCase();
-  const normalizedProtocol = String(launchContext?.protocol || "").toLowerCase();
-  const bondingCurvePercent = Number(launchContext?.bondingCurvePercent ?? 0);
-  const riskScore = Number(launchContext?.riskScore ?? Number.POSITIVE_INFINITY);
-  const volumeH1 = Number(launchContext?.volumeH1 ?? 0);
-
-  return (
-    normalizedMode === "SIMULATION" &&
-    config.scoreMinimo <= 5 &&
-    normalizedProtocol === "pumpfun" &&
-    bondingCurvePercent >= 92 &&
-    bondingCurvePercent < 100 &&
-    riskScore <= 25 &&
-    snap.candlesAvailable1s >= 1 &&
-    !execScore.invalidated &&
-    execScore.classification === "LOW_DATA" &&
-    decisionConfidence >= Math.max(70, baseMinConfidence + 10) &&
-    (volumeH1 >= 250 || decisionConfidence >= 78)
-  );
-}
-
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -73,11 +30,27 @@ export function assessAdaptiveEntryProfile(params: {
   execScore: ScoreResult;
   blockPressure: number;
   config: TechnicalAnalysisConfig;
-  launchContext?: AdaptiveLaunchContext;
+  protocol?: string | null;
+  bondingCurvePercent?: number | null;
 }): AdaptiveEntryProfile {
-  const { decisionConfidence, baseMinConfidence, snap, execScore, blockPressure, config, launchContext } = params;
+  const {
+    decisionConfidence,
+    baseMinConfidence,
+    snap,
+    execScore,
+    blockPressure,
+    config,
+    protocol,
+    bondingCurvePercent,
+  } = params;
   const earlyEntryCandles = Math.max(2, Math.min(3, config.sustainCandles || 2));
   const fullEntryCandles = Math.max(3, config.sustainCandles || 3);
+  const normalizedProtocol = String(protocol || "pumpfun").toLowerCase();
+  const isPumpfunMigrationWindow =
+    normalizedProtocol === "pumpfun" &&
+    typeof bondingCurvePercent === "number" &&
+    bondingCurvePercent >= 90 &&
+    bondingCurvePercent <= 100;
   const hasVolumeData = snap.volumeRelative !== null;
   const hasStrongVolume = (snap.volumeRelative?.ratio ?? 0) >= config.volumeRelativeMin;
   const hasMomentumSignal =
@@ -144,47 +117,9 @@ export function assessAdaptiveEntryProfile(params: {
   requiredConfidence = clampNumber(requiredConfidence, 50, 92);
 
   const isUltraAggressive = config.scoreMinimo <= 5;
-  const normalizedProtocol = String(launchContext?.protocol || "").toLowerCase();
-  const bondingCurvePercent = Number(launchContext?.bondingCurvePercent ?? 0);
-  const isNearPumpFunMigration =
-    normalizedProtocol === "pumpfun" &&
-    bondingCurvePercent >= 92 &&
-    bondingCurvePercent < 100;
-  const lowRiskLaunch = (launchContext?.riskScore ?? Number.POSITIVE_INFINITY) <= 15;
-  const highH1Volume = (launchContext?.volumeH1 ?? 0) >= 250;
-  const buyFlowPositive =
-    (launchContext?.buyCount ?? 0) > 0 &&
-    (launchContext?.buyCount ?? 0) >= (launchContext?.sellCount ?? 0);
-  const normalizedLiquiditySource = String(launchContext?.liquiditySource || "").toUpperCase();
-  const isUnverifiedPumpFunCurveContext =
-    launchContext?.liquidityVerified !== true &&
-    normalizedProtocol === "pumpfun" &&
-    bondingCurvePercent > 0 &&
-    bondingCurvePercent < 100 &&
-    (normalizedLiquiditySource === "PUMPFUN_CURVE" ||
-      normalizedLiquiditySource === "UNKNOWN" ||
-      normalizedLiquiditySource === "");
-  const hasTradableLiquidityContext =
-    launchContext?.liquidityVerified === true
-      ? (launchContext?.liquiditySol ?? 0) >= 2
-      : isUnverifiedPumpFunCurveContext;
   const minEntryScore = Math.max(isUltraAggressive ? 14 : config.scoreMinimo, dataQualityScore < 60 ? 18 : 12);
   const reducedEntryScore = Math.max(8, minEntryScore - Math.max(4, Math.floor(config.taScoreRecheckBuffer / 2)));
   const probeEntryScore = Math.max(5, reducedEntryScore - Math.max(4, config.taScoreRecheckBuffer));
-  const fragileProbePositionCap =
-    snap.candlesAvailable1s <= 1 && execScore.score < 10
-      ? 0.2
-      : 0.35;
-  const launchProbeEligible =
-    isUltraAggressive &&
-    isNearPumpFunMigration &&
-    lowRiskLaunch &&
-    highH1Volume &&
-    hasTradableLiquidityContext &&
-    snap.candlesAvailable1s >= 1 &&
-    blockPressure < config.entryBlockFatalPressure &&
-    decisionConfidence >= Math.max(baseMinConfidence + 10, 70) &&
-    (hasMomentumSignal || buyFlowPositive || execScore.classification === "LOW_DATA");
 
   const hasMinimalConfirmation =
     snap.candlesAvailable1s >= earlyEntryCandles &&
@@ -195,9 +130,47 @@ export function assessAdaptiveEntryProfile(params: {
     confirmationSignals >= 4 &&
     hasVolumeData &&
     hasSlowSignal;
+  const launchProbeMomentum =
+    snap.priceAboveVWAP ||
+    snap.donchian?.breakoutUp === true ||
+    (snap.microTrend?.changePct ?? 0) >= Math.max(0.1, config.minFollowThroughPct * 0.5) ||
+    (snap.volumeRelative?.ratio ?? 0) >= Math.max(1.05, config.volumeRelativeMin * 0.8);
+  const launchProbeLowDataGrace =
+    snap.candlesAvailable1s <= 1 &&
+    snap.volumeRelative === null &&
+    snap.microTrend === null;
+  const launchProbeWeakness =
+    !snap.priceAboveVWAP &&
+    (snap.microTrend?.changePct ?? 0) <= -0.2 &&
+    (snap.volumeRelative?.ratio ?? 0) < 1;
+  const launchProbeMinConfidence = Math.max(baseMinConfidence, 72);
+  const canAllowNearMigrationProbe =
+    isPumpfunMigrationWindow &&
+    snap.candlesAvailable1s >= 1 &&
+    (launchProbeMomentum || launchProbeLowDataGrace) &&
+    !launchProbeWeakness &&
+    blockPressure < config.entryBlockFatalPressure &&
+    decisionConfidence >= launchProbeMinConfidence;
 
   if (execScore.invalidated) {
     const reason = execScore.invalidReason || "TA_INVALID";
+    if (canAllowNearMigrationProbe && reason.includes("INSUFFICIENT_DATA")) {
+      return {
+        resolution: "ALLOW",
+        reason: `ADAPTIVE_ALLOW_LAUNCH_PROBE:${reason}`,
+        profile: "PROBE",
+        dataQualityScore,
+        effectiveConfidence,
+        confidenceCap,
+        requiredConfidence,
+        minEntryScore,
+        reducedEntryScore,
+        probeEntryScore,
+        positionCap: 0.35,
+        confirmationSignals,
+      };
+    }
+
     return {
       resolution: reason.includes("INSUFFICIENT_DATA") ? "RECHECK" : "BLOCK",
       reason,
@@ -214,19 +187,23 @@ export function assessAdaptiveEntryProfile(params: {
     };
   }
 
-  if (launchProbeEligible) {
+  if (
+    canAllowNearMigrationProbe &&
+    execScore.score >= 0 &&
+    effectiveConfidence >= Math.max(70, launchProbeMinConfidence - 2)
+  ) {
     return {
       resolution: "ALLOW",
-      reason: `ADAPTIVE_ALLOW_LAUNCH_PROBE:${bondingCurvePercent.toFixed(1)}%`,
+      reason: `ADAPTIVE_ALLOW_LAUNCH_PROBE:${execScore.score}/${probeEntryScore}`,
       profile: "PROBE",
-      dataQualityScore: Math.max(dataQualityScore, 40),
-      effectiveConfidence: Math.max(effectiveConfidence, Math.min(90, decisionConfidence)),
-      confidenceCap: Math.max(confidenceCap, Math.min(90, decisionConfidence)),
-      requiredConfidence: Math.min(requiredConfidence, Math.max(72, baseMinConfidence)),
+      dataQualityScore,
+      effectiveConfidence,
+      confidenceCap,
+      requiredConfidence,
       minEntryScore,
       reducedEntryScore,
       probeEntryScore,
-      positionCap: fragileProbePositionCap,
+      positionCap: 0.35,
       confirmationSignals,
     };
   }
@@ -243,7 +220,7 @@ export function assessAdaptiveEntryProfile(params: {
       minEntryScore,
       reducedEntryScore,
       probeEntryScore,
-      positionCap: fragileProbePositionCap,
+      positionCap: 0.35,
       confirmationSignals,
     };
   }
@@ -294,7 +271,7 @@ export function assessAdaptiveEntryProfile(params: {
       minEntryScore,
       reducedEntryScore,
       probeEntryScore,
-      positionCap: fragileProbePositionCap,
+      positionCap: 0.35,
       confirmationSignals,
     };
   }
@@ -310,7 +287,7 @@ export function assessAdaptiveEntryProfile(params: {
     minEntryScore,
     reducedEntryScore,
     probeEntryScore,
-    positionCap: fragileProbePositionCap,
+    positionCap: 0.35,
     confirmationSignals,
   };
 }

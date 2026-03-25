@@ -493,6 +493,130 @@ MICRO_WAITLIST_MAX_AGE_MS=15000
 > [!NOTE]
 > A micro-waitlist foi desenhada para não saturar o bot: ela exige `eligibleForMicroWaitlist=true`, deduplica por mint, prioriza por score e, com backlog cheio, rejeita itens fracos ou pode expulsar o pior item quando chega um candidato melhor.
 
+## Winner Reentry Agent
+
+Worker assíncrono para reavaliar tokens que tiveram `CLOSED_TP` recente e ainda parecem aptos para uma segunda entrada.
+
+Ele não executa compra cega. O fluxo é:
+- lê vencedores recentes da simulação;
+- aplica filtro mínimo de qualidade e recência;
+- coloca só os melhores numa fila curta;
+- reavalia o mint pelo mesmo pipeline principal (`getAgentDecision` + `executeAgentTrade`);
+- aplica cooldown por mint e limite de reentradas para não saturar o bot.
+
+### `WINNER_REENTRY_AGENT_ENABLED`
+Ativa o worker de reentrada de winners.
+
+**Padrão:** `false`
+
+```bash
+WINNER_REENTRY_AGENT_ENABLED=true
+```
+
+---
+
+### `WINNER_REENTRY_DISCOVERY_INTERVAL_MS`
+Intervalo do ciclo que procura novos winners elegíveis.
+
+**Padrão:** `120000`
+
+```bash
+WINNER_REENTRY_DISCOVERY_INTERVAL_MS=120000
+```
+
+---
+
+### `WINNER_REENTRY_SCAN_INTERVAL_MS`
+Intervalo de varredura da fila curta de reentrada.
+
+**Padrão:** `4000`
+
+```bash
+WINNER_REENTRY_SCAN_INTERVAL_MS=4000
+```
+
+---
+
+### `WINNER_REENTRY_LOOKBACK_MS`
+Janela máxima de recência do trade vencedor para virar candidato.
+
+**Padrão:** `1800000` (30 minutos)
+
+```bash
+WINNER_REENTRY_LOOKBACK_MS=1800000
+```
+
+---
+
+### `WINNER_REENTRY_MAX_TOKENS`
+Máximo de mints simultâneos na fila de reentrada.
+
+**Padrão:** `4`
+
+```bash
+WINNER_REENTRY_MAX_TOKENS=4
+```
+
+---
+
+### `WINNER_REENTRY_MIN_DELAY_MS`
+Espera mínima antes de reavaliar um winner recém-fechado.
+
+**Padrão:** `10000`
+
+```bash
+WINNER_REENTRY_MIN_DELAY_MS=10000
+```
+
+---
+
+### `WINNER_REENTRY_MAX_AGE_MS`
+TTL máximo de cada candidato na fila de reentrada.
+
+**Padrão:** `900000` (15 minutos)
+
+```bash
+WINNER_REENTRY_MAX_AGE_MS=900000
+```
+
+---
+
+### `WINNER_REENTRY_PER_MINT_COOLDOWN_MS`
+Cooldown aplicado por mint após uma tentativa de reentrada.
+
+**Padrão:** `900000` (15 minutos)
+
+```bash
+WINNER_REENTRY_PER_MINT_COOLDOWN_MS=900000
+```
+
+---
+
+### `WINNER_REENTRY_MAX_REENTRIES_PER_MINT`
+Máximo de tentativas de reentrada por mint dentro da janela de cooldown.
+
+**Padrão:** `1`
+
+```bash
+WINNER_REENTRY_MAX_REENTRIES_PER_MINT=1
+```
+
+---
+
+### `WINNER_REENTRY_MIN_PNL_PERCENT`
+P&L percentual mínimo para um `CLOSED_TP` recente entrar no radar do worker.
+
+**Padrão:** `35`
+
+```bash
+WINNER_REENTRY_MIN_PNL_PERCENT=35
+```
+
+---
+
+> [!NOTE]
+> O worker usa fila curta com cap, eviction por prioridade, dedupe por mint, TTL, cooldown e reavaliação completa pelo pipeline principal. A intenção é explorar winners recentes sem abrir um segundo canal de execução sem governança.
+
 ## Camada LLM
 
 ### `LLM_PROVIDER_ORDER`
@@ -926,6 +1050,18 @@ DIP_WAITLIST_MAX_AGE_MS=300000
 MICRO_WAITLIST_MAX_TOKENS=8
 MICRO_WAITLIST_MIN_DELAY_MS=8000
 MICRO_WAITLIST_MAX_AGE_MS=15000
+
+# === Winner Reentry Agent ===
+WINNER_REENTRY_AGENT_ENABLED=false
+WINNER_REENTRY_DISCOVERY_INTERVAL_MS=120000
+WINNER_REENTRY_SCAN_INTERVAL_MS=4000
+WINNER_REENTRY_LOOKBACK_MS=1800000
+WINNER_REENTRY_MAX_TOKENS=4
+WINNER_REENTRY_MIN_DELAY_MS=10000
+WINNER_REENTRY_MAX_AGE_MS=900000
+WINNER_REENTRY_PER_MINT_COOLDOWN_MS=900000
+WINNER_REENTRY_MAX_REENTRIES_PER_MINT=1
+WINNER_REENTRY_MIN_PNL_PERCENT=35
 
 # === Circuit Breaker ===
 CB_MAX_DAILY_LOSS_SOL=1.0

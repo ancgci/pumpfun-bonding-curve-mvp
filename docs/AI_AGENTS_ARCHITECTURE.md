@@ -4,6 +4,8 @@ Este documento descreve o ecossistema de agentes inteligentes que compõem o mot
 
 Além do pipeline online, o bot agora possui um **ciclo offline de feedback** para trades perdedores. Esse fluxo roda fora do caminho crítico, reconstrói o contexto do trade e alimenta o aprendizado contínuo sem impactar a latência operacional.
 
+Em paralelo, o bot também pode ativar um **worker assíncrono de reentrada em winners recentes**. Esse worker não compra direto por memória de sucesso: ele monta uma fila curta de candidatos e reaplica o mesmo pipeline principal antes de qualquer nova entrada.
+
 ## 🔄 Fluxo de Execução (Pipeline 8/8)
 
 Para cada token detectado via gRPC, o bot percorre as seguintes fases:
@@ -33,8 +35,9 @@ graph TD
 
 ### 3. Technical Analysis V2 (Pipeline 3/8)
 *   **Log**: `📊 [Pipeline 3/8 - Technical Analysis]`
-*   **Função**: Coleta de indicadores avançados (RSI, MACD, EMA) para enriquecer o contexto da IA.
-*   **Veredito**: APROVADO (Score > 55) ou ANALISADO (Informação Pura).
+*   **Função**: Coleta snapshot técnico de 1s e aplica score em dois regimes: completo para contextos gerais e compacto para `pumpfun` near-migration.
+*   **Veredito**: `VALID`, `LOW_DATA` ou `WEAK_SETUP`, com peso maior em `microTrend`, `VWAP` e `volume` no modo compacto.
+*   **Detalhamento**: ver [Pipeline 3/8 - Technical Analysis](PIPELINE_3_TECHNICAL_ANALYSIS.md)
 
 ### 4. AI Agent Orchestration (Pipeline 4/8)
 *   **Log**: `🧠 [Pipeline 4/8 - AI Agent]`
@@ -44,6 +47,7 @@ graph TD
 ### 5. Hard Blocks Validation (Pipeline 5/8)
 *   **Log**: `🛡️ [Pipeline 5/8 - Hard Blocks]`
 *   **Função**: Re-validação imediata pós-LLM. Como a IA demora ~2-4s, este estágio garante que o token não se tornou um "scam" ou atingiu limites de segurança nesse intervalo.
+*   **Observação**: no regime compacto PumpFun launch, os bloqueios lentos e redundantes foram reduzidos para não sabotar setups claramente scalper.
 
 ### 6. Organicity Protocol (Pipeline 6/8)
 *   **Log**: `🧬 [Pipeline 6/8 - Organicity]`
@@ -51,7 +55,8 @@ graph TD
 
 ### 7. Micro-Confirmation (Pipeline 7/8)
 *   **Log**: `⏱️ [Pipeline 7/8 - Micro-Confirm]`
-*   **Função**: Uma janela de observação final (3-8s) observando a saúde do token. Essencial para evitar "Dev Dumps" de lançamento.
+*   **Função**: Uma janela de observação final observando a saúde do token. Essencial para evitar "Dev Dumps" de lançamento.
+*   **Observação**: agora usa configuração adaptativa. Em `pumpfun` near-migration, a janela é mais curta; fora desse regime, probes frágeis continuam usando confirmação mais conservadora.
 
 ### 8. Execution & Sizing (Pipeline 8/8)
 *   **Log**: `🚀 [Pipeline 8/8 - Execution]`
@@ -70,6 +75,9 @@ graph TD
     C --> D[LearnerAgent]
     D --> E[data/agent/patterns.json]
     E --> F[Prompt Injection no Pipeline 4/8]
+    B --> G[WinnerReentryAgent]
+    G --> H[Fila curta de reentrada]
+    H --> I[Reavaliacao pelo pipeline principal]
 ```
 
 ### PostMortemAgent
@@ -82,10 +90,18 @@ graph TD
 *   **Função**: Consome os post-mortems gerados, sintetiza aprendizados recorrentes e injeta regras no prompt do agente principal.
 *   **Observação**: O `PostMortemAgent` roda primeiro; o `LearnerAgent` usa essa análise enriquecida para produzir regras melhores.
 
+### WinnerReentryAgent
+*   **Log**: `🧠 [WinnerReentryAgent]`
+*   **Função**: Observa trades `CLOSED_TP` recentes, seleciona winners elegíveis para segunda entrada e coloca só os melhores em uma fila curta.
+*   **Guardrails**: cap de fila, dedupe por mint, TTL, cooldown por mint e limite de reentradas.
+*   **Observação**: Ele não executa compra cega; o mint volta a passar por `getAgentDecision()` e `executeAgentTrade()`.
+
 ---
 
 ## 🔗 Veja Também
 - [Configuração de Estratégia](SCALPER_STRATEGY_OPTIMIZATION.md)
 - [Proteção contra Manipulação](ORGANICITY_PROTECTION.md)
 - [Documentação Técnica do AI Agent](AI_AGENT.md)
+- [Pipeline 3/8 - Technical Analysis](PIPELINE_3_TECHNICAL_ANALYSIS.md)
 - [Implementação do Loss Post-Mortem Agent](LOSS_POSTMORTEM_AGENT.md)
+- [Winner Reentry Agent](WINNER_REENTRY_AGENT.md)

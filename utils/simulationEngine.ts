@@ -714,6 +714,62 @@ export function getRecentTrades(limit: number = 20): SimulatedTrade[] {
   return [];
 }
 
+export function getRecentWinningTrades(options?: { limit?: number; lookbackMs?: number }): SimulatedTrade[] {
+  const limit = Math.max(1, Number(options?.limit ?? 20));
+  const lookbackMs = Number(options?.lookbackMs ?? 0);
+  const minExitTime = lookbackMs > 0 ? Date.now() - lookbackMs : 0;
+
+  try {
+    const rows = db.prepare(`
+      SELECT
+        token_mint as tokenMint,
+        token_symbol as tokenSymbol,
+        entry_time as entryTime,
+        entry_price as entryPrice,
+        entry_amount as entryAmount,
+        exit_time as exitTime,
+        exit_price as exitPrice,
+        pnl_sol as pnl,
+        pnl_percent as pnlPercent,
+        confidence,
+        status,
+        reason,
+        token_holders as tokenHolders,
+        market_cap_entry as marketCapEntry,
+        market_cap_exit as marketCapExit,
+        decision_context as decisionContext,
+        entry_snapshot as entrySnapshot,
+        exit_snapshot as exitSnapshot,
+        monitoring_trace as monitoringTrace,
+        postmortem_status as postMortemStatus,
+        postmortem_summary as postMortemSummary,
+        postmortem_report as postMortemReport,
+        postmortem_analyzed_at as postMortemAnalyzedAt
+      FROM simulated_trades
+      WHERE status = 'CLOSED_TP'
+        AND pnl_sol > 0
+        AND (? = 0 OR COALESCE(exit_time, entry_time) >= ?)
+      ORDER BY COALESCE(exit_time, entry_time) DESC
+      LIMIT ?
+    `).all(minExitTime, minExitTime, limit) as any[];
+
+    if (rows.length > 0) {
+      return rows.map(normalizeTradeRow);
+    }
+  } catch (error) {
+    logger.error(`Error fetching recent winning trades from DB:`, error);
+  }
+
+  return loadSimulationTrades()
+    .filter((trade) =>
+      trade.status === "CLOSED_TP" &&
+      trade.pnl > 0 &&
+      (minExitTime <= 0 || Number(trade.exitTime || trade.entryTime || 0) >= minExitTime)
+    )
+    .slice(-limit)
+    .reverse();
+}
+
 /**
  * Check if simulation is ready for live trading
  * Criteria:

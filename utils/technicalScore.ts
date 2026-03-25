@@ -1,6 +1,14 @@
 import { TechnicalAnalysisConfig, DEFAULT_TA_CONFIG } from "./technicalConfig";
 import { TASnapshotV2 } from "./volatilityMonitor";
 
+export type ScoreClassification = "VALID" | "LOW_DATA" | "WEAK_SETUP" | "EARLY_MOMENTUM";
+export type ScoreMode = "FULL" | "PUMPFUN_COMPACT";
+
+export interface ScoreContext {
+    protocol?: string | null;
+    bondingCurvePercent?: number | null;
+}
+
 // ============================================================
 // RESULTADO DO SCORE
 // ============================================================
@@ -44,10 +52,11 @@ export interface ScoreResult {
     breakdown: ScoreBreakdown;
     invalidated: boolean;
     invalidReason?: string;
-    classification: "VALID" | "LOW_DATA" | "WEAK_SETUP";
-    classificationReason: string;
     sizing: number; // 0.5, 0.75 ou 1.0 baseado no score
     regime: "BULLISH" | "NEUTRAL" | "BEARISH" | "INSUFFICIENT_DATA";
+    classification: ScoreClassification;
+    classificationReason: string;
+    mode: ScoreMode;
 }
 
 // ============================================================
@@ -55,8 +64,11 @@ export interface ScoreResult {
 // ============================================================
 export function calculateConfluenceScore(
     snap: TASnapshotV2,
-    config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
+    config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG,
+    context: ScoreContext = {}
 ): ScoreResult {
+    const mode = resolveScoreMode(context);
+
     // Guard: ausência total de dados segue como invalidação estrutural.
     if (snap.candlesAvailable1s < 1) {
         return {
@@ -64,11 +76,16 @@ export function calculateConfluenceScore(
             breakdown: makeEmptyBreakdown(),
             invalidated: true,
             invalidReason: `INSUFFICIENT_DATA: 0 candles de 1s disponíveis`,
-            classification: "LOW_DATA",
-            classificationReason: "LOW_DATA:0/1 candles_1s",
             sizing: 0,
             regime: "INSUFFICIENT_DATA",
+            classification: "LOW_DATA",
+            classificationReason: "Sem candles de 1s disponíveis",
+            mode,
         };
+    }
+
+    if (mode === "PUMPFUN_COMPACT") {
+        return calculatePumpfunCompactScore(snap, config, mode, context);
     }
 
     const bd: ScoreBreakdown = makeEmptyBreakdown();
@@ -229,33 +246,18 @@ export function calculateConfluenceScore(
     else if (snap.emaAligned && snap.priceAboveVWAP && snap.macd?.histogram !== undefined && snap.macd.histogram > 0) regime = "BULLISH";
     else if (!snap.emaAligned && !snap.priceAboveVWAP) regime = "BEARISH";
 
-    let classification: ScoreResult["classification"] = "VALID";
-    let classificationReason = `VALID:${regime}`;
-    if (snap.candlesAvailable1s < preferredCandles || regime === "INSUFFICIENT_DATA") {
-        const lowDataReasons = [`candles=${snap.candlesAvailable1s}/${preferredCandles}`];
-        if (snap.volumeRelative === null) lowDataReasons.push("volume_baseline_missing");
-        if (snap.microTrend === null) lowDataReasons.push("microtrend_missing");
-        classification = "LOW_DATA";
-        classificationReason = `LOW_DATA:${lowDataReasons.join(",")}`;
-    } else if (score === 0) {
-        const setupReasons: string[] = [];
-        if (!snap.priceAboveVWAP) setupReasons.push("below_vwap");
-        if ((snap.macd?.histogram ?? 0) <= 0) setupReasons.push("macd_non_positive");
-        if ((snap.rsi ?? 0) < config.rsiBullishMin) setupReasons.push("rsi_below_bull_zone");
-        if (!snap.donchian?.breakoutUp) setupReasons.push("no_breakout");
-        classification = "WEAK_SETUP";
-        classificationReason = `WEAK_SETUP:${setupReasons.join(",") || "no_positive_confluence"}`;
-    }
+    const classification = classifyFullScore(score, regime, snap, config);
 
     return {
         score,
         breakdown: bd,
         invalidated: invalidReason !== undefined,
         invalidReason,
-        classification,
-        classificationReason,
         sizing,
         regime,
+        classification: classification.classification,
+        classificationReason: classification.reason,
+        mode,
     };
 }
 
@@ -292,16 +294,138 @@ function makeEmptyBreakdown(): ScoreBreakdown {
 // ============================================================
 export function formatScoreLog(result: ScoreResult): string {
     if (result.invalidated) {
-        return `🚫 SCORE INVALIDADO: ${result.invalidReason} | Status: ${result.classification}`;
+        return `🚫 SCORE INVALIDADO: ${result.invalidReason}`;
     }
     const b = result.breakdown;
     return [
-        `📊 Score: ${result.score}/100 | Sizing: ${(result.sizing * 100).toFixed(0)}% | Regime: ${result.regime} | Status: ${result.classification}`,
-        `  CLASSIFICAÇÃO: ${result.classificationReason}`,
+        `📊 Score: ${result.score}/100 | Sizing: ${(result.sizing * 100).toFixed(0)}% | Regime: ${result.regime} | Class: ${result.classification} | Mode: ${result.mode}`,
         `  T1(trend): EMA=${b.emaAligned} slp=${b.emaSlope}/${b.emaSlopeAccelerating} sprd=${b.emaSpreadOpening} vwap=${b.priceAboveVWAP}`,
         `  T2(impulso): MACD=${b.macdHistPositive}/${b.macdHistAccelerating} zero=${b.macdNearZeroBonus} RSI=${b.rsiInBullZone}/${b.rsiSlopePositive} ROC=${b.rocPositiveAndGrowing}`,
         `  T3(confirm): VOL=${b.volumeBurst}/${b.volumeBurstExtra} DCH=${b.donchianBreakout} ATR=${b.atrHealthy}`,
         `  BÔNUS: micro=${b.microTrendPositive}`,
         `  PENALIDADES: vwap=${b.vwapDistancePenalty} rsi=${b.rsiOverboughtPenalty} macdDecel=${b.macdDecelPenalty} candles=${b.limitedCandlesPenalty} volume=${b.missingVolumePenalty} follow=${b.weakFollowThroughPenalty} confirm=${b.thinConfirmationPenalty}`,
     ].join("\n");
+}
+
+function resolveScoreMode(context: ScoreContext): ScoreMode {
+    const protocol = String(context.protocol || "").toLowerCase();
+    return protocol === "pumpfun" ? "PUMPFUN_COMPACT" : "FULL";
+}
+
+function classifyFullScore(
+    score: number,
+    regime: ScoreResult["regime"],
+    snap: TASnapshotV2,
+    config: TechnicalAnalysisConfig
+): { classification: ScoreClassification; reason: string } {
+    if (regime === "INSUFFICIENT_DATA" || snap.candlesAvailable1s < 3) {
+        return { classification: "LOW_DATA", reason: "Poucos candles para confirmação completa" };
+    }
+    if (score >= config.scoreMinimo) {
+        return { classification: "VALID", reason: "Confluência completa suficiente" };
+    }
+    return { classification: "WEAK_SETUP", reason: "Confluência fraca para mercado maduro" };
+}
+
+function calculatePumpfunCompactScore(
+    snap: TASnapshotV2,
+    config: TechnicalAnalysisConfig,
+    mode: ScoreMode,
+    context: ScoreContext
+): ScoreResult {
+    const bd = makeEmptyBreakdown();
+    const volumeRatio = snap.volumeRelative?.ratio ?? null;
+    const microTrendPct = snap.microTrend?.changePct ?? null;
+    const trendChange = snap.trend?.changePct ?? null;
+    const bondingCurvePercent = typeof context.bondingCurvePercent === "number" ? context.bondingCurvePercent : null;
+    const hasPositiveFlow =
+        snap.priceAboveVWAP ||
+        (microTrendPct ?? 0) >= 0.5 ||
+        (trendChange ?? 0) > 0 ||
+        (volumeRatio ?? 0) >= 1.05 ||
+        snap.volumeRelative?.isBurst === true;
+    const hasWeakness =
+        !snap.priceAboveVWAP &&
+        (microTrendPct ?? 0) <= -0.5 &&
+        (volumeRatio ?? 0) < 1 &&
+        (trendChange ?? 0) <= 0;
+
+    if (snap.priceAboveVWAP) {
+        bd.priceAboveVWAP = 15;
+    }
+
+    if (trendChange !== null && trendChange > 0) {
+        bd.emaSlope = 6;
+    }
+
+    if (snap.volumeRelative !== null) {
+        if (snap.volumeRelative.ratio >= 1.05) bd.volumeBurst = 12;
+        if (snap.volumeRelative.isBurst) bd.volumeBurstExtra = 4;
+    }
+
+    if (microTrendPct !== null) {
+        if (microTrendPct >= 2.0) bd.microTrendPositive = 32;
+        else if (microTrendPct >= 1.0) bd.microTrendPositive = 28;
+        else if (microTrendPct >= 0.5) bd.microTrendPositive = 20;
+    }
+
+    if (bondingCurvePercent !== null && bondingCurvePercent >= 85 && hasPositiveFlow) {
+        bd.emaSpreadOpening = 6;
+    }
+
+    if (microTrendPct !== null && microTrendPct <= -0.5) {
+        bd.weakFollowThroughPenalty = -8;
+    } else if (microTrendPct !== null && microTrendPct <= -0.1) {
+        bd.weakFollowThroughPenalty = -3;
+    }
+
+    if (snap.distVWAPPct !== null && Math.abs(snap.distVWAPPct) > 8) {
+        bd.vwapDistancePenalty = -4;
+    }
+
+    if (snap.rsi !== null && snap.rsi > 92) {
+        bd.rsiOverboughtPenalty = -6;
+    }
+
+    const total = Object.values(bd).reduce((sum, v) => sum + v, 0);
+    const score = Math.max(0, Math.min(100, total));
+
+    let sizing = 0.5;
+    if (score >= 25) sizing = 0.75;
+    if (score >= 45) sizing = 1.0;
+
+    let regime: ScoreResult["regime"] = "NEUTRAL";
+    if (snap.candlesAvailable1s < 1) regime = "INSUFFICIENT_DATA";
+    else if (snap.candlesAvailable1s === 1 && !hasPositiveFlow) regime = "INSUFFICIENT_DATA";
+    else if (hasPositiveFlow && !hasWeakness) regime = "BULLISH";
+    else if (hasWeakness) regime = "BEARISH";
+
+    let classification: ScoreClassification = "WEAK_SETUP";
+    let classificationReason = "Sem sinais curtos suficientes para PumpFun";
+
+    if (snap.candlesAvailable1s < 1 || (snap.candlesAvailable1s === 1 && !hasPositiveFlow)) {
+        classification = "LOW_DATA";
+        classificationReason = "Launch novo sem confirmação mínima de fluxo";
+    } else if (hasWeakness) {
+        classification = "WEAK_SETUP";
+        classificationReason = "PumpFun sem follow-through, abaixo da VWAP ou perdendo fluxo";
+    } else if (hasPositiveFlow && score >= 20) {
+        classification = "VALID";
+        classificationReason = "PumpFun com VWAP, micro-momentum e fluxo curto suficientes para scalper";
+    } else if (hasPositiveFlow && score >= 10) {
+        classification = "EARLY_MOMENTUM";
+        classificationReason = "Momentum inicial detectado antes da confirmação completa do launch";
+    }
+
+    return {
+        score,
+        breakdown: bd,
+        invalidated: false,
+        invalidReason: undefined,
+        sizing,
+        regime,
+        classification,
+        classificationReason,
+        mode,
+    };
 }

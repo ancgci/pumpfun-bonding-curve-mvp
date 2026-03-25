@@ -179,6 +179,16 @@ export const CONFIG = {
   MICRO_WAITLIST_MAX_TOKENS: parseInt(process.env.MICRO_WAITLIST_MAX_TOKENS || "8"),
   MICRO_WAITLIST_MIN_DELAY_MS: parseInt(process.env.MICRO_WAITLIST_MIN_DELAY_MS || "8000"),
   MICRO_WAITLIST_MAX_AGE_MS: parseInt(process.env.MICRO_WAITLIST_MAX_AGE_MS || "15000"),
+  WINNER_REENTRY_AGENT_ENABLED: process.env.WINNER_REENTRY_AGENT_ENABLED === "true",
+  WINNER_REENTRY_DISCOVERY_INTERVAL_MS: parseInt(process.env.WINNER_REENTRY_DISCOVERY_INTERVAL_MS || "120000"),
+  WINNER_REENTRY_SCAN_INTERVAL_MS: parseInt(process.env.WINNER_REENTRY_SCAN_INTERVAL_MS || "4000"),
+  WINNER_REENTRY_LOOKBACK_MS: parseInt(process.env.WINNER_REENTRY_LOOKBACK_MS || "1800000"),
+  WINNER_REENTRY_MAX_TOKENS: parseInt(process.env.WINNER_REENTRY_MAX_TOKENS || "4"),
+  WINNER_REENTRY_MIN_DELAY_MS: parseInt(process.env.WINNER_REENTRY_MIN_DELAY_MS || "10000"),
+  WINNER_REENTRY_MAX_AGE_MS: parseInt(process.env.WINNER_REENTRY_MAX_AGE_MS || "900000"),
+  WINNER_REENTRY_PER_MINT_COOLDOWN_MS: parseInt(process.env.WINNER_REENTRY_PER_MINT_COOLDOWN_MS || "900000"),
+  WINNER_REENTRY_MAX_REENTRIES_PER_MINT: parseInt(process.env.WINNER_REENTRY_MAX_REENTRIES_PER_MINT || "1"),
+  WINNER_REENTRY_MIN_PNL_PERCENT: parseFloat(process.env.WINNER_REENTRY_MIN_PNL_PERCENT || "35"),
 };
 
 /**
@@ -224,6 +234,18 @@ export function getRuntimeConfig() {
     if (saved.microWaitlistMaxTokens !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MAX_TOKENS = saved.microWaitlistMaxTokens;
     if (saved.microWaitlistMinDelayMs !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MIN_DELAY_MS = saved.microWaitlistMinDelayMs;
     if (saved.microWaitlistMaxAgeMs !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MAX_AGE_MS = saved.microWaitlistMaxAgeMs;
+    if (saved.winnerReentryAgentEnabled !== undefined) (runtimeConfig as any).WINNER_REENTRY_AGENT_ENABLED = saved.winnerReentryAgentEnabled;
+    if (saved.winnerReentryDiscoveryIntervalMs !== undefined) (runtimeConfig as any).WINNER_REENTRY_DISCOVERY_INTERVAL_MS = saved.winnerReentryDiscoveryIntervalMs;
+    if (saved.winnerReentryScanIntervalMs !== undefined) (runtimeConfig as any).WINNER_REENTRY_SCAN_INTERVAL_MS = saved.winnerReentryScanIntervalMs;
+    if (saved.winnerReentryLookbackMs !== undefined) (runtimeConfig as any).WINNER_REENTRY_LOOKBACK_MS = saved.winnerReentryLookbackMs;
+    if (saved.winnerReentryMaxTokens !== undefined) (runtimeConfig as any).WINNER_REENTRY_MAX_TOKENS = saved.winnerReentryMaxTokens;
+    if (saved.winnerReentryMinDelayMs !== undefined) (runtimeConfig as any).WINNER_REENTRY_MIN_DELAY_MS = saved.winnerReentryMinDelayMs;
+    if (saved.winnerReentryMaxAgeMs !== undefined) (runtimeConfig as any).WINNER_REENTRY_MAX_AGE_MS = saved.winnerReentryMaxAgeMs;
+    if (saved.winnerReentryPerMintCooldownMs !== undefined) (runtimeConfig as any).WINNER_REENTRY_PER_MINT_COOLDOWN_MS = saved.winnerReentryPerMintCooldownMs;
+    if (saved.winnerReentryMaxReentriesPerMint !== undefined) {
+      (runtimeConfig as any).WINNER_REENTRY_MAX_REENTRIES_PER_MINT = saved.winnerReentryMaxReentriesPerMint;
+    }
+    if (saved.winnerReentryMinPnlPercent !== undefined) (runtimeConfig as any).WINNER_REENTRY_MIN_PNL_PERCENT = saved.winnerReentryMinPnlPercent;
     if (saved.copyTradeEnabled !== undefined) runtimeConfig.COPY_TRADE_ENABLED = saved.copyTradeEnabled;
     if (saved.copyTradeAmountSol !== undefined) runtimeConfig.COPY_TRADE_AMOUNT_SOL = saved.copyTradeAmountSol;
     if (saved.followWallets !== undefined) {

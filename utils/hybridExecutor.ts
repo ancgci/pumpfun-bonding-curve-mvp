@@ -52,7 +52,7 @@ export interface TokenData {
   creatorWallet?: string;
   curvePercent: number;
   isLaunched: boolean;
-  mode: "CURVE" | "DEX";
+  mode: "CURVE" | "DEX" | "REENTRY";
 }
 
 export type { Position } from "./positionManager";
@@ -743,7 +743,8 @@ export async function executeHybridTrade(
       }
 
       const isDiscoveryBuy = tokenData.mode === "CURVE" && tokenData.curvePercent >= 97.7;
-      if (isDiscoveryBuy || force) {
+      const isReentryBuy = tokenData.mode === "REENTRY";
+      if (isDiscoveryBuy || isReentryBuy || force) {
         if (SINGLE_TRADE_MODE && hasActiveTrade() && !force) {
           logger.info(`⚠️  Trade único habilitado e já existe uma posição aberta.`);
           return;

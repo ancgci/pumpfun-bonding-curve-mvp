@@ -116,6 +116,57 @@ GOOGLE_GENERATIVE_AI_API_KEY=<preencher apenas se o fallback Gemini for desejado
 
 Esse checklist existe porque a combinação errada entre modelo, rota e provider legado pode gerar `404` e fazer o bot cair em `SKIP` para todos os tokens mesmo com o processo em execução.
 
+### Ativação controlada do Winner Reentry Agent
+
+Se o objetivo for ativar o novo worker assíncrono de reentrada de winners, faça isso com perfil conservador no primeiro deploy:
+
+```bash
+WINNER_REENTRY_AGENT_ENABLED=true
+WINNER_REENTRY_DISCOVERY_INTERVAL_MS=120000
+WINNER_REENTRY_SCAN_INTERVAL_MS=4000
+WINNER_REENTRY_LOOKBACK_MS=1800000
+WINNER_REENTRY_MAX_TOKENS=3
+WINNER_REENTRY_MIN_DELAY_MS=10000
+WINNER_REENTRY_MAX_AGE_MS=900000
+WINNER_REENTRY_PER_MINT_COOLDOWN_MS=900000
+WINNER_REENTRY_MAX_REENTRIES_PER_MINT=1
+WINNER_REENTRY_MIN_PNL_PERCENT=35
+```
+
+Esse worker:
+
+- não compra diretamente fora do pipeline;
+- só observa `CLOSED_TP` recentes;
+- usa fila curta com cap, dedupe, TTL, prioridade e cooldown;
+- volta a passar por `getAgentDecision()`, `executeAgentTrade()` e preflight normal.
+
+Após alterar o `.env`, reinicie com atualização de ambiente:
+
+```bash
+pm2 restart bot --update-env
+```
+
+Nos primeiros minutos, monitore:
+
+```bash
+pm2 logs bot
+```
+
+Logs esperados:
+
+- `WinnerReentryAgent] Monitor initialized`
+- `WinnerReentryAgent] Added ... to reentry queue`
+- `WinnerReentryAgent] Re-evaluating ...`
+- `Winner Reentry executing BUY for ...`
+
+Se nada executar, isso não significa falha. Os bloqueios mais comuns são:
+
+- ausência de winners recentes fortes o bastante;
+- cooldown por mint;
+- fila expirada sem confirmação;
+- reprovação normal no pipeline;
+- bloqueio por portfólio ou preflight.
+
 ---
 
 ## 4. Gerenciamento Financeiro e de Processos (PM2)

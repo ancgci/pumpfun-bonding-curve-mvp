@@ -12,6 +12,8 @@ export interface FastLaneContext {
   tokenAgeSec?: number | null;
   buyCount?: number | null;
   sellCount?: number | null;
+  protocol?: string | null;
+  bondingCurvePercent?: number | null;
 }
 
 export interface FastLaneSignal {
@@ -57,9 +59,33 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
   const buyCount = context.buyCount ?? 0;
   const sellCount = context.sellCount ?? 0;
   const tradeImbalance = buyCount + sellCount > 0 ? buyCount / Math.max(1, sellCount) : null;
+  const compactPumpfunLaunchMode = isCompactPumpfunLaunchContext(context);
 
   if (candles <= 0) {
     return neutral("FAST_LANE_WAITING_FIRST_CANDLE");
+  }
+
+  if (compactPumpfunLaunchMode) {
+    const compactLaunchBreakout =
+      snap.priceAboveVWAP &&
+      microTrend >= 0.8 &&
+      (volumeRatio === null || volumeRatio >= 1.1) &&
+      (tradeImbalance === null || tradeImbalance >= 0.9);
+
+    if (compactLaunchBreakout) {
+      if (volumeRatio !== null) tags.push(`vol=${volumeRatio.toFixed(2)}`);
+      tags.push(`micro=${microTrend.toFixed(2)}`);
+      return {
+        verdict: "BUY",
+        strategy: "momentum_breakout",
+        score: candles >= 2 ? 82 : 76,
+        confidenceBias: candles >= 2 ? 6 : 4,
+        positionCap: candles >= 2 ? 0.85 : 0.45,
+        blocking: false,
+        reason: candles >= 2 ? "FAST_LANE_COMPACT_LAUNCH_BREAKOUT" : "FAST_LANE_COMPACT_EARLY_BREAKOUT",
+        tags,
+      };
+    }
   }
 
   if (candles < 3) {
@@ -75,7 +101,12 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
     };
   }
 
-  if (rsi !== null && rsi >= 82 && rsiSlope <= 0) {
+  if (
+    rsi !== null &&
+    rsi >= (compactPumpfunLaunchMode ? 88 : 82) &&
+    rsiSlope <= 0 &&
+    (!compactPumpfunLaunchMode || microTrend <= 0.25)
+  ) {
     return {
       verdict: "SKIP",
       strategy: "exhaustion_guard",
@@ -88,7 +119,12 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
     };
   }
 
-  if (distEMA5 >= 2.4 && distVWAP >= 3.2 && macdHist <= 0) {
+  if (
+    distEMA5 >= (compactPumpfunLaunchMode ? 3.4 : 2.4) &&
+    distVWAP >= (compactPumpfunLaunchMode ? 4.4 : 3.2) &&
+    macdHist <= 0 &&
+    (!compactPumpfunLaunchMode || microTrend <= 0.25)
+  ) {
     return {
       verdict: "SKIP",
       strategy: "exhaustion_guard",
@@ -101,7 +137,7 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
     };
   }
 
-  if (tradeImbalance !== null && tradeImbalance < 0.85 && microTrend <= 0) {
+  if (tradeImbalance !== null && tradeImbalance < (compactPumpfunLaunchMode ? 0.75 : 0.85) && microTrend <= 0) {
     return {
       verdict: "SKIP",
       strategy: "distribution_guard",
@@ -166,4 +202,10 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
   }
 
   return neutral("FAST_LANE_NEUTRAL");
+}
+
+function isCompactPumpfunLaunchContext(context: FastLaneContext): boolean {
+  const protocol = String(context.protocol || "").toLowerCase();
+  const bondingCurvePercent = Number(context.bondingCurvePercent ?? 0);
+  return protocol === "pumpfun" && bondingCurvePercent >= 90 && bondingCurvePercent < 100;
 }
