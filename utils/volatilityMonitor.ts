@@ -18,6 +18,9 @@ export interface PricePeriod {
 // STORES — três resoluções de tempo
 // ============================================================
 const MAX_WINDOW_MS = 900_000;           // 15 min de amostras raw
+const VOLATILITY_IDLE_TTL_MS = 20 * 60 * 1000;
+const VOLATILITY_MAX_TOKENS = 5000;
+const VOLATILITY_CLEANUP_INTERVAL_MS = 60_000;
 
 const store: Map<string, Sample[]> = new Map();   // raw tick-by-tick
 const periodStore: Map<string, PricePeriod[]> = new Map();     // 1 min
@@ -79,6 +82,66 @@ function updatePeriodStore(
   // Pruning: manter apenas maxPeriods
   while (periods.length > maxPeriods) periods.shift();
   map.set(mint, periods);
+}
+
+function getLatestObservedTimestamp(mint: string): number {
+  const rawSamples = store.get(mint);
+  const minutePeriods = periodStore.get(mint);
+  const fiveSecondPeriods = periodStore5s.get(mint);
+  const oneSecondPeriods = periodStore1s.get(mint);
+  const candidates = [
+    rawSamples && rawSamples.length > 0 ? rawSamples[rawSamples.length - 1].t : 0,
+    minutePeriods && minutePeriods.length > 0 ? minutePeriods[minutePeriods.length - 1].timestamp : 0,
+    fiveSecondPeriods && fiveSecondPeriods.length > 0 ? fiveSecondPeriods[fiveSecondPeriods.length - 1].timestamp : 0,
+    oneSecondPeriods && oneSecondPeriods.length > 0 ? oneSecondPeriods[oneSecondPeriods.length - 1].timestamp : 0,
+  ];
+
+  return Math.max(...candidates, 0);
+}
+
+function deleteMintFromAllStores(mint: string): void {
+  store.delete(mint);
+  periodStore.delete(mint);
+  periodStore5s.delete(mint);
+  periodStore1s.delete(mint);
+}
+
+export function cleanupInactiveVolatilityStores(
+  now: number = Date.now(),
+  maxIdleMs: number = VOLATILITY_IDLE_TTL_MS
+): number {
+  const allMints = new Set<string>([
+    ...store.keys(),
+    ...periodStore.keys(),
+    ...periodStore5s.keys(),
+    ...periodStore1s.keys(),
+  ]);
+  let removed = 0;
+
+  for (const mint of allMints) {
+    const lastSeen = getLatestObservedTimestamp(mint);
+    if (!lastSeen || now - lastSeen > maxIdleMs) {
+      deleteMintFromAllStores(mint);
+      removed++;
+    }
+  }
+
+  if (allMints.size - removed > VOLATILITY_MAX_TOKENS) {
+    const oldest = Array.from(allMints)
+      .filter((mint) => store.has(mint) || periodStore.has(mint) || periodStore5s.has(mint) || periodStore1s.has(mint))
+      .map((mint) => ({ mint, ts: getLatestObservedTimestamp(mint) }))
+      .sort((a, b) => a.ts - b.ts);
+    const overflow = oldest.length - VOLATILITY_MAX_TOKENS;
+    for (let i = 0; i < overflow; i++) {
+      const mint = oldest[i]?.mint;
+      if (mint) {
+        deleteMintFromAllStores(mint);
+        removed++;
+      }
+    }
+  }
+
+  return removed;
 }
 
 // ============================================================
@@ -639,3 +702,10 @@ export function getTASnapshot(mint: string): TASnapshot {
 }
 
 logger.info(`✅ Volatility Monitor V2 initialized — 1s/5s/1m buckets ready`);
+
+setInterval(() => {
+  const removed = cleanupInactiveVolatilityStores();
+  if (removed > 0) {
+    logger.info(`🧹 [Volatility] Cleanup removed ${removed} inactive token stores.`);
+  }
+}, VOLATILITY_CLEANUP_INTERVAL_MS);

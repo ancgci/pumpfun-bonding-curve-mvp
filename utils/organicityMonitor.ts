@@ -81,6 +81,9 @@ const CURVE_MILESTONES = [55, 65, 75, 85, 90];
 const MAX_TRADES_ALL = 500;   // cap para evitar crescimento ilimitado
 const MAX_RECENT_SIDES = 50;  // para cálculo de alternation
 const WINDOW_ALL_MS = 300_000; // 5 min
+const ORGANICITY_IDLE_TTL_MS = 20 * 60 * 1000; // remove tokens sem atividade recente
+const ORGANICITY_MAX_TOKENS = 4000;
+const ORGANICITY_CLEANUP_INTERVAL_MS = 60_000;
 
 // ============================================================
 // INICIALIZAR HISTÓRICO
@@ -216,6 +219,35 @@ export function clearOrganicityHistory(mint: string): void {
 
 export function getOrganicityTokenCount(): number {
     return histories.size;
+}
+
+export function cleanupInactiveOrganicityHistories(
+    now: number = Date.now(),
+    maxIdleMs: number = ORGANICITY_IDLE_TTL_MS
+): number {
+    let removed = 0;
+
+    for (const [mint, history] of histories.entries()) {
+        if (now - history.lastTradeTimestamp > maxIdleMs) {
+            histories.delete(mint);
+            removed++;
+        }
+    }
+
+    if (histories.size > ORGANICITY_MAX_TOKENS) {
+        const oldest = Array.from(histories.entries())
+            .sort((a, b) => a[1].lastTradeTimestamp - b[1].lastTradeTimestamp);
+        const overflow = histories.size - ORGANICITY_MAX_TOKENS;
+        for (let i = 0; i < overflow; i++) {
+            const mint = oldest[i]?.[0];
+            if (mint) {
+                histories.delete(mint);
+                removed++;
+            }
+        }
+    }
+
+    return removed;
 }
 
 // ============================================================
@@ -449,6 +481,7 @@ const HISTORY_PATH = path.join(process.cwd(), "data", "organicity-history.json")
 /** Salva o estado atual do histories Map em disco (JSON) */
 export function saveOrganicityToDisk(): void {
     try {
+        cleanupInactiveOrganicityHistories();
         const data: Record<string, any> = {};
         for (const [mint, h] of histories.entries()) {
             data[mint] = {
@@ -489,8 +522,19 @@ export function loadOrganicityFromDisk(): void {
                 snapshots: new Map(Object.entries(rawH.snapshots || {}).map(([k, v]) => [Number(k), v]) as any),
             });
         }
+        const removed = cleanupInactiveOrganicityHistories();
         logger.info(`📋 [Organicity] Histórico carregado do disco (${histories.size} tokens)`);
+        if (removed > 0) {
+            logger.info(`🧹 [Organicity] Removidos ${removed} históricos inativos após load.`);
+        }
     } catch (err) {
         logger.error(`❌ [Organicity] Erro ao carregar histórico: ${err}`);
     }
 }
+
+setInterval(() => {
+    const removed = cleanupInactiveOrganicityHistories();
+    if (removed > 0) {
+        logger.info(`🧹 [Organicity] Cleanup removed ${removed} inactive token histories. Active=${histories.size}`);
+    }
+}, ORGANICITY_CLEANUP_INTERVAL_MS);

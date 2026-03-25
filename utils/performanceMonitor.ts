@@ -22,12 +22,22 @@ const stats: PerformanceStats = {
   startTime: Date.now()
 };
 
+const MAX_TRACKED_PROCESSED_TOKENS = 20000;
+
 /**
  * Registrar uma transação processada
  */
 export function recordTransaction(mint: string): void {
   stats.totalTransactions++;
-  stats.processedTokens.add(mint);
+  if (!stats.processedTokens.has(mint)) {
+    stats.processedTokens.add(mint);
+    if (stats.processedTokens.size > MAX_TRACKED_PROCESSED_TOKENS) {
+      const oldestMint = stats.processedTokens.values().next().value;
+      if (oldestMint) {
+        stats.processedTokens.delete(oldestMint);
+      }
+    }
+  }
 }
 
 /**

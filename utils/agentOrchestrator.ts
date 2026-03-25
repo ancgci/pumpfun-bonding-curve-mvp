@@ -55,6 +55,7 @@ import { assessAdaptiveEntryProfile, AdaptiveEntryProfile } from "./adaptiveEntr
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
 const DECISION_CACHE_TTL_MS = 60_000;
+const DECISION_CACHE_MAX_ENTRIES = 1500;
 const LLM_MODEL = process.env.LLM_MODEL || "moonshotai/kimi-k2.5";
 const getLlmApiKey = () => process.env.NV_LLM_API_KEY || process.env.NVIDIA_API_KEY || "";
 const EMPTY_OBJECT_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
@@ -79,6 +80,26 @@ const llmLimiter = new Bottleneck({
 
 type CachedDecision = { decision: AgentDecision; ts: number };
 const decisionCache: Map<string, CachedDecision> = new Map();
+
+function pruneDecisionCache(now: number = Date.now()): void {
+  for (const [key, value] of decisionCache.entries()) {
+    if (now - value.ts > DECISION_CACHE_TTL_MS) {
+      decisionCache.delete(key);
+    }
+  }
+
+  if (decisionCache.size <= DECISION_CACHE_MAX_ENTRIES) return;
+
+  const oldestEntries = Array.from(decisionCache.entries())
+    .sort((a, b) => a[1].ts - b[1].ts);
+  const overflow = oldestEntries.length - DECISION_CACHE_MAX_ENTRIES;
+  for (let i = 0; i < overflow; i++) {
+    const key = oldestEntries[i]?.[0];
+    if (key) {
+      decisionCache.delete(key);
+    }
+  }
+}
 
 interface AgentLlmOutput {
   action: "BUY" | "SKIP" | "WAITING_DIP";
@@ -778,6 +799,7 @@ export async function getAgentDecision(
 
   try {
     const cacheKey = `${tokenAnalysis.mint}:${Math.round(tokenAnalysis.price * 1e9)}`;
+    pruneDecisionCache();
     const cached = decisionCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < DECISION_CACHE_TTL_MS) {
       return cached.decision;
@@ -847,6 +869,7 @@ export async function getAgentDecision(
       score: decision.confidence,
     });
     decisionCache.set(cacheKey, { decision, ts: Date.now() });
+    pruneDecisionCache();
     return decision;
   } catch (error: any) {
     logger.error(`❌ [Agent] Error getting decision: ${error.message}`);
