@@ -55,10 +55,16 @@ export const CONFIG = {
   WS_FALLBACK_LIST: process.env.WS_FALLBACK_LIST || "",
   SHYFT_RPC: process.env.SHYFT_RPC || "",
   SHYFT_GRPC: process.env.SHYFT_GRPC || "",
+  SHYFT_GRPC_TOKEN: process.env.SHYFT_GRPC_TOKEN || "",
 
   // Yellowstone gRPC
   GRPC_URL: process.env.GRPC_URL || "",
   GRPC_TOKEN: process.env.GRPC_TOKEN || "",
+  GRPC_PROVIDER_PREFERENCE: process.env.GRPC_PROVIDER_PREFERENCE || "bitquery,publicnode,custom,legacy",
+  PUBLICNODE_GRPC_URL: process.env.PUBLICNODE_GRPC_URL || "",
+  PUBLICNODE_GRPC_TOKEN: process.env.PUBLICNODE_GRPC_TOKEN || "",
+  BITQUERY_GRPC_URL: process.env.BITQUERY_GRPC_URL || "",
+  BITQUERY_GRPC_TOKEN: process.env.BITQUERY_GRPC_TOKEN || "",
 
   // Telegram
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || "",
@@ -325,9 +331,15 @@ export function validateConfig(): { valid: boolean; errors: string[]; warnings: 
     errors.push("RPC_URL must start with http or https");
   }
 
-  if (!CONFIG.SHYFT_GRPC && !CONFIG.GRPC_URL && !CONFIG.RPC_URL) {
+  if (
+    !CONFIG.SHYFT_GRPC &&
+    !CONFIG.GRPC_URL &&
+    !CONFIG.PUBLICNODE_GRPC_URL &&
+    !CONFIG.BITQUERY_GRPC_URL &&
+    !CONFIG.RPC_URL
+  ) {
     errors.push("RPC_URL is required when no GRPC endpoints are set");
-  } else if (!CONFIG.SHYFT_GRPC && !CONFIG.GRPC_URL) {
+  } else if (!CONFIG.SHYFT_GRPC && !CONFIG.GRPC_URL && !CONFIG.PUBLICNODE_GRPC_URL && !CONFIG.BITQUERY_GRPC_URL) {
     warnings.push("No GRPC endpoint configured - gRPC streaming will be disabled");
   }
 
@@ -360,8 +372,16 @@ export function validateConfig(): { valid: boolean; errors: string[]; warnings: 
     warnings.push("SECRET_KEY_JSON not set - trading will be simulated only");
   }
 
-  if (!CONFIG.GRPC_URL && !CONFIG.SHYFT_GRPC) {
+  if (!CONFIG.GRPC_URL && !CONFIG.SHYFT_GRPC && !CONFIG.PUBLICNODE_GRPC_URL && !CONFIG.BITQUERY_GRPC_URL) {
     warnings.push("No GRPC endpoint configured - using fallback");
+  }
+
+  if (CONFIG.BITQUERY_GRPC_URL && !CONFIG.BITQUERY_GRPC_TOKEN) {
+    warnings.push("BITQUERY_GRPC_URL configured without BITQUERY_GRPC_TOKEN");
+  }
+
+  if (CONFIG.PUBLICNODE_GRPC_URL && !CONFIG.PUBLICNODE_GRPC_TOKEN) {
+    warnings.push("PUBLICNODE_GRPC_URL configured without PUBLICNODE_GRPC_TOKEN");
   }
 
   return {

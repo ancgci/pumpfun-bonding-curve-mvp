@@ -74,6 +74,7 @@
     "ai": "^6.0.134",
     "axios": "^1.12.2",
     "better-sqlite3": "^12.6.2",
+    "bitquery-corecast-proto": "^1.1.2",
     "bottleneck": "^2.19.5",
     "bs58": "^5.0.0",
     "cookie-parser": "^1.4.7",

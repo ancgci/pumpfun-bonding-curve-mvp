@@ -51,6 +51,7 @@ import {
 } from "./postMortemContext";
 import { recordFunnelEvent } from "./decisionFunnelMetrics";
 import { assessAdaptiveEntryProfile, AdaptiveEntryProfile } from "./adaptiveEntryGovernance";
+import { getOrderPressureSnapshot, getTransferParticipationSnapshot } from "./bitqueryRealtimeState";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -164,6 +165,8 @@ function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
     return {
       taScore: tokenAnalysis.taScore ?? null,
       taScoreBreakdown: tokenAnalysis.taScoreBreakdown ?? null,
+      taClassification: tokenAnalysis.taClassification ?? null,
+      taClassificationReason: tokenAnalysis.taClassificationReason ?? null,
       snapshot: null,
     };
   }
@@ -171,6 +174,15 @@ function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
   return {
     taScore: tokenAnalysis.taScore ?? null,
     taScoreBreakdown: tokenAnalysis.taScoreBreakdown ?? null,
+    taClassification: tokenAnalysis.taClassification ?? null,
+    taClassificationReason: tokenAnalysis.taClassificationReason ?? null,
+    bitquery: {
+      transferWallets60s: tokenAnalysis.bitqueryTransferWallets60s ?? null,
+      transferCount60s: tokenAnalysis.bitqueryTransferCount60s ?? null,
+      orderBuyPressureRatio30s: tokenAnalysis.bitqueryOrderBuyPressureRatio ?? null,
+      orderBuyCount30s: tokenAnalysis.bitqueryOrderBuyCount30s ?? null,
+      orderSellCount30s: tokenAnalysis.bitqueryOrderSellCount30s ?? null,
+    },
     snapshot: {
       regime: (taSnapshot as any).regime ?? null,
       currentPrice: taSnapshot.currentPrice ?? null,
@@ -201,14 +213,35 @@ function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
           ratio: taSnapshot.volumeRelative.ratio,
           isBurst: taSnapshot.volumeRelative.isBurst,
           isSpike: taSnapshot.volumeRelative.isSpike,
+          windowUsed: taSnapshot.volumeRelative.windowUsed ?? null,
+          adaptive: taSnapshot.volumeRelative.adaptive ?? null,
         }
         : null,
       microTrend: taSnapshot.microTrend ?? null,
+      launchContext: taSnapshot.launchContext ?? null,
       trend: taSnapshot.trend ?? null,
       atrPct: taSnapshot.atrPct ?? null,
       candlesAvailable1s: taSnapshot.candlesAvailable1s ?? null,
     },
   };
+}
+
+function buildTaContextLine(tokenAnalysis: TokenAnalysis): string | null {
+  const launchContext = tokenAnalysis.taSnapshot?.launchContext;
+  if (!launchContext) return null;
+
+  const segments = [
+    `dq=${launchContext.dataQualityScore}/100`,
+    `candles1s=${launchContext.candleCount1s}`,
+    `rawSamples10s=${launchContext.rawSampleCount10s}`,
+    launchContext.tickVelocityPerSec !== null ? `tickVelocity=${launchContext.tickVelocityPerSec.toFixed(2)}/s` : null,
+    launchContext.rawMomentumPct !== null ? `rawMomentum=${launchContext.rawMomentumPct.toFixed(2)}%` : null,
+    launchContext.priceRangePct10s !== null ? `range10s=${launchContext.priceRangePct10s.toFixed(2)}%` : null,
+    `vwapWindow=${launchContext.vwapWindowUsed}`,
+    launchContext.volumeWindowUsed !== null ? `volumeWindow=${launchContext.volumeWindowUsed}` : null,
+  ].filter(Boolean);
+
+  return segments.length > 0 ? `TA_Context: ${segments.join(" | ")}` : null;
 }
 
 function summarizeRiskForTool(tokenAnalysis: TokenAnalysis) {
@@ -324,13 +357,23 @@ function buildAgentUserPrompt(tokenAnalysis: TokenAnalysis): string {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `HoneypotRisk: ${tokenAnalysis.honeypotRisk}`,
+    tokenAnalysis.taClassification
+      ? `TA_Status: ${tokenAnalysis.taClassification}${tokenAnalysis.taClassificationReason ? ` | ${tokenAnalysis.taClassificationReason}` : ""}`
+      : null,
     tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100` : null,
+    buildTaContextLine(tokenAnalysis),
     tokenAnalysis.taSnapshot?.volumeRelative
-      ? `VolumeRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x`
+      ? `VolumeRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x${tokenAnalysis.taSnapshot.volumeRelative.windowUsed ? ` (window=${tokenAnalysis.taSnapshot.volumeRelative.windowUsed})` : ""}`
       : null,
     tokenAnalysis.rsi ? `RSI(1s): ${tokenAnalysis.rsi.toFixed(1)}` : null,
     tokenAnalysis.taSnapshot?.microTrend
       ? `MicroTrend10s: ${tokenAnalysis.taSnapshot.microTrend.changePct.toFixed(2)}%`
+      : null,
+    tokenAnalysis.bitqueryTransferWallets60s !== undefined
+      ? `BitqueryTransferWallets60s: ${tokenAnalysis.bitqueryTransferWallets60s}`
+      : null,
+    tokenAnalysis.bitqueryOrderBuyPressureRatio !== undefined && tokenAnalysis.bitqueryOrderBuyPressureRatio !== null
+      ? `BitqueryOrderPressure30s: ${tokenAnalysis.bitqueryOrderBuyPressureRatio.toFixed(2)}`
       : null,
     tokenAnalysis.tokenAgeSec !== undefined ? `TokenAge: ${tokenAnalysis.tokenAgeSec}s` : null,
     tokenAnalysis.buyCount !== undefined ? `RecentBuys: ${tokenAnalysis.buyCount}` : null,
@@ -465,6 +508,11 @@ interface TokenAnalysis {
   taScoreBreakdown?: string;   // breakdown formatado
   taClassification?: "VALID" | "LOW_DATA" | "WEAK_SETUP" | "EARLY_MOMENTUM";
   taClassificationReason?: string;
+  bitqueryTransferWallets60s?: number;
+  bitqueryTransferCount60s?: number;
+  bitqueryOrderBuyPressureRatio?: number | null;
+  bitqueryOrderBuyCount30s?: number;
+  bitqueryOrderSellCount30s?: number;
   // Legacy Indicators (mantidos para compatibilidade com prompt LLM)
   rsi5s?: number;
   macd5s?: { macd: number; signal: number; histogram: number };
@@ -653,9 +701,18 @@ export async function getAgentDecision(
     : undefined;
 
   // Calcular score para informar o LLM (não bloqueia)
+  const transferParticipation = getTransferParticipationSnapshot(tokenAnalysis.mint);
+  const orderPressure = getOrderPressureSnapshot(tokenAnalysis.mint);
+  tokenAnalysis.bitqueryTransferWallets60s = transferParticipation?.uniqueWallets60s ?? 0;
+  tokenAnalysis.bitqueryTransferCount60s = transferParticipation?.transferCount60s ?? 0;
+  tokenAnalysis.bitqueryOrderBuyPressureRatio = orderPressure?.buyPressureRatio ?? null;
+  tokenAnalysis.bitqueryOrderBuyCount30s = orderPressure?.buyOrders30s ?? 0;
+  tokenAnalysis.bitqueryOrderSellCount30s = orderPressure?.sellOrders30s ?? 0;
   const scoreResult = calculateConfluenceScore(taSnap, taConfig, {
     protocol: tokenAnalysis.protocol,
     bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+    transferParticipation,
+    orderPressure,
   });
   tokenAnalysis.taScore = scoreResult.score;
   tokenAnalysis.taScoreBreakdown = formatScoreLog(scoreResult);
@@ -1067,6 +1124,8 @@ export async function executeAgentTrade(
         const execScore = calculateConfluenceScore(snap, taConfigExec, {
           protocol: tokenAnalysis.protocol,
           bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+          transferParticipation: getTransferParticipationSnapshot(tokenAnalysis.mint),
+          orderPressure: getOrderPressureSnapshot(tokenAnalysis.mint),
         });
         const adaptiveProfile = assessAdaptiveEntryProfile({
           decisionConfidence: decision.confidence,
@@ -1504,9 +1563,9 @@ export function scheduleSimulationExit(
 ): void {
   const mint = tokenAnalysis.mint;
   const symbol = tokenAnalysis.symbol;
-  const entryPrice = decision.entryPrice || tokenAnalysis.price;
+  let entryPrice = decision.entryPrice || tokenAnalysis.price;
   const fixedSimulationTpPct = 20;
-  const tp = entryPrice * (1 + fixedSimulationTpPct / 100);
+  let tp = entryPrice * (1 + fixedSimulationTpPct / 100);
   const sl = 0;
 
   // Calculate remaining timeout if this is a resumed trade
@@ -1549,7 +1608,19 @@ export function scheduleSimulationExit(
 
       // Update price in DB for dashboard visibility (every ~30s)
       if (elapsedCount % 3 === 0) {
-        await updateSimulatedTradePrice(mint, currentPrice);
+        const effectiveEntryPrice = await updateSimulatedTradePrice(mint, currentPrice, currentMarketCap);
+        if (
+          effectiveEntryPrice &&
+          Math.abs(effectiveEntryPrice - entryPrice) / Math.max(entryPrice, Number.EPSILON) > 0.5
+        ) {
+          logger.warn(
+            `🩹 [SIMULATION] ${symbol} corrigindo entryPrice em memória: ` +
+            `${entryPrice.toFixed(8)} -> ${effectiveEntryPrice.toFixed(8)}`
+          );
+          entryPrice = effectiveEntryPrice;
+          tp = entryPrice * (1 + fixedSimulationTpPct / 100);
+          highWaterMark = Math.max(currentPrice, entryPrice);
+        }
       }
 
       // ══════════════════════════════════════════════════

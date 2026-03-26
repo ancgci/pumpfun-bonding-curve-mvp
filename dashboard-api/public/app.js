@@ -304,10 +304,16 @@ function updateBotHealth(data) {
   const badge = document.getElementById('botHealthBadge');
   const dot = document.getElementById('healthDot');
   const text = document.getElementById('botHealthText');
+  const providerName = data.grpcProvider?.activeProviderName || data.grpcProvider?.activeProviderId || 'n/a';
+  const transferState = data.grpcTransfers || data.runtime?.stream?.transfers || null;
+  const warnings = Array.isArray(data.runtimeWarnings) ? data.runtimeWarnings : [];
 
   const statusMap = {
     OPERATIONAL: { label: 'Operational', cls: 'health-ok' },
     RATE_LIMITED: { label: 'Rate Limited', cls: 'health-warn' },
+    GRPC_FALLBACK_ACTIVE: { label: 'gRPC Fallback', cls: 'health-warn' },
+    TRANSFERS_RELOAD_SPIKE: { label: 'Transfers Reload', cls: 'health-warn' },
+    TRANSFERS_WATCHLIST_NEAR_CAPACITY: { label: 'Transfers Saturated', cls: 'health-warn' },
     CIRCUIT_BREAKER_TRIPPED: { label: 'CB Tripped', cls: 'health-danger' },
     EMERGENCY_STOP: { label: 'EMERGENCY STOP', cls: 'health-danger' },
   };
@@ -316,6 +322,16 @@ function updateBotHealth(data) {
   dot.className = 'health-dot ' + s.cls;
   text.textContent = s.label;
   badge.className = 'bot-health-badge ' + s.cls;
+  badge.title = [
+    `Status: ${data.status}`,
+    `Provider: ${providerName}`,
+    warnings.length > 0
+      ? `Warnings: ${warnings.map((warning) => warning.message || warning.code).join(' | ')}`
+      : 'Warnings: none',
+    transferState
+      ? `Transfers: ${transferState.watchlistSize}/${transferState.maxWatchlistSize} mints, ${transferState.activeStreamCount} stream(s), reloads=${transferState.reloadCount}, refreshes=${transferState.refreshCount}, recentReloads=${data.recentTransferReloadCount ?? 'n/a'}`
+      : 'Transfers: n/a',
+  ].join('\n');
 }
 
 function updateEmergencyBanner(active) {

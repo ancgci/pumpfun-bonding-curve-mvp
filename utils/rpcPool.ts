@@ -11,32 +11,56 @@ interface RPCConfig {
     isHealthy: boolean;
 }
 
+function normalizeRpcUrl(url: string): string {
+    return String(url || "").trim();
+}
+
+function buildOrderedRpcConfigs(): RPCConfig[] {
+    const orderedSources = [
+        { url: process.env.SHYFT_RPC || "", name: "SHYFT_RPC" },
+        { url: process.env.RPC_URL || "https://api.mainnet-beta.solana.com", name: "RPC_URL" },
+        ...(process.env.RPC_FALLBACK_LIST || "")
+            .split(",")
+            .map((url, index) => ({
+                url,
+                name: `RPC_FALLBACK_LIST #${index + 1}`,
+            })),
+    ];
+
+    const seen = new Set<string>();
+    const configs: RPCConfig[] = [];
+
+    for (const source of orderedSources) {
+        const normalizedUrl = normalizeRpcUrl(source.url);
+        if (normalizedUrl.length <= 10 || seen.has(normalizedUrl)) {
+            continue;
+        }
+
+        seen.add(normalizedUrl);
+        configs.push({
+            url: normalizedUrl,
+            name: source.name,
+            priority: configs.length + 1,
+            latency: 0,
+            isHealthy: true,
+        });
+    }
+
+    return configs;
+}
+
 class RPCPool {
     private rpcs: RPCConfig[];
     private currentConnection: Connection | null = null;
     private currentRPC: RPCConfig | null = null;
 
     constructor() {
-        const fallbacks = (process.env.RPC_FALLBACK_LIST || "").split(",").filter(u => u.length > 10);
-
-        this.rpcs = [
-            {
-                url: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
-                name: "Primary RPC",
-                priority: 1,
-                latency: 0,
-                isHealthy: true,
-            },
-            ...fallbacks.map((url, i) => ({
-                url,
-                name: `Fallback ${i + 1}`,
-                priority: i + 2,
-                latency: 0,
-                isHealthy: true,
-            }))
-        ];
+        this.rpcs = buildOrderedRpcConfigs();
 
         logger.info(`🔗 RPC Pool inicializado com ${this.rpcs.length} endpoints`);
+        this.rpcs.forEach((rpc) => {
+            logger.info(`   ↳ prioridade ${rpc.priority}: ${rpc.name} -> ${rpc.url.substring(0, 48)}...`);
+        });
         if (process.env.WS_URL) {
             logger.info(`🌐 WebSocket primário configurado: ${process.env.WS_URL.substring(0, 20)}...`);
         }

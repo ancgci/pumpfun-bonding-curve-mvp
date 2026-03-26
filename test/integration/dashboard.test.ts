@@ -51,6 +51,8 @@ describe('Dashboard API Integration Tests', () => {
             .set('Authorization', `Bearer ${mockToken}`);
         expect(res.status).toBe(200);
         expect(res.body).toHaveProperty('status');
+        expect(res.body).toHaveProperty('grpcTransfers');
+        expect(res.body).toHaveProperty('runtimeWarnings');
     });
 
     it('GET /api/me/account should return account info and wallets', async () => {

@@ -120,6 +120,21 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
     return 1
   }
 
+  assert_single_runtime_process() {
+    local pattern="\$1"
+    local label="\$2"
+    local count=""
+
+    count=\$(ps -eo args | grep -E "\$pattern" | grep -v grep | wc -l | tr -d ' ')
+    if [[ "\$count" != "1" ]]; then
+      echo "  ❌ \$label com contagem inesperada de processos: \$count"
+      ps -eo pid,ppid,args | grep -E "\$pattern|PID" | grep -v grep || true
+      return 1
+    fi
+
+    echo "  ✅ \$label com árvore de runtime única"
+  }
+
   # Check for Node.js/NPM and install if missing
   if ! command -v npm &> /dev/null; then
     echo "NPM not found. Installing Node.js 20.x..."
@@ -166,8 +181,10 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
   echo "Validating critical configuration files..."
   ls -la data/*.json 2>/dev/null || echo "  ⚠️  No JSON configs found in data/"
 
-  echo "Starting/restarting PM2 services..."
-  pm2 startOrRestart ecosystem.config.js --update-env
+  echo "Recriando apps do PM2 a partir do ecosystem atual..."
+  pm2 delete bot || true
+  pm2 delete dashboard-api || true
+  pm2 start ecosystem.config.js --update-env
   pm2 save
 
   echo ""
@@ -184,6 +201,11 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
   echo "  API validation:"
   wait_for_json_endpoint "\$API_BASE_URL/api/agent/learned-rules" "GET /api/agent/learned-rules"
   wait_for_json_endpoint "\$API_BASE_URL/api/agent/postmortems" "GET /api/agent/postmortems"
+
+  echo ""
+  echo "  Runtime process validation:"
+  assert_single_runtime_process "node .*ts-node/dist/bin.js.*index.ts" "bot"
+  assert_single_runtime_process "node .*ts-node/dist/bin.js.*server.ts" "dashboard-api"
 REMOTE_CMD
 
 log "Deployment complete!"

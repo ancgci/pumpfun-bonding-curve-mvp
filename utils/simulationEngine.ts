@@ -69,6 +69,7 @@ interface SimulationMetrics {
 const SIMULATION_DATA_DIR = path.join(__dirname, "../data/simulation");
 const SIMULATION_TRADES_FILE = path.join(SIMULATION_DATA_DIR, "trades.json");
 const SIMULATION_METRICS_FILE = path.join(SIMULATION_DATA_DIR, "metrics.json");
+const SIMULATION_ENTRY_PRICE_REPAIR_RATIO = 1000;
 
 export function getSimulationTimeoutMs(): number {
   const cfg = getRuntimeConfig();
@@ -132,6 +133,67 @@ function normalizeTradeRow(row: any): SimulatedTrade {
     postMortemReport: parseJsonField<TradePostMortemReport>(row.postMortemReport),
     postMortemAnalyzedAt: row.postMortemAnalyzedAt ? Number(row.postMortemAnalyzedAt) : null,
   };
+}
+
+function applyEntryPriceCorrection(trade: SimulatedTrade, correctedEntryPrice: number): void {
+  trade.entryPrice = correctedEntryPrice;
+  if (trade.entrySnapshot) {
+    trade.entrySnapshot.price = correctedEntryPrice;
+  }
+}
+
+export function inferCorrectedEntryPrice(params: {
+  entryPrice: number;
+  currentPrice: number;
+  entryMarketCap?: number | null;
+  currentMarketCap?: number | null;
+}): number | null {
+  const entryPrice = Number(params.entryPrice) || 0;
+  const currentPrice = Number(params.currentPrice) || 0;
+  const entryMarketCap = Number(params.entryMarketCap) || 0;
+  const currentMarketCap = Number(params.currentMarketCap) || 0;
+
+  if (!(entryPrice > 0) || !(currentPrice > 0) || !(entryMarketCap > 0) || !(currentMarketCap > 0)) {
+    return null;
+  }
+
+  const inferredEntryPrice = currentPrice * (entryMarketCap / currentMarketCap);
+  if (!(inferredEntryPrice > 0)) {
+    return null;
+  }
+
+  const distortionRatio = Math.max(entryPrice, inferredEntryPrice) / Math.min(entryPrice, inferredEntryPrice);
+  if (!Number.isFinite(distortionRatio) || distortionRatio < SIMULATION_ENTRY_PRICE_REPAIR_RATIO) {
+    return null;
+  }
+
+  return inferredEntryPrice;
+}
+
+function persistOpenTradeEntryPriceCorrection(
+  tokenMint: string,
+  correctedEntryPrice: number
+): void {
+  const trades = loadSimulationTrades();
+  const tradeIndex = trades.findIndex((trade) => trade.tokenMint === tokenMint && trade.status === "OPEN");
+  if (tradeIndex !== -1) {
+    applyEntryPriceCorrection(trades[tradeIndex], correctedEntryPrice);
+    saveSimulationTrades(trades);
+  }
+
+  const dbRow = db
+    .prepare(`SELECT entry_snapshot as entrySnapshot FROM simulated_trades WHERE token_mint = ? AND status = 'OPEN'`)
+    .get(tokenMint) as any;
+  const entrySnapshot = parseJsonField<TradeMarketSnapshot>(dbRow?.entrySnapshot);
+  if (entrySnapshot) {
+    entrySnapshot.price = correctedEntryPrice;
+  }
+
+  db.prepare(`
+    UPDATE simulated_trades
+    SET entry_price = ?, entry_snapshot = ?
+    WHERE token_mint = ? AND status = 'OPEN'
+  `).run(correctedEntryPrice, serializeJson(entrySnapshot), tokenMint);
 }
 const getBuyAmountSol = () => {
   try {
@@ -271,6 +333,19 @@ export async function updateSimulatedTradeExit(
   }
 
   const trade = trades[tradeIndex];
+  const correctedEntryPrice = inferCorrectedEntryPrice({
+    entryPrice: trade.entryPrice,
+    currentPrice: exitPrice,
+    entryMarketCap: trade.marketCapEntry,
+    currentMarketCap: marketCap ?? null,
+  });
+  if (correctedEntryPrice) {
+    logger.warn(
+      `🩹 [SIMULATION] Corrigindo entryPrice distorcido de ${trade.tokenSymbol}: ` +
+      `${trade.entryPrice.toFixed(8)} -> ${correctedEntryPrice.toFixed(8)}`
+    );
+    applyEntryPriceCorrection(trade, correctedEntryPrice);
+  }
   trade.exitTime = Date.now();
   trade.exitPrice = exitPrice;
   trade.status = status;
@@ -287,9 +362,11 @@ export async function updateSimulatedTradeExit(
   try {
     db.prepare(`
       UPDATE simulated_trades 
-      SET exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?, exit_snapshot = ?, postmortem_status = ?
+      SET entry_price = ?, entry_snapshot = ?, exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?, exit_snapshot = ?, postmortem_status = ?
       WHERE token_mint = ? AND status = 'OPEN'
     `).run(
+      trade.entryPrice,
+      serializeJson(trade.entrySnapshot),
       trade.exitTime,
       trade.exitPrice,
       trade.status,
@@ -322,12 +399,34 @@ export async function updateSimulatedTradeExit(
  */
 export async function updateSimulatedTradePrice(
   tokenMint: string,
-  currentPrice: number
-): Promise<void> {
+  currentPrice: number,
+  currentMarketCap?: number | null
+): Promise<number | null> {
   try {
-    const entry = db.prepare(`SELECT entry_price, entry_amount FROM simulated_trades WHERE token_mint = ? AND status = 'OPEN'`).get(tokenMint) as any;
+    const entry = db.prepare(`
+      SELECT entry_price, entry_amount, market_cap_entry
+      FROM simulated_trades
+      WHERE token_mint = ? AND status = 'OPEN'
+    `).get(tokenMint) as any;
     if (entry) {
-      const pnlPercent = ((currentPrice - entry.entry_price) / entry.entry_price) * 100;
+      let effectiveEntryPrice = Number(entry.entry_price) || 0;
+      const correctedEntryPrice = inferCorrectedEntryPrice({
+        entryPrice: effectiveEntryPrice,
+        currentPrice,
+        entryMarketCap: entry.market_cap_entry,
+        currentMarketCap,
+      });
+
+      if (correctedEntryPrice) {
+        logger.warn(
+          `🩹 [SIMULATION] Repairing distorted OPEN entryPrice for ${tokenMint.substring(0, 8)}... ` +
+          `${effectiveEntryPrice.toFixed(8)} -> ${correctedEntryPrice.toFixed(8)}`
+        );
+        persistOpenTradeEntryPriceCorrection(tokenMint, correctedEntryPrice);
+        effectiveEntryPrice = correctedEntryPrice;
+      }
+
+      const pnlPercent = ((currentPrice - effectiveEntryPrice) / effectiveEntryPrice) * 100;
       const pnlSol = entry.entry_amount * (pnlPercent / 100);
 
       db.prepare(`
@@ -335,10 +434,14 @@ export async function updateSimulatedTradePrice(
         SET exit_price = ?, pnl_sol = ?, pnl_percent = ?
         WHERE token_mint = ? AND status = 'OPEN'
       `).run(currentPrice, pnlSol, pnlPercent, tokenMint);
+
+      return effectiveEntryPrice;
     }
   } catch (error) {
     logger.error(`Error updating simulation trade price in DB:`, error);
   }
+
+  return null;
 }
 
 export async function appendSimulatedTradeMonitoringPoint(

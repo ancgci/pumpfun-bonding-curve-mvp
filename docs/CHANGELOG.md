@@ -5,6 +5,7 @@
 - **Adaptive Entry Governance**: New local-only governance layer for post-LLM BUY approval with `FULL`, `REDUCED` and `PROBE` profiles, plus dedicated unit coverage in `test/unit/adaptiveEntryGovernance.test.ts`.
 - **Unified LLM Gateway**: New `utils/llmGateway.ts` standardizes provider routing, structured outputs, tool-call telemetry and task-specific fallback handling for agent, learner and post-mortem flows.
 - **Fast Lane + Portfolio Governor + Execution Preflight**: New local deterministic layer inspired by `go-trader` and `Hummingbot`, implemented in `utils/strategyFastLane.ts`, `utils/portfolioGovernor.ts` and `utils/executionPreflight.ts`, with targeted unit coverage.
+- **Bitquery CoreCast Multi-Stream**: Added `utils/bitqueryGrpcAdapter.ts`, `utils/bitqueryTransactionsAdapter.ts`, `utils/bitqueryDexPoolsAdapter.ts`, `utils/bitqueryTransfersAdapter.ts`, `utils/bitqueryDexOrdersAdapter.ts`, `utils/bitqueryBalancesAdapter.ts`, `utils/bitqueryRealtimeState.ts` and `utils/bitqueryEventBus.ts` to support multi-stream PumpFun discovery and lightweight runtime enrichment.
 - **Probe Quality Governor**: New local guard in `utils/probeQualityGovernor.ts` to reduce or recheck fragile `PROBE` setups after recurring weak post-mortems and to reject suspicious `price x marketCap` ticks during monitoring.
 - **Winner Reentry Agent**: New async worker in `utils/winnerReentryAgent.ts` that scans recent `CLOSED_TP` trades, keeps only top reentry candidates in a bounded queue and re-runs them through the main decision pipeline.
 - **Pipeline 3 Technical Analysis Doc**: Added `docs/PIPELINE_3_TECHNICAL_ANALYSIS.md` documenting every item evaluated in Step 3 and adopting `21/03/2026 10:04` as the operational comparison baseline for future regressions.
@@ -13,6 +14,7 @@
  - **PumpFun Near-Migration Scalper Mode**: Step 3 now has a compact launch-scoring path for `pumpfun` tokens between `90%` and `<100%` of the bonding curve, prioritizing `microTrend`, `VWAP`, `volume` and minimal candle count instead of waiting for mature EMA/MACD confluence.
  - **Technical Redundancy Reduction**: `entryBlocker`, `Fast Lane`, post-LLM score rechecks and `Micro-Confirm` now operate with lighter, lower-latency rules in the same PumpFun near-migration regime, reducing missed launch breakouts caused by repeated slow confirmations.
 - **Technical Entry Logic**: Converted several non-structural technical vetoes into penalties and soft pressure instead of hard invalidation.
+- **PumpFun Compact Enrichment**: Step 3 and `Fast Lane` now read lightweight Bitquery `Transfers` and `DexOrders` signals as positive reinforcement only; `Balances` can short-circuit wallet balance checks before falling back to RPC.
 - **Execution Sizing**: Final buy size is now the minimum of confidence sizing, technical sizing and adaptive profile cap.
 - **Execution Funnel**: Added deterministic gating before and after the LLM, plus portfolio-aware preflight checks before any simulated or live capital allocation.
 - **Fragile Probe Handling**: Near-migration PumpFun `PROBE` entries with `LOW_DATA`, `taScore` near zero and only 1 candle now operate with smaller size, short follow-through validation and temporary cooldown when recent post-mortems repeat `WEAK_MOMENTUM` or `NO_FOLLOW_THROUGH`.
@@ -724,3 +726,5 @@ History of all improvements implemented in the project.
 
 ### v1.0.0 - Baseline
 Versão original do bot com funcionalidades básicas.
+- Added explicit multi-provider gRPC configuration for `bitquery`, `publicnode`, `custom` and `legacy` Yellowstone endpoints via `GRPC_PROVIDER_PREFERENCE`, `BITQUERY_GRPC_*` and `PUBLICNODE_GRPC_*`.
+- Runtime now logs configured gRPC providers and auto-selects the first Yellowstone-compatible provider; unsupported providers remain declared and visible instead of being silently ignored.

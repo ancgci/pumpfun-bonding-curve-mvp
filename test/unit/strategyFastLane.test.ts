@@ -163,4 +163,43 @@ describe("strategyFastLane", () => {
     expect(signal.blocking).toBe(false);
     expect(signal.reason).toContain("FAST_LANE_COMPACT");
   });
+
+  it("uses Bitquery transfer and order pressure to reinforce compact PumpFun breakouts", () => {
+    const signal = evaluateFastLaneSignal({
+      mint: "mint",
+      symbol: "TEST",
+      taSnapshot: makeSnapshot({
+        candlesAvailable1s: 2,
+        emaAligned: false,
+        macd: null,
+        rsi: null,
+        rsiSlope: 0,
+        priceAboveVWAP: true,
+        volumeRelative: {
+          ratio: 1.15,
+          currentVol: 115,
+          avgVol: 100,
+          isBurst: false,
+          isSpike: false,
+        },
+        microTrend: { changePct: 0.9, samples: 8 },
+      }),
+      taScore: 68,
+      riskScore: 8,
+      liquiditySol: 0,
+      buyCount: 8,
+      sellCount: 7,
+      protocol: "pumpfun",
+      bondingCurvePercent: 94,
+      transferUniqueWallets60s: 6,
+      transferCount60s: 5,
+      orderBuyPressureRatio: 1.8,
+      orderBuyCount30s: 4,
+      orderSellCount30s: 1,
+    });
+
+    expect(signal.verdict).toBe("BUY");
+    expect(signal.tags.some((tag) => tag.startsWith("xfers="))).toBe(true);
+    expect(signal.tags.some((tag) => tag.startsWith("ord="))).toBe(true);
+  });
 });

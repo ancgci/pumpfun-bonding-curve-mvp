@@ -9,16 +9,24 @@
  *   pm2 logs
  */
 
+const fs = require('fs');
 const path = require('path');
-const PROJECT_DIR = __dirname;
+
+const ROOT_CANDIDATES = [__dirname, path.resolve(__dirname, '..')];
+const PROJECT_DIR = ROOT_CANDIDATES.find((dir) =>
+    fs.existsSync(path.join(dir, 'package.json')) &&
+    fs.existsSync(path.join(dir, 'index.ts'))
+) || __dirname;
+const TS_NODE_BIN = path.join(PROJECT_DIR, 'node_modules', 'ts-node', 'dist', 'bin.js');
 
 module.exports = {
     apps: [
         // ── Trading Bot ────────────────────────────────────────────
         {
             name: 'bot',
-            script: 'npx',
-            args: 'ts-node index.ts',
+            script: TS_NODE_BIN,
+            args: 'index.ts',
+            interpreter: 'node',
             cwd: PROJECT_DIR,
             node_args: '--max-old-space-size=8192',
             env: {
@@ -34,6 +42,7 @@ module.exports = {
             min_uptime: '10s',
             restart_delay: 5000,
             autorestart: true,
+            kill_timeout: 10000,
             // Logging
             log_date_format: 'YYYY-MM-DD HH:mm:ss',
             error_file: `${PROJECT_DIR}/logs/bot-error.log`,
@@ -46,8 +55,9 @@ module.exports = {
         // ── Dashboard API ──────────────────────────────────────────
         {
             name: 'dashboard-api',
-            script: 'npx',
-            args: 'ts-node server.ts',
+            script: TS_NODE_BIN,
+            args: 'server.ts',
+            interpreter: 'node',
             cwd: `${PROJECT_DIR}/dashboard-api`,
             env: {
                 NODE_ENV: 'production',
@@ -57,6 +67,7 @@ module.exports = {
             min_uptime: '5s',
             restart_delay: 3000,
             autorestart: true,
+            kill_timeout: 10000,
             // Logging
             log_date_format: 'YYYY-MM-DD HH:mm:ss',
             error_file: `${PROJECT_DIR}/logs/api-error.log`,

@@ -7,6 +7,13 @@ Todas as variáveis de ambiente disponíveis no arquivo `.env`.
 ### `RPC_URL` **(obrigatório)**
 Endpoint principal da Solana. Agora integrado ao `rpcPool` para failover automático.
 
+**Ordem efetiva atual do `rpcPool`:**
+1. `SHYFT_RPC` se configurado
+2. `RPC_URL`
+3. `RPC_FALLBACK_LIST` na ordem declarada
+
+URLs duplicadas são deduplicadas antes da montagem do pool.
+
 ---
 
 ### `RPC_FALLBACK_LIST`
@@ -21,6 +28,55 @@ RPC_FALLBACK_LIST=https://url1,https://url2,https://url3
 
 ### `WS_URL` e `WS_FALLBACK_LIST`
 URL de WebSocket primária e lista de fallbacks. Usado como redundância ao gRPC para captura de eventos em tempo real.
+
+**Nota:** hoje o runtime não possui um `wsPool` equivalente ao `rpcPool`; esses valores ficam declarados para consumidores específicos e para futuras integrações de failover WS.
+
+---
+
+## gRPC Discovery
+
+### `GRPC_PROVIDER_PREFERENCE`
+Ordem de preferência dos providers gRPC declarados.
+
+**Exemplo:**
+```bash
+GRPC_PROVIDER_PREFERENCE=bitquery,publicnode,custom,legacy
+```
+
+---
+
+### `BITQUERY_GRPC_URL` e `BITQUERY_GRPC_TOKEN`
+Endpoint e token do Bitquery CoreCast.
+
+**Uso atual no runtime:**
+- `DexTrades`
+- `Transactions`
+- `DexPools`
+- `Transfers`
+- `DexOrders`
+- `Balances`
+
+**Exemplo:**
+```bash
+BITQUERY_GRPC_URL=corecast.bitquery.io:443
+BITQUERY_GRPC_TOKEN=YOUR_BITQUERY_CORECAST_TOKEN
+```
+
+---
+
+### `PUBLICNODE_GRPC_URL` e `PUBLICNODE_GRPC_TOKEN`
+Endpoint e token do Yellowstone gRPC da PublicNode.
+
+**Exemplo:**
+```bash
+PUBLICNODE_GRPC_URL=https://solana-yellowstone-grpc.publicnode.com:443
+PUBLICNODE_GRPC_TOKEN=YOUR_PUBLICNODE_GRPC_TOKEN
+```
+
+---
+
+### `SHYFT_GRPC` e `SHYFT_GRPC_TOKEN`
+Endpoint gRPC legado/custom. Continua suportado como provider Yellowstone compatível.
 
 ---
 

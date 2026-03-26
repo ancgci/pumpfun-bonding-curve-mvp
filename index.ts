@@ -26,10 +26,10 @@ import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
 import { calculateCurveProgress } from "./utils/curveConstants";
 import { alertQueue } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from "./utils/agentOrchestrator";
-import { rebuildMetricsFromFile } from "./utils/simulationEngine";
+import { getOpenTradesFromDb, rebuildMetricsFromFile } from "./utils/simulationEngine";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
 import { recordPriceSample, getLatestPrice } from './utils/volatilityMonitor';
-import { backfillTokenHistory } from './utils/pumpfunHistory';
+import { backfillTokenHistory, DEFAULT_PUMPFUN_BACKFILL_TRADES } from './utils/pumpfunHistory';
 import { recordOrganicityTrade, loadOrganicityFromDisk, saveOrganicityToDisk } from "./utils/organicityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
 import { runPostMortemCycle } from "./utils/postMortemAgent";
@@ -53,12 +53,54 @@ import {
   markBotRuntimeError,
   markDecisionActivity,
   markDiscoveryActivity,
+  markBitqueryTransfersRuntime,
+  markGrpcProviderActivation,
+  markGrpcProviderConfiguration,
+  clearGrpcSubstream,
+  markGrpcSubstreamConnected,
+  markGrpcSubstreamDisconnected,
+  markGrpcSubstreamError,
+  markGrpcSubstreamEvent,
   markTradeExecutionActivity,
   markStreamConnected,
   markStreamDisconnected,
   markStreamEvent,
 } from "./utils/botRuntimeHealth";
 import { recordFunnelEvent } from "./utils/decisionFunnelMetrics";
+import {
+  getConfiguredGrpcProviders,
+  getSupportedGrpcProviders,
+  GrpcProviderConfig,
+} from "./utils/grpcProviders";
+import { isGrpcFallbackProviderActive, resolveNextGrpcProvider } from "./utils/grpcProviderFailover";
+import { createBitqueryDexTradesStream, decodeBitqueryDexTradeMessage } from "./utils/bitqueryGrpcAdapter";
+import { createBitqueryTransactionsStream, decodeBitqueryPumpFunTransactionMessage } from "./utils/bitqueryTransactionsAdapter";
+import { createBitqueryDexPoolsStream, decodeBitqueryDexPoolMessage } from "./utils/bitqueryDexPoolsAdapter";
+import { createBitqueryTransfersStream, decodeBitqueryTransferMessage } from "./utils/bitqueryTransfersAdapter";
+import { createBitqueryDexOrdersStream, decodeBitqueryDexOrderMessage } from "./utils/bitqueryDexOrdersAdapter";
+import { createBitqueryBalancesStream, decodeBitqueryBalanceUpdateMessage } from "./utils/bitqueryBalancesAdapter";
+import { bitqueryEventBus, BitqueryDiscoveryCandidate } from "./utils/bitqueryEventBus";
+import {
+  cleanupBitqueryRealtimeState,
+  recordOrderPressure,
+  recordTransferParticipation,
+  recordWalletBalanceSnapshot,
+} from "./utils/bitqueryRealtimeState";
+import { getActiveTradingWalletAddress } from "./utils/walletStore";
+import {
+  cancelManagedGrpcStream,
+  describeManagedStreamLifecycleReason,
+  consumeGrpcEarlyError,
+  installGrpcEarlyErrorGuard,
+  isStaleManagedGrpcStream,
+  shouldIgnoreManagedStreamLifecycle,
+  uninstallGrpcEarlyErrorGuard,
+} from "./utils/grpcStreamLifecycle";
+import {
+  getBitqueryTransferRefreshDelay,
+  getBitqueryTransferRefreshMinInterval,
+  planBitqueryTransferSubscriptionChunks,
+} from "./utils/bitqueryTransfersRefreshGovernor";
 
 // Cores ANSI para Logs
 const C_BLUE = "\x1b[36m";
@@ -90,8 +132,14 @@ if (validation.warnings && validation.warnings.length > 0) {
 
 const {
   SHYFT_GRPC,
+  SHYFT_GRPC_TOKEN,
   GRPC_URL,
   GRPC_TOKEN,
+  GRPC_PROVIDER_PREFERENCE,
+  PUBLICNODE_GRPC_URL,
+  PUBLICNODE_GRPC_TOKEN,
+  BITQUERY_GRPC_URL,
+  BITQUERY_GRPC_TOKEN,
   TELEGRAM_BOT_TOKEN: token,
   TELEGRAM_CHAT_ID: chatId,
   ALERT_THRESHOLD,
@@ -182,6 +230,10 @@ setInterval(() => {
   saveOrganicityToDisk();
 }, 300_000);
 
+setInterval(() => {
+  cleanupBitqueryRealtimeState();
+}, 60_000);
+
 // Initialize the Dip Waitlist Monitor
 dipMonitor.initialize(async (mint: string, token) => {
   logger.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint} (kind=${token?.kind || "LEGACY_DIP"})`);
@@ -202,6 +254,7 @@ dipMonitor.initialize(async (mint: string, token) => {
 });
 
 winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
+  watchBitqueryTransferMint(candidate.mint);
   logger.info(
     `🧠 [index.ts] Winner Reentry executing BUY for ${candidate.mint} ` +
     `(priority=${candidate.priorityScore.toFixed(1)}, force=${force === true})`
@@ -369,6 +422,70 @@ const botHealth: BotHealth = {
 let activeGrpcStream: any = null;
 let activeGrpcStreamStartedAt: number | null = null;
 let lastGrpcDataAt: number | null = null;
+let currentGrpcProviderId: string | null = null;
+let activeGrpcSessionTerminator: ((reason: string) => void) | null = null;
+let activeBitqueryTransferMintWatcher: ((mint: string) => void) | null = null;
+const BITQUERY_TRANSFER_WATCH_TTL_MS = 15 * 60 * 1000;
+const BITQUERY_TRANSFER_WATCH_MAX_MINTS = 48;
+const BITQUERY_TRANSFER_STREAM_MAX_MINTS = 16;
+const BITQUERY_TRANSFER_REFRESH_DEBOUNCE_MS = 1000;
+const BITQUERY_TRANSFER_REFRESH_MIN_INTERVAL_MS = 4000;
+const BITQUERY_TRANSFER_REFRESH_SATURATED_MIN_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.BITQUERY_TRANSFER_REFRESH_SATURATED_MIN_INTERVAL_MS,
+  15000
+);
+const BITQUERY_AUXILIARY_STREAM_RECOVERY_DELAY_MS = 1500;
+const BITQUERY_CRITICAL_STREAM_NAMES = new Set(["DexTrades", "Transactions"]);
+
+interface PendingGrpcProviderRotation {
+  targetProviderId: string | null;
+  reason: string;
+}
+
+let pendingGrpcProviderRotation: PendingGrpcProviderRotation | null = null;
+
+function watchBitqueryTransferMint(mint: string) {
+  if (!mint || !activeBitqueryTransferMintWatcher) return;
+  activeBitqueryTransferMintWatcher(mint);
+}
+
+function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const GRPC_PRIMARY_PROVIDER_MAX_RECONNECT_ATTEMPTS = parsePositiveIntEnv(
+  process.env.GRPC_PRIMARY_PROVIDER_MAX_RECONNECT_ATTEMPTS,
+  4
+);
+const GRPC_FALLBACK_PROVIDER_MAX_RECONNECT_ATTEMPTS = parsePositiveIntEnv(
+  process.env.GRPC_FALLBACK_PROVIDER_MAX_RECONNECT_ATTEMPTS,
+  8
+);
+const GRPC_PRIMARY_RECOVERY_COOLDOWN_MS = parsePositiveIntEnv(
+  process.env.GRPC_PRIMARY_RECOVERY_COOLDOWN_MS,
+  180000
+);
+const BITQUERY_CRITICAL_STREAM_RECOVERY_THRESHOLD = parsePositiveIntEnv(
+  process.env.BITQUERY_CRITICAL_STREAM_RECOVERY_THRESHOLD,
+  3
+);
+const BITQUERY_CRITICAL_STREAM_RECOVERY_WINDOW_MS = parsePositiveIntEnv(
+  process.env.BITQUERY_CRITICAL_STREAM_RECOVERY_WINDOW_MS,
+  120000
+);
+const BITQUERY_CRITICAL_STREAM_STARTUP_GRACE_MS = parsePositiveIntEnv(
+  process.env.BITQUERY_CRITICAL_STREAM_STARTUP_GRACE_MS,
+  45000
+);
+const BITQUERY_CRITICAL_STREAM_STALL_THRESHOLD_MS = parsePositiveIntEnv(
+  process.env.BITQUERY_CRITICAL_STREAM_STALL_THRESHOLD_MS,
+  Math.min(STREAM_STALL_THRESHOLD_MS, 90000)
+);
+const BITQUERY_CRITICAL_STREAM_CHECK_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.BITQUERY_CRITICAL_STREAM_CHECK_INTERVAL_MS,
+  15000
+);
 
 function logVerboseTransaction(message: string) {
   if (!VERBOSE_TRANSACTION_LOGS) return;
@@ -398,6 +515,71 @@ function describeError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function calculateReconnectDelay(attempt: number, baseDelay: number, maxDelay: number): number {
+  const boundedAttempt = Math.max(1, attempt);
+  const exponentialDelay = Math.min(baseDelay * Math.pow(2, boundedAttempt - 1), maxDelay);
+  const jitter = Math.floor(Math.random() * Math.min(1000, Math.max(250, exponentialDelay * 0.2)));
+  return exponentialDelay + jitter;
+}
+
+function isNonRecoverableGrpcError(error: any): boolean {
+  const code = Number(error?.code);
+  const details = String(error?.details || error?.message || "").toLowerCase();
+
+  if (code === 16) return true; // UNAUTHENTICATED
+  if (code === 3) return true; // INVALID_ARGUMENT
+  if (details.includes("unauthenticated")) return true;
+  if (details.includes("permission denied")) return true;
+  if (details.includes("invalid argument")) return true;
+
+  return false;
+}
+
+class GrpcProviderRotationError extends Error {
+  readonly providerId: string;
+  readonly targetProviderId: string | null;
+
+  constructor(params: {
+    providerId: string;
+    targetProviderId?: string | null;
+    message: string;
+  }) {
+    super(params.message);
+    this.name = "GrpcProviderRotationError";
+    this.providerId = params.providerId;
+    this.targetProviderId = params.targetProviderId ?? null;
+  }
+}
+
+function requestGrpcProviderRotation(targetProviderId: string | null, reason: string) {
+  pendingGrpcProviderRotation = {
+    targetProviderId,
+    reason,
+  };
+  if (activeGrpcSessionTerminator) {
+    activeGrpcSessionTerminator(reason);
+    return;
+  }
+  recycleActiveGrpcStream(reason);
+}
+
+function consumeGrpcProviderRotationRequest(
+  currentProviderId: string
+): PendingGrpcProviderRotation | null {
+  if (!pendingGrpcProviderRotation) return null;
+  if (pendingGrpcProviderRotation.targetProviderId === currentProviderId) {
+    return null;
+  }
+
+  const request = pendingGrpcProviderRotation;
+  pendingGrpcProviderRotation = null;
+  return request;
+}
+
+function clearGrpcProviderRotationRequest() {
+  pendingGrpcProviderRotation = null;
 }
 
 function recycleActiveGrpcStream(reason: string) {
@@ -523,48 +705,100 @@ if (ANONCOIN_MONITORING_ENABLED && ANONCOIN_PROGRAM_ID_OBJ) {
 }
 
 async function handleStream(client: Client, args: SubscribeRequest) {
-  // Subscribe for events
-  const stream = await client.subscribe();
-  activeGrpcStream = stream;
+  const stream = installGrpcEarlyErrorGuard(await client.subscribe());
+  const intentionallyCancelledStreams = new WeakSet<object>();
+  const managedStream = {
+    cancel: () => cancelManagedGrpcStream(stream, intentionallyCancelledStreams),
+    destroy: () => cancelManagedGrpcStream(stream, intentionallyCancelledStreams),
+    end: () => cancelManagedGrpcStream(stream, intentionallyCancelledStreams),
+  };
+
+  activeGrpcStream = managedStream;
   activeGrpcStreamStartedAt = Date.now();
   lastGrpcDataAt = null;
 
-  // Cleanup function to remove all listeners and prevent memory leaks
   let cleanedUp = false;
+  let settled = false;
+  let failSession: (error: any) => void = () => {};
   const cleanup = (reason?: string) => {
     if (cleanedUp) return;
     cleanedUp = true;
-    if (activeGrpcStream === stream) {
+    if (activeGrpcSessionTerminator === sessionTerminator) {
+      activeGrpcSessionTerminator = null;
+    }
+    if (activeGrpcStream === managedStream) {
       activeGrpcStream = null;
       activeGrpcStreamStartedAt = null;
       lastGrpcDataAt = null;
     }
     markStreamDisconnected(reason);
-    try {
-      stream.removeAllListeners();
-    } catch (e) {
-      // Ignore cleanup errors
-    }
   };
+  const sessionTerminator = (reason: string) => {
+    failSession(new Error(reason));
+  };
+  activeGrpcSessionTerminator = sessionTerminator;
 
-  // Create `error` / `end` handler
   const streamClosed = new Promise<void>((resolve, reject) => {
-    stream.on("error", (error) => {
+    failSession = (error: any) => {
+      if (settled) return;
+      settled = true;
       const reason = describeError(error);
-      logger.error("ERROR", error);
       markBotRuntimeError(reason);
       cleanup(reason);
-      reject(error);
-      stream.end();
+      cancelManagedGrpcStream(stream, intentionallyCancelledStreams);
+      reject(error instanceof Error ? error : new Error(reason));
+    };
+
+    const handleLifecycle = (lifecycle: "error" | "end" | "close", error?: any) => {
+      if (shouldIgnoreManagedStreamLifecycle({
+        streamCancelled: intentionallyCancelledStreams.has(stream),
+        lifecycle,
+        error,
+      })) {
+        cleanup(lifecycle === "error" ? describeError(error) : `Stream ${lifecycle}`);
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+        return;
+      }
+
+      const reason = lifecycle === "error"
+        ? describeError(error)
+        : lifecycle === "end"
+          ? "Stream ended"
+          : "Stream closed";
+
+      if (lifecycle === "error") {
+        logger.error("ERROR", error);
+        failSession(error instanceof Error ? error : new Error(reason));
+        return;
+      }
+
+      cleanup(reason);
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+
+    stream.on("error", (error) => {
+      handleLifecycle("error", error);
     });
+    const earlyStreamError = consumeGrpcEarlyError(stream);
+    uninstallGrpcEarlyErrorGuard(stream);
     stream.on("end", () => {
-      cleanup("Stream ended");
-      resolve();
+      handleLifecycle("end");
     });
     stream.on("close", () => {
-      cleanup("Stream closed");
-      resolve();
+      handleLifecycle("close");
     });
+
+    if (earlyStreamError) {
+      queueMicrotask(() => {
+        handleLifecycle("error", earlyStreamError);
+      });
+    }
   });
 
   // Handle updates
@@ -713,12 +947,8 @@ function deriveObservedTokenPrice(
   const tokenAmount = Number(tokenAmountRaw) || 0;
 
   if (solAmount > 0 && tokenAmount > 0) {
-    const normalizedTokenAmount = tokenAmount > 1_000_000
-      ? tokenAmount / 1_000_000
-      : tokenAmount;
-    if (normalizedTokenAmount > 0) {
-      return solAmount / normalizedTokenAmount;
-    }
+    // Bitquery adapters already normalize tokenAmount using token decimals.
+    return solAmount / tokenAmount;
   }
 
   const numericFallback = Number(fallbackPrice) || 0;
@@ -1086,7 +1316,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
         // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
         // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
-        await backfillTokenHistory(tOutput.mint, 50);
+        await backfillTokenHistory(tOutput.mint, DEFAULT_PUMPFUN_BACKFILL_TRADES);
 
         recordTransaction(tOutput.mint);
       }
@@ -2356,32 +2586,929 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
 
 
 
-async function subscribeCommand(client: Client, args: SubscribeRequest) {
+async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDiscoveryCandidate) {
+  if (!(MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH")) return;
+  if (candidate.protocolProgram !== PUMP_FUN_PROGRAM_ID.toBase58()) return;
+  if (!candidate.marketAddress || !candidate.mint || !candidate.trader) return;
+
+  const tokenKey = getProtocolTokenKey("pumpfun", candidate.mint);
+  if (aiProcessedAddresses.has(tokenKey) || currentlyProcessing.has(tokenKey)) {
+    return;
+  }
+
+  try {
+    const poolSnapshot = bitqueryEventBus.getLatestPoolSnapshot(candidate.marketAddress);
+    const balance =
+      poolSnapshot && poolSnapshot.poolSolPostAmount > 0
+        ? poolSnapshot.poolSolPostAmount
+        : await getBondingCurveAddress(candidate.marketAddress);
+    const progress = calculateCurveProgress(Number(balance));
+
+    if (!(progress >= 90 && progress <= 100)) {
+      return;
+    }
+
+    watchBitqueryTransferMint(candidate.mint);
+    const tokenMetadata = await loadTokenMetadataSafe(candidate.mint, "token Bitquery PumpFun");
+    await backfillTokenHistory(candidate.mint, DEFAULT_PUMPFUN_BACKFILL_TRADES);
+
+    await runProtocolSimulationDiscovery({
+      protocolId: "pumpfun",
+      protocolLabel: "PumpFun",
+      tOutput: {
+        mint: candidate.mint,
+        user: candidate.trader,
+        type: candidate.type,
+        bondingCurve: candidate.marketAddress,
+        tokenAmount: candidate.tokenAmount,
+        solAmount: candidate.solAmount,
+      },
+      progress: Number(progress),
+      tokenMetadata,
+    });
+  } catch (error: any) {
+    logger.error(`❌ Erro ao processar candidate Bitquery PumpFun ${candidate.mint}: ${error.message}`);
+  }
+}
+
+bitqueryEventBus.subscribeDiscovery((candidate) => {
+  void processBitqueryPumpFunDiscoveryCandidate(candidate);
+});
+
+function getBitqueryProgramAddresses(): string[] {
+  const addresses: string[] = [];
+
+  if (MONITORING_PROTOCOL === "PUMPFUN" || MONITORING_PROTOCOL === "BOTH") {
+    addresses.push(PUMP_FUN_PROGRAM_ID.toBase58());
+  }
+
+  return [...new Set(addresses.filter(Boolean))];
+}
+
+async function handleBitqueryStream(provider: GrpcProviderConfig) {
+  const programAddresses = getBitqueryProgramAddresses();
+  if (programAddresses.length === 0) {
+    throw new Error("Bitquery adapter sem programas compatíveis habilitados no runtime atual");
+  }
+
+  const managedStreams = new Map<string, any>();
+  const managedStreamBindings = new Map<
+    string,
+    { createStream: () => any; onData: (message: any) => Promise<void> }
+  >();
+  const auxiliaryRecoveryTimers = new Map<string, NodeJS.Timeout>();
+  const transferWatchlist = new Map<string, number>();
+  const transferStreamKeys = new Map<string, string>();
+  const transferStreamAssignments = new Map<string, string[]>();
+  const managedStreamHealth = new Map<
+    string,
+    {
+      connected: boolean;
+      lastConnectAt: number | null;
+      lastEventAt: number | null;
+      lastDisconnectAt: number | null;
+    }
+  >();
+  const criticalStreamRecoveryHistory = new Map<string, number[]>();
+  const intentionallyCancelledStreams = new WeakSet<object>();
+  let transferSubscriptionKey = "";
+  let transferRefreshTimer: NodeJS.Timeout | null = null;
+  let criticalStreamMonitorTimer: NodeJS.Timeout | null = null;
+  let lastTransferRefreshAt = 0;
+  let transferMintWatcher: ((mint: string) => void) | null = null;
+
+  const cancelManagedStream = (stream: any) => {
+    cancelManagedGrpcStream(stream, intentionallyCancelledStreams);
+  };
+
+  const clearTransferRefreshTimer = () => {
+    if (!transferRefreshTimer) return;
+    clearTimeout(transferRefreshTimer);
+    transferRefreshTimer = null;
+  };
+
+  const clearCriticalStreamMonitorTimer = () => {
+    if (!criticalStreamMonitorTimer) return;
+    clearInterval(criticalStreamMonitorTimer);
+    criticalStreamMonitorTimer = null;
+  };
+
+  const isTransferStreamName = (name: string) => name === "Transfers" || name.startsWith("Transfers#");
+  const listTransferStreamNames = () =>
+    Array.from(managedStreams.keys()).filter((name) => isTransferStreamName(name));
+  const hasActiveTransferStreams = () => listTransferStreamNames().length > 0;
+  const buildTransferMintsPreview = () =>
+    Array.from(transferWatchlist.entries())
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 12)
+      .map(([mint]) => mint);
+  const buildTransferStreamAssignments = () =>
+    listTransferStreamNames()
+      .sort((left, right) => left.localeCompare(right))
+      .reduce<Record<string, number>>((result, name) => {
+        result[name] = transferStreamAssignments.get(name)?.length || 0;
+        return result;
+      }, {});
+  const updateTransferRuntimeState = (params: {
+    admittedMintDelta?: number;
+    refreshDelta?: number;
+    reloadDelta?: number;
+    prunedMintDelta?: number;
+    overflowEvictionDelta?: number;
+    lastWatchAt?: number | null;
+    lastRefreshAt?: number | null;
+    lastReloadAt?: number | null;
+    lastPlanChangeAt?: number | null;
+  } = {}) => {
+    markBitqueryTransfersRuntime({
+      watchlistSize: transferWatchlist.size,
+      maxWatchlistSize: BITQUERY_TRANSFER_WATCH_MAX_MINTS,
+      activeStreamCount: listTransferStreamNames().length,
+      trackedMintsPreview: buildTransferMintsPreview(),
+      streamAssignments: buildTransferStreamAssignments(),
+      ...params,
+    });
+  };
+  const clearAuxiliaryRecoveryTimer = (name: string) => {
+    const timer = auxiliaryRecoveryTimers.get(name);
+    if (!timer) return;
+    clearTimeout(timer);
+    auxiliaryRecoveryTimers.delete(name);
+  };
+  const clearAllAuxiliaryRecoveryTimers = () => {
+    for (const timer of auxiliaryRecoveryTimers.values()) {
+      clearTimeout(timer);
+    }
+    auxiliaryRecoveryTimers.clear();
+  };
+  const clearManagedStreamState = (name: string) => {
+    managedStreamHealth.delete(name);
+    criticalStreamRecoveryHistory.delete(name);
+    clearAuxiliaryRecoveryTimer(name);
+    clearGrpcSubstream(name);
+  };
+
+  const ensureManagedStreamHealth = (name: string) => {
+    let existing = managedStreamHealth.get(name);
+    if (existing) return existing;
+
+    existing = {
+      connected: false,
+      lastConnectAt: null,
+      lastEventAt: null,
+      lastDisconnectAt: null,
+    };
+    managedStreamHealth.set(name, existing);
+    return existing;
+  };
+
+  const markManagedStreamConnected = (name: string) => {
+    const health = ensureManagedStreamHealth(name);
+    health.connected = true;
+    health.lastConnectAt = Date.now();
+    markGrpcSubstreamConnected(name);
+  };
+
+  const markManagedStreamEvent = (name: string) => {
+    const health = ensureManagedStreamHealth(name);
+    const now = Date.now();
+    health.connected = true;
+    health.lastEventAt = now;
+    markGrpcSubstreamEvent(name);
+  };
+
+  const markManagedStreamDisconnected = (name: string, reason?: string) => {
+    const health = ensureManagedStreamHealth(name);
+    health.connected = false;
+    health.lastDisconnectAt = Date.now();
+    markGrpcSubstreamDisconnected(name, reason);
+  };
+
+  const recordManagedStreamError = (name: string, reason: string) => {
+    markGrpcSubstreamError(name, reason);
+
+    if (!BITQUERY_CRITICAL_STREAM_NAMES.has(name)) {
+      return 0;
+    }
+
+    const now = Date.now();
+    const history = criticalStreamRecoveryHistory.get(name) || [];
+    const pruned = history.filter((timestamp) => now - timestamp <= BITQUERY_CRITICAL_STREAM_RECOVERY_WINDOW_MS);
+    pruned.push(now);
+    criticalStreamRecoveryHistory.set(name, pruned);
+    return pruned.length;
+  };
+
+  const getManagedStreamLagMs = (name: string, now: number) => {
+    const health = managedStreamHealth.get(name);
+    const reference = health?.lastEventAt || health?.lastConnectAt || activeGrpcStreamStartedAt;
+    if (!reference) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return now - reference;
+  };
+
+  const compositeStream = {
+    cancel: () => {
+      for (const stream of managedStreams.values()) {
+        cancelManagedStream(stream);
+      }
+      managedStreams.clear();
+    },
+    removeAllListeners: () => {
+      // Intentionally left blank.
+      // Bitquery's live-reload guidance stops streams via cancel(); stripping
+      // listeners before the gRPC client finishes emitting error/end/close can
+      // turn expected client-side cancellations into uncaught exceptions.
+    },
+  };
+
+  activeGrpcStream = compositeStream;
+  activeGrpcStreamStartedAt = Date.now();
+  lastGrpcDataAt = null;
+
+  let cleanedUp = false;
+  let settled = false;
+  let failStream: (error: any, streamName: string, lifecycle: string) => void = () => {};
+  const sessionTerminator = (reason: string) => {
+    failStream(new Error(reason), "ProviderSession", "manual-rotation");
+  };
+  activeGrpcSessionTerminator = sessionTerminator;
+  const cleanup = (reason?: string) => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    if (transferMintWatcher && activeBitqueryTransferMintWatcher === transferMintWatcher) {
+      activeBitqueryTransferMintWatcher = null;
+    }
+    if (activeGrpcSessionTerminator === sessionTerminator) {
+      activeGrpcSessionTerminator = null;
+    }
+    if (activeGrpcStream === compositeStream) {
+      activeGrpcStream = null;
+      activeGrpcStreamStartedAt = null;
+      lastGrpcDataAt = null;
+    }
+    clearTransferRefreshTimer();
+    clearCriticalStreamMonitorTimer();
+    clearAllAuxiliaryRecoveryTimers();
+    for (const name of managedStreams.keys()) {
+      markManagedStreamDisconnected(name, reason);
+    }
+    markStreamDisconnected(reason);
+    compositeStream.cancel();
+    markBitqueryTransfersRuntime({
+      watchlistSize: 0,
+      maxWatchlistSize: BITQUERY_TRANSFER_WATCH_MAX_MINTS,
+      activeStreamCount: 0,
+      trackedMintsPreview: [],
+      streamAssignments: {},
+    });
+  };
+
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    failStream = (error: any, streamName: string, lifecycle: string) => {
+      if (settled) return;
+      settled = true;
+      const reason = describeError(error) || `${streamName} ${lifecycle}`;
+      logger.error(`⚠️ Bitquery managed stream ${streamName} ${lifecycle}: ${reason}`);
+      markBotRuntimeError(reason);
+      cleanup(reason);
+      reject(error instanceof Error ? error : new Error(reason));
+    };
+  });
+
+  const scheduleTransfersStreamRecovery = (name: string, stream: any, lifecycle: string, error?: any) => {
+    if (cleanedUp) return;
+
+    const reason = describeManagedStreamLifecycleReason(error, `${name} ${lifecycle}`);
+    const activeStream = managedStreams.get(name);
+    if (activeStream && activeStream === stream) {
+      managedStreams.delete(name);
+      cancelManagedStream(activeStream);
+      transferStreamKeys.delete(name);
+      transferSubscriptionKey = "";
+      updateTransferRuntimeState();
+    }
+    logger.warn(
+      `⚠️ Bitquery transfers substream ${name} ${lifecycle}: ${reason}. Reagendando live reload do filtro.`
+    );
+    scheduleTransfersStreamRefresh();
+  };
+
+  const scheduleAuxiliaryStreamRecovery = (
+    name: string,
+    stream: any,
+    lifecycle: string,
+    error?: any
+  ) => {
+    if (cleanedUp) return;
+
+    const reason = describeManagedStreamLifecycleReason(error, `${name} ${lifecycle}`);
+    const activeStream = managedStreams.get(name);
+    if (activeStream && activeStream === stream) {
+      managedStreams.delete(name);
+      cancelManagedStream(activeStream);
+    }
+
+    clearAuxiliaryRecoveryTimer(name);
+    logger.warn(`⚠️ Bitquery auxiliary stream ${name} ${lifecycle}: ${reason}. Recriando substream.`);
+    auxiliaryRecoveryTimers.set(
+      name,
+      setTimeout(() => {
+        auxiliaryRecoveryTimers.delete(name);
+        if (cleanedUp) return;
+
+        const binding = managedStreamBindings.get(name);
+        if (!binding) return;
+
+        try {
+          replaceManagedStream(name, binding.createStream(), binding.onData);
+        } catch (rebindError) {
+          failStream(rebindError, name, "rebind");
+        }
+      }, BITQUERY_AUXILIARY_STREAM_RECOVERY_DELAY_MS)
+    );
+  };
+
+  const bindManagedStream = (name: string, stream: any, onData: (message: any) => Promise<void>) => {
+    managedStreams.set(name, stream);
+    markManagedStreamConnected(name);
+    const handleLifecycleFailure = (lifecycle: string, error?: any) => {
+      const activeStream = managedStreams.get(name);
+      if (isStaleManagedGrpcStream(activeStream, stream)) {
+        return;
+      }
+
+      const reason = describeManagedStreamLifecycleReason(error, `${name} ${lifecycle}`);
+
+      if (shouldIgnoreManagedStreamLifecycle({
+        streamCancelled: intentionallyCancelledStreams.has(stream),
+        lifecycle: lifecycle as "error" | "end" | "close",
+        error,
+      })) {
+        return;
+      }
+
+      markManagedStreamDisconnected(name, reason);
+
+      if (isTransferStreamName(name) && lifecycle !== "data" && !isNonRecoverableGrpcError(error)) {
+        scheduleTransfersStreamRecovery(name, stream, lifecycle, error);
+        return;
+      }
+
+      if (!isTransferStreamName(name) && lifecycle !== "data" && !isNonRecoverableGrpcError(error)) {
+        const recentFailureCount = recordManagedStreamError(name, reason);
+        if (
+          BITQUERY_CRITICAL_STREAM_NAMES.has(name) &&
+          recentFailureCount >= BITQUERY_CRITICAL_STREAM_RECOVERY_THRESHOLD
+        ) {
+          failStream(
+            new Error(
+              `${name} excedeu ${recentFailureCount} recoveries em ${
+                Math.round(BITQUERY_CRITICAL_STREAM_RECOVERY_WINDOW_MS / 1000)
+              }s: ${reason}`
+            ),
+            name,
+            "degraded"
+          );
+          return;
+        }
+        scheduleAuxiliaryStreamRecovery(name, stream, lifecycle, error);
+        return;
+      }
+
+      failStream(error || new Error(`${name} stream ${lifecycle}`), name, lifecycle);
+    };
+
+    stream.on("error", (error: any) => {
+      handleLifecycleFailure("error", error);
+    });
+    const earlyStreamError = consumeGrpcEarlyError(stream);
+    uninstallGrpcEarlyErrorGuard(stream);
+    stream.on("end", () => {
+      handleLifecycleFailure("end");
+    });
+    stream.on("close", () => {
+      handleLifecycleFailure("close");
+    });
+    stream.on("data", async (message: any) => {
+      try {
+        lastGrpcDataAt = Date.now();
+        markStreamEvent();
+        markManagedStreamEvent(name);
+        await onData(message);
+      } catch (error) {
+        failStream(error, name, "data");
+      }
+    });
+
+    if (earlyStreamError) {
+      queueMicrotask(() => {
+        handleLifecycleFailure("error", earlyStreamError);
+      });
+    }
+  };
+
+  const replaceManagedStream = (name: string, stream: any, onData: (message: any) => Promise<void>) => {
+    const previous = managedStreams.get(name);
+    if (previous) {
+      managedStreams.delete(name);
+      cancelManagedStream(previous);
+    }
+
+    bindManagedStream(name, stream, onData);
+  };
+
+  const registerManagedStream = (
+    name: string,
+    createStream: () => any,
+    onData: (message: any) => Promise<void>
+  ) => {
+    managedStreamBindings.set(name, { createStream, onData });
+    bindManagedStream(name, createStream(), onData);
+  };
+
+  const pruneTransferWatchlist = (now: number = Date.now()) => {
+    let expiredCount = 0;
+    let overflowEvictionCount = 0;
+
+    for (const [mint, seenAt] of transferWatchlist.entries()) {
+      if (now - seenAt > BITQUERY_TRANSFER_WATCH_TTL_MS) {
+        transferWatchlist.delete(mint);
+        expiredCount += 1;
+      }
+    }
+
+    while (transferWatchlist.size > BITQUERY_TRANSFER_WATCH_MAX_MINTS) {
+      const oldestMint = transferWatchlist.keys().next().value;
+      if (!oldestMint) break;
+      transferWatchlist.delete(oldestMint);
+      overflowEvictionCount += 1;
+    }
+
+    if (expiredCount > 0 || overflowEvictionCount > 0) {
+      updateTransferRuntimeState({
+        prunedMintDelta: expiredCount + overflowEvictionCount,
+        overflowEvictionDelta: overflowEvictionCount,
+      });
+    }
+  };
+
+  const refreshTransfersStream = () => {
+    transferRefreshTimer = null;
+    if (cleanedUp) return;
+    pruneTransferWatchlist();
+    const tokenMints = Array.from(transferWatchlist.keys());
+    const transferPlans = planBitqueryTransferSubscriptionChunks({
+      tokenMints,
+      maxAddressesPerStream: BITQUERY_TRANSFER_STREAM_MAX_MINTS,
+      previousAssignments: transferStreamAssignments,
+    });
+    const nextKey = transferPlans.map((plan) => `${plan.name}:${plan.key}`).join("|");
+    const hasPlanChanges =
+      nextKey !== transferSubscriptionKey ||
+      transferPlans.some(
+        (plan) => !managedStreams.has(plan.name) || transferStreamKeys.get(plan.name) !== plan.key
+      );
+    const refreshAt = Date.now();
+
+    if (!hasPlanChanges) {
+      updateTransferRuntimeState({
+        refreshDelta: 1,
+        lastRefreshAt: refreshAt,
+      });
+      return;
+    }
+
+    transferSubscriptionKey = nextKey;
+    lastTransferRefreshAt = refreshAt;
+    let reloadedStreamCount = 0;
+
+    const nextTransferNames = new Set(transferPlans.map((plan) => plan.name));
+    for (const name of listTransferStreamNames()) {
+      if (nextTransferNames.has(name)) continue;
+      const previous = managedStreams.get(name);
+      if (previous) {
+        managedStreams.delete(name);
+        clearManagedStreamState(name);
+        cancelManagedStream(previous);
+      } else {
+        clearManagedStreamState(name);
+      }
+      transferStreamKeys.delete(name);
+      transferStreamAssignments.delete(name);
+      reloadedStreamCount += 1;
+    }
+
+    if (transferPlans.length === 0) {
+      updateTransferRuntimeState({
+        refreshDelta: 1,
+        reloadDelta: reloadedStreamCount,
+        lastRefreshAt: refreshAt,
+        lastReloadAt: reloadedStreamCount > 0 ? refreshAt : undefined,
+        lastPlanChangeAt: refreshAt,
+      });
+      return;
+    }
+
+    transferPlans.forEach((plan) => {
+      transferStreamAssignments.set(plan.name, plan.tokenMints);
+      if (managedStreams.has(plan.name) && transferStreamKeys.get(plan.name) === plan.key) {
+        return;
+      }
+
+      const transferStream = createBitqueryTransfersStream({
+        endpoint: provider.endpoint,
+        token: provider.token,
+        tokenMints: plan.tokenMints,
+      });
+
+      transferStreamKeys.set(plan.name, plan.key);
+      reloadedStreamCount += 1;
+      replaceManagedStream(plan.name, transferStream, async (message: any) => {
+        const transferEvent = decodeBitqueryTransferMessage(message);
+        if (!transferEvent) return;
+        recordTransferParticipation(
+          transferEvent.mint,
+          transferEvent.sender,
+          transferEvent.receiver,
+          transferEvent.amount
+        );
+      });
+    });
+
+    updateTransferRuntimeState({
+      refreshDelta: 1,
+      reloadDelta: reloadedStreamCount,
+      lastRefreshAt: refreshAt,
+      lastReloadAt: reloadedStreamCount > 0 ? refreshAt : undefined,
+      lastPlanChangeAt: refreshAt,
+    });
+  };
+
+  const scheduleTransfersStreamRefresh = () => {
+    if (cleanedUp || transferRefreshTimer) return;
+
+    const minIntervalMs = getBitqueryTransferRefreshMinInterval({
+      watchlistSize: transferWatchlist.size,
+      maxWatchlistSize: BITQUERY_TRANSFER_WATCH_MAX_MINTS,
+      activeTransferStreamCount: listTransferStreamNames().length,
+      baseMinIntervalMs: BITQUERY_TRANSFER_REFRESH_MIN_INTERVAL_MS,
+      saturatedMinIntervalMs: BITQUERY_TRANSFER_REFRESH_SATURATED_MIN_INTERVAL_MS,
+    });
+    const delay = getBitqueryTransferRefreshDelay({
+      now: Date.now(),
+      lastRefreshAt: lastTransferRefreshAt,
+      debounceMs: BITQUERY_TRANSFER_REFRESH_DEBOUNCE_MS,
+      minIntervalMs,
+    });
+
+    transferRefreshTimer = setTimeout(() => {
+      refreshTransfersStream();
+    }, delay);
+  };
+
+  const watchMintForTransfers = (mint: string) => {
+    if (!mint) return;
+    const now = Date.now();
+    const alreadyTracked = transferWatchlist.has(mint);
+    transferWatchlist.set(mint, now);
+    pruneTransferWatchlist(now);
+    updateTransferRuntimeState({
+      admittedMintDelta: alreadyTracked ? 0 : 1,
+      lastWatchAt: now,
+    });
+    if (!alreadyTracked || !hasActiveTransferStreams()) {
+      scheduleTransfersStreamRefresh();
+    }
+  };
+  transferMintWatcher = watchMintForTransfers;
+  activeBitqueryTransferMintWatcher = transferMintWatcher;
+  for (const trade of getOpenTradesFromDb()) {
+    watchMintForTransfers(trade.tokenMint);
+  }
+  for (const position of positionManager.getActivePositions()) {
+    watchMintForTransfers(position.mint);
+  }
+
+  registerManagedStream(
+    "DexTrades",
+    () =>
+      createBitqueryDexTradesStream({
+        endpoint: provider.endpoint,
+        token: provider.token,
+        programAddresses,
+      }),
+    async (message: any) => {
+      const tradeEvent = decodeBitqueryDexTradeMessage(message);
+      if (!tradeEvent) return;
+      bitqueryEventBus.publishDiscoveryFromTrade(tradeEvent);
+    }
+  );
+
+  registerManagedStream(
+    "Transactions",
+    () =>
+      createBitqueryTransactionsStream({
+        endpoint: provider.endpoint,
+        token: provider.token,
+        programAddresses,
+      }),
+    async (message: any) => {
+      const transactionEvent = decodeBitqueryPumpFunTransactionMessage(
+        message,
+        PUMP_FUN_PROGRAM_ID.toBase58()
+      );
+      if (!transactionEvent) return;
+      bitqueryEventBus.publishDiscoveryFromTransaction(transactionEvent);
+    }
+  );
+
+  registerManagedStream(
+    "DexPools",
+    () =>
+      createBitqueryDexPoolsStream({
+        endpoint: provider.endpoint,
+        token: provider.token,
+        programAddresses,
+      }),
+    async (message: any) => {
+      const poolSnapshot = decodeBitqueryDexPoolMessage(message);
+      if (poolSnapshot && poolSnapshot.protocolProgram === PUMP_FUN_PROGRAM_ID.toBase58()) {
+        bitqueryEventBus.publishPoolSnapshot(poolSnapshot);
+      }
+    }
+  );
+
+  registerManagedStream(
+    "DexOrders",
+    () =>
+      createBitqueryDexOrdersStream({
+        endpoint: provider.endpoint,
+        token: provider.token,
+        programAddresses,
+      }),
+    async (message: any) => {
+      const orderEvent = decodeBitqueryDexOrderMessage(message);
+      if (!orderEvent) return;
+      recordOrderPressure(orderEvent.mint, orderEvent.side, orderEvent.type, orderEvent.amount);
+    }
+  );
+
+  const activeWalletAddress = getActiveTradingWalletAddress();
+  if (activeWalletAddress) {
+    registerManagedStream(
+      "Balances",
+      () =>
+        createBitqueryBalancesStream({
+          endpoint: provider.endpoint,
+          token: provider.token,
+          addresses: [activeWalletAddress],
+        }),
+      async (message: any) => {
+        const balanceEvent = decodeBitqueryBalanceUpdateMessage(message);
+        if (!balanceEvent) return;
+        recordWalletBalanceSnapshot({
+          ...balanceEvent,
+          lastUpdatedAt: Date.now(),
+        });
+      }
+    );
+  }
+
+  criticalStreamMonitorTimer = setInterval(() => {
+    if (cleanedUp) return;
+    if (!activeGrpcStreamStartedAt) return;
+
+    const now = Date.now();
+    if (now - activeGrpcStreamStartedAt < BITQUERY_CRITICAL_STREAM_STARTUP_GRACE_MS) {
+      return;
+    }
+
+    const dexTradesLagMs = getManagedStreamLagMs("DexTrades", now);
+    const transactionsLagMs = getManagedStreamLagMs("Transactions", now);
+    const criticalStreamsStalled =
+      dexTradesLagMs >= BITQUERY_CRITICAL_STREAM_STALL_THRESHOLD_MS &&
+      transactionsLagMs >= BITQUERY_CRITICAL_STREAM_STALL_THRESHOLD_MS;
+
+    if (!criticalStreamsStalled) {
+      return;
+    }
+
+    failStream(
+      new Error(
+        `Bitquery critical streams stalled: DexTrades=${Math.round(dexTradesLagMs / 1000)}s, ` +
+        `Transactions=${Math.round(transactionsLagMs / 1000)}s`
+      ),
+      "CriticalStreams",
+      "stall"
+    );
+  }, BITQUERY_CRITICAL_STREAM_CHECK_INTERVAL_MS);
+
+  markStreamConnected();
+  await streamClosed;
+}
+
+async function subscribeCommand(
+  provider: GrpcProviderConfig,
+  args: SubscribeRequest,
+  options: {
+    maxReconnectAttempts: number;
+  }
+) {
   let reconnectAttempts = 0;
-  const maxReconnectAttempts = 10;
   const baseDelay = 1000;
+  const maxDelay = 30000;
 
   while (true) {
+    const pendingRotation = consumeGrpcProviderRotationRequest(provider.id);
+    if (pendingRotation) {
+      throw new GrpcProviderRotationError({
+        providerId: provider.id,
+        targetProviderId: pendingRotation.targetProviderId,
+        message: pendingRotation.reason,
+      });
+    }
+
     try {
+      if (provider.type === "bitquery") {
+        await handleBitqueryStream(provider);
+      } else {
+        const client = new Client(provider.endpoint, provider.token, undefined);
+        await handleStream(client, args);
+      }
+
+      const rotationAfterSession = consumeGrpcProviderRotationRequest(provider.id);
+      if (rotationAfterSession) {
+        throw new GrpcProviderRotationError({
+          providerId: provider.id,
+          targetProviderId: rotationAfterSession.targetProviderId,
+          message: rotationAfterSession.reason,
+        });
+      }
+
       reconnectAttempts = 0;
-      await handleStream(client, args);
+      logger.warn(`⚠️ Stream session encerrada em ${provider.name}. Reiniciando provider.`);
     } catch (error: any) {
+      if (error instanceof GrpcProviderRotationError) {
+        throw error;
+      }
+
+      if (isNonRecoverableGrpcError(error)) {
+        const reason = describeError(error);
+        markBotRuntimeError(reason);
+        logger.error(`❌ Stream error não recuperável em ${provider.name}: ${reason}`);
+        throw error;
+      }
+
       reconnectAttempts++;
-      const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts), 30000);
+      const delay = calculateReconnectDelay(reconnectAttempts, baseDelay, maxDelay);
       const reason = describeError(error);
 
       markBotRuntimeError(reason);
-      logger.error(`⚠️ Stream error (tentativa ${reconnectAttempts}/${maxReconnectAttempts}), reconnecting em ${delay}ms...`, error.message || error);
+      logger.error(
+        `⚠️ Stream error em ${provider.name} (tentativa ${reconnectAttempts}/${options.maxReconnectAttempts}), reconnecting em ${delay}ms... ${reason}`
+      );
 
-      if (reconnectAttempts >= maxReconnectAttempts) {
-        logger.error("❌ Max reconnect attempts reached, waiting 60s before restart...");
-        await new Promise((resolve) => setTimeout(resolve, 60000));
-        reconnectAttempts = 0;
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, delay));
+      if (options.maxReconnectAttempts > 0 && reconnectAttempts >= options.maxReconnectAttempts) {
+        throw new GrpcProviderRotationError({
+          providerId: provider.id,
+          message:
+            `${provider.name} excedeu ${reconnectAttempts} reconnects consecutivos. ` +
+            `Abrindo rotação controlada de provider.`,
+        });
       }
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
+}
+
+async function runGrpcProviderRuntime(
+  supportedProviders: GrpcProviderConfig[],
+  args: SubscribeRequest
+) {
+  if (supportedProviders.length === 0) {
+    return;
+  }
+
+  const preferredProvider = supportedProviders[0];
+  let activeProvider = preferredProvider;
+  let primaryRecoveryTimer: NodeJS.Timeout | null = null;
+  let switchReason = "Initial provider selection";
+
+  const clearPrimaryRecoveryTimer = () => {
+    if (!primaryRecoveryTimer) return;
+    clearTimeout(primaryRecoveryTimer);
+    primaryRecoveryTimer = null;
+  };
+
+  const schedulePrimaryRecoveryProbe = () => {
+    clearPrimaryRecoveryTimer();
+    if (!isGrpcFallbackProviderActive(preferredProvider.id, activeProvider.id)) {
+      return;
+    }
+
+    primaryRecoveryTimer = setTimeout(() => {
+      logger.warn(
+        `⚠️ Fallback gRPC ativo em ${activeProvider.name}. Reagendando retorno controlado para ${preferredProvider.name}.`
+      );
+      requestGrpcProviderRotation(
+        preferredProvider.id,
+        `Retrying primary gRPC provider ${preferredProvider.name} after fallback cooldown`
+      );
+    }, GRPC_PRIMARY_RECOVERY_COOLDOWN_MS);
+  };
+
+  while (true) {
+    clearPrimaryRecoveryTimer();
+    clearGrpcProviderRotationRequest();
+    currentGrpcProviderId = activeProvider.id;
+
+    markGrpcProviderActivation(activeProvider, {
+      preferredProviderId: preferredProvider.id,
+      reason: switchReason,
+    });
+
+    logger.info(
+      `🚦 Iniciando gRPC provider ${activeProvider.name} ` +
+      `[${activeProvider.type}] (${isGrpcFallbackProviderActive(preferredProvider.id, activeProvider.id) ? "fallback" : "primary"})`
+    );
+
+    schedulePrimaryRecoveryProbe();
+
+    try {
+      await subscribeCommand(activeProvider, args, {
+        maxReconnectAttempts: isGrpcFallbackProviderActive(preferredProvider.id, activeProvider.id)
+          ? GRPC_FALLBACK_PROVIDER_MAX_RECONNECT_ATTEMPTS
+          : GRPC_PRIMARY_PROVIDER_MAX_RECONNECT_ATTEMPTS,
+      });
+    } catch (error: any) {
+      clearPrimaryRecoveryTimer();
+
+      const reason = describeError(error);
+      const requestedProviderId =
+        error instanceof GrpcProviderRotationError
+          ? error.targetProviderId
+          : null;
+      const nextProvider = resolveNextGrpcProvider({
+        supportedProviders,
+        preferredProviderId: preferredProvider.id,
+        activeProviderId: activeProvider.id,
+        requestedProviderId,
+      });
+
+      if (!nextProvider || nextProvider.id === activeProvider.id) {
+        logger.error(
+          `❌ Nenhum provider gRPC alternativo disponível após falha em ${activeProvider.name}: ${reason}. ` +
+          `Aguardando 60s antes de tentar novamente o mesmo provider.`
+        );
+        switchReason = `Retrying ${activeProvider.name} after provider exhaustion: ${reason}`;
+        await new Promise((resolve) => setTimeout(resolve, 60000));
+        continue;
+      }
+
+      logger.warn(
+        `⚠️ Rotacionando gRPC provider ${activeProvider.name} -> ${nextProvider.name}. Motivo: ${reason}`
+      );
+      switchReason = `Switched from ${activeProvider.name}: ${reason}`;
+      activeProvider = nextProvider;
+    }
+  }
+}
+
+function registerManualGrpcRotationSignal(
+  supportedProviders: GrpcProviderConfig[],
+  preferredProviderId: string | null
+) {
+  if (supportedProviders.length < 2) {
+    return;
+  }
+
+  const bindSignal = (signal: NodeJS.Signals) => {
+    process.on(signal, () => {
+      const nextProvider = resolveNextGrpcProvider({
+        supportedProviders,
+        preferredProviderId,
+        activeProviderId: currentGrpcProviderId,
+      });
+
+      if (!nextProvider || nextProvider.id === currentGrpcProviderId) {
+        logger.warn(`⚠️ Manual gRPC rotation via ${signal} ignorada: nenhum provider alternativo elegível.`);
+        return;
+      }
+
+      logger.warn(
+        `🧪 Manual gRPC rotation via ${signal}: ${currentGrpcProviderId || "unknown"} -> ${nextProvider.name} [${nextProvider.type}]`
+      );
+      requestGrpcProviderRotation(
+        nextProvider.id,
+        `Manual ${signal} rotation to ${nextProvider.name}`
+      );
+    });
+  };
+
+  bindSignal("SIGWINCH");
 }
 
 // Resume simulation monitoring for open trades
@@ -2396,21 +3523,63 @@ const shyftParser = new SolanaParser(
   ]
 );
 
-const GRPC_ENDPOINT = GRPC_URL || SHYFT_GRPC;
-const GRPC_AUTH_TOKEN = GRPC_TOKEN || process.env.SHYFT_GRPC_TOKEN || "";
+const configuredGrpcProviders = getConfiguredGrpcProviders({
+  GRPC_PROVIDER_PREFERENCE,
+  GRPC_URL,
+  GRPC_TOKEN,
+  SHYFT_GRPC,
+  SHYFT_GRPC_TOKEN,
+  PUBLICNODE_GRPC_URL,
+  PUBLICNODE_GRPC_TOKEN,
+  BITQUERY_GRPC_URL,
+  BITQUERY_GRPC_TOKEN,
+});
 
-let client: Client | null = null;
-if (GRPC_ENDPOINT) {
-  client = new Client(
-    GRPC_ENDPOINT,
-    GRPC_AUTH_TOKEN,
-    undefined
+configuredGrpcProviders.forEach((provider) => {
+  logger.info(`🌐 gRPC provider configured: ${provider.name} [${provider.type}]`);
+});
+
+const { supported: supportedGrpcProviders, unsupported: unsupportedGrpcProviders } =
+  getSupportedGrpcProviders(configuredGrpcProviders, {
+    monitoringProtocol: MONITORING_PROTOCOL,
+  });
+
+const preferredGrpcProvider = supportedGrpcProviders[0] || null;
+
+unsupportedGrpcProviders.forEach((provider) => {
+  logger.warn(
+    `⚠️ gRPC provider ${provider.name} configurado, mas incompatível com MONITORING_PROTOCOL=${MONITORING_PROTOCOL} no runtime atual.`
   );
+});
+
+if (!preferredGrpcProvider && configuredGrpcProviders.length > 0) {
+  logger.warn("⚠️ Nenhum provider gRPC compatível foi selecionado para o protocolo configurado.");
+}
+
+if (preferredGrpcProvider) {
+  logger.info(`✅ gRPC provider principal: ${preferredGrpcProvider.name} [${preferredGrpcProvider.type}]`);
+  if (supportedGrpcProviders.length > 1) {
+    logger.info(
+      `🛟 gRPC fallback controlado habilitado: ${supportedGrpcProviders
+        .slice(1)
+        .map((provider) => `${provider.name} [${provider.type}]`)
+        .join(", ")}`
+    );
+  }
 } else {
   logger.warn("⚠️ Nenhum endpoint gRPC configurado. Streaming desabilitado; apenas componentes HTTP funcionarão.");
 }
 
-initializeBotRuntimeHealth(Boolean(GRPC_ENDPOINT));
+initializeBotRuntimeHealth(Boolean(preferredGrpcProvider));
+markGrpcProviderConfiguration({
+  configuredProviders: configuredGrpcProviders.map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    type: provider.type,
+  })),
+  preferredProviderId: preferredGrpcProvider?.id || null,
+});
+registerManualGrpcRotationSignal(supportedGrpcProviders, preferredGrpcProvider?.id || null);
 
 setInterval(() => {
   markBotHeartbeat();
@@ -2536,8 +3705,11 @@ if (Object.keys(req.transactions).length === 0) {
   logger.info(`✅ Monitoramento do PumpFun habilitado para o programa: ${PUMP_FUN_PROGRAM_ID.toBase58()}`);
 }
 
-if (client) {
-  subscribeCommand(client, req);
+if (preferredGrpcProvider) {
+  runGrpcProviderRuntime(supportedGrpcProviders, req).catch((error) => {
+    logger.error(`❌ gRPC runtime manager encerrado: ${describeError(error)}`);
+    markBotRuntimeError(describeError(error));
+  });
 } else {
   logger.warn("⚠️ gRPC não iniciado. Configure GRPC_URL ou SHYFT_GRPC para monitorar em tempo real.");
 }

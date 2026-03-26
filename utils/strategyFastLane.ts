@@ -14,6 +14,11 @@ export interface FastLaneContext {
   sellCount?: number | null;
   protocol?: string | null;
   bondingCurvePercent?: number | null;
+  transferUniqueWallets60s?: number | null;
+  transferCount60s?: number | null;
+  orderBuyPressureRatio?: number | null;
+  orderBuyCount30s?: number | null;
+  orderSellCount30s?: number | null;
 }
 
 export interface FastLaneSignal {
@@ -59,6 +64,11 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
   const buyCount = context.buyCount ?? 0;
   const sellCount = context.sellCount ?? 0;
   const tradeImbalance = buyCount + sellCount > 0 ? buyCount / Math.max(1, sellCount) : null;
+  const transferUniqueWallets60s = context.transferUniqueWallets60s ?? 0;
+  const transferCount60s = context.transferCount60s ?? 0;
+  const orderBuyPressureRatio = context.orderBuyPressureRatio ?? null;
+  const orderBuyCount30s = context.orderBuyCount30s ?? 0;
+  const orderSellCount30s = context.orderSellCount30s ?? 0;
   const compactPumpfunLaunchMode = isCompactPumpfunLaunchContext(context);
 
   if (candles <= 0) {
@@ -70,11 +80,19 @@ export function evaluateFastLaneSignal(context: FastLaneContext): FastLaneSignal
       snap.priceAboveVWAP &&
       microTrend >= 0.8 &&
       (volumeRatio === null || volumeRatio >= 1.1) &&
-      (tradeImbalance === null || tradeImbalance >= 0.9);
+      (tradeImbalance === null || tradeImbalance >= 0.9) &&
+      (
+        transferUniqueWallets60s >= 4 ||
+        transferCount60s >= 4 ||
+        orderBuyPressureRatio === null ||
+        (orderBuyPressureRatio >= 1.1 && orderBuyCount30s >= orderSellCount30s)
+      );
 
     if (compactLaunchBreakout) {
       if (volumeRatio !== null) tags.push(`vol=${volumeRatio.toFixed(2)}`);
       tags.push(`micro=${microTrend.toFixed(2)}`);
+      if (transferUniqueWallets60s > 0) tags.push(`xfers=${transferUniqueWallets60s}`);
+      if (orderBuyPressureRatio !== null) tags.push(`ord=${orderBuyPressureRatio.toFixed(2)}`);
       return {
         verdict: "BUY",
         strategy: "momentum_breakout",

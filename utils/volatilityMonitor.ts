@@ -376,9 +376,10 @@ export function getDonchian1s(mint: string, period: number = 12): DonchianResult
 // ============================================================
 export function getRollingVWAP1s(mint: string, window: number = 20): number | null {
   const periods = periodStore1s.get(mint) || [];
-  if (periods.length < window) return null;
+  if (periods.length < 1) return null;
 
-  const slice = periods.slice(-window);
+  const effectiveWindow = Math.min(periods.length, Math.max(1, window));
+  const slice = periods.slice(-effectiveWindow);
   let sumPV = 0;
   let sumV = 0;
 
@@ -415,6 +416,8 @@ export interface VolumeRelativeResult {
   avgVol: number;
   isBurst: boolean;    // ratio > 2.5
   isSpike: boolean;    // ratio > 3.0
+  windowUsed?: number;
+  adaptive?: boolean;
 }
 
 export function getVolumeRelative1s(
@@ -424,9 +427,12 @@ export function getVolumeRelative1s(
   spikeThreshold: number = 3.0
 ): VolumeRelativeResult | null {
   const periods = periodStore1s.get(mint) || [];
-  if (periods.length < window + 1) return null;
+  if (periods.length < 2) return null;
 
-  const historicSlice = periods.slice(-(window + 1), -1);
+  const effectiveWindow = Math.min(window, periods.length - 1);
+  if (effectiveWindow < 1) return null;
+
+  const historicSlice = periods.slice(-(effectiveWindow + 1), -1);
   const current = periods[periods.length - 1];
 
   const avgVol = historicSlice.reduce((sum, p) => sum + p.volume, 0) / historicSlice.length;
@@ -442,6 +448,8 @@ export function getVolumeRelative1s(
     avgVol,
     isBurst: ratio >= burstThreshold,
     isSpike: ratio >= spikeThreshold,
+    windowUsed: effectiveWindow,
+    adaptive: effectiveWindow < window,
   };
 }
 
@@ -462,6 +470,57 @@ export function getMicroTrend(mint: string, windowMs: number = 10_000): { change
     changePct: ((last - first) / first) * 100,
     samples: recent.length,
   };
+}
+
+function getRecentRawSamples(mint: string, windowMs: number = 10_000, now: number = Date.now()): Sample[] {
+  const arr = store.get(mint) || [];
+  if (arr.length === 0) return [];
+  return arr.filter((sample) => sample.t >= now - windowMs);
+}
+
+function getTickVelocityPerSec(samples: Sample[]): number | null {
+  if (samples.length < 2) {
+    return samples.length === 1 ? 1 : null;
+  }
+
+  const spanSec = Math.max(1, (samples[samples.length - 1].t - samples[0].t) / 1000);
+  return samples.length / spanSec;
+}
+
+function getRawPriceRangePct(samples: Sample[]): number | null {
+  if (samples.length < 2) return null;
+
+  const prices = samples.map((sample) => sample.p).filter((price) => price > 0);
+  if (prices.length < 2) return null;
+
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  if (minPrice <= 0) return null;
+
+  return ((maxPrice - minPrice) / minPrice) * 100;
+}
+
+function calculateSnapshotDataQuality(params: {
+  candlesAvailable1s: number;
+  rawSampleCount10s: number;
+  vwapWindowUsed: number;
+  volumeWindowUsed: number | null;
+  hasVolumeRelative: boolean;
+}): number {
+  const { candlesAvailable1s, rawSampleCount10s, vwapWindowUsed, volumeWindowUsed, hasVolumeRelative } = params;
+
+  let score = 0;
+  if (candlesAvailable1s >= 1) score += 20;
+  if (candlesAvailable1s >= 3) score += 15;
+  if (candlesAvailable1s >= 5) score += 10;
+  if (rawSampleCount10s >= 2) score += 15;
+  if (rawSampleCount10s >= 6) score += 10;
+  if (vwapWindowUsed >= 2) score += 10;
+  if (vwapWindowUsed >= 5) score += 5;
+  if (hasVolumeRelative) score += 10;
+  if ((volumeWindowUsed ?? 0) >= 3) score += 5;
+
+  return Math.max(0, Math.min(100, score));
 }
 
 // ============================================================
@@ -589,6 +648,18 @@ export interface TASnapshotV2 {
   // Micro Trend (últimos 10s)
   microTrend: { changePct: number; samples: number } | null;
 
+  // Contexto bruto/adaptativo para launches curtos
+  launchContext?: {
+    candleCount1s: number;
+    rawSampleCount10s: number;
+    tickVelocityPerSec: number | null;
+    rawMomentumPct: number | null;
+    priceRangePct10s: number | null;
+    dataQualityScore: number;
+    vwapWindowUsed: number;
+    volumeWindowUsed: number | null;
+  };
+
   // Legacy
   trend: { changePct: number; isRed: boolean; bodySize: number } | null;
 
@@ -603,6 +674,7 @@ export function getTASnapshotV2(
   config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
 ): TASnapshotV2 {
   const price = getLatestPrice(mint);
+  const periods1s = periodStore1s.get(mint) || [];
   const ema5 = getEMA1s(mint, config.emaPeriods[0]);
   const ema9 = getEMA1s(mint, config.emaPeriods[1]);
   const ema13 = getEMA1s(mint, config.emaPeriods[2]);
@@ -623,7 +695,6 @@ export function getTASnapshotV2(
   const atr = getATR1s(mint, config.atrPeriod);
   const atrPct = atr !== null && price !== null && price !== 0 ? (atr / price) * 100 : null;
 
-  const periods1s = periodStore1s.get(mint) || [];
   const lastCandle = periods1s.length > 0 ? periods1s[periods1s.length - 1] : null;
   const candleRangePct = lastCandle && price
     ? ((lastCandle.high - lastCandle.low) / price) * 100
@@ -645,6 +716,25 @@ export function getTASnapshotV2(
   );
   const microTrend = getMicroTrend(mint, 10_000);
   const trend = getPreviousCandleTrend(mint);
+  const rawSamples10s = getRecentRawSamples(mint, 10_000);
+  const vwapWindowUsed = vwap !== null ? Math.min(config.vwapWindow, periods1s.length) : 0;
+  const volumeWindowUsed = volumeRelative?.windowUsed ?? null;
+  const launchContext = {
+    candleCount1s: periods1s.length,
+    rawSampleCount10s: rawSamples10s.length,
+    tickVelocityPerSec: getTickVelocityPerSec(rawSamples10s),
+    rawMomentumPct: microTrend?.changePct ?? null,
+    priceRangePct10s: getRawPriceRangePct(rawSamples10s) ?? candleRangePct,
+    dataQualityScore: calculateSnapshotDataQuality({
+      candlesAvailable1s: periods1s.length,
+      rawSampleCount10s: rawSamples10s.length,
+      vwapWindowUsed,
+      volumeWindowUsed,
+      hasVolumeRelative: volumeRelative !== null,
+    }),
+    vwapWindowUsed,
+    volumeWindowUsed,
+  };
 
   return {
     currentPrice: price,
@@ -668,6 +758,7 @@ export function getTASnapshotV2(
     roc,
     volumeRelative,
     microTrend,
+    launchContext,
     trend,
     timestamp: Date.now(),
     candlesAvailable1s: periods1s.length,

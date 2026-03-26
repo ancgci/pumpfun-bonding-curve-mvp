@@ -156,6 +156,8 @@ Itens que realmente pesam nesse modo:
 - `volumeRelative.isBurst`
 - `trend.changePct`
 - `bondingCurvePercent` como bonus leve, somente quando ja existe fluxo positivo real
+- `Bitquery Transfers` como reforco leve de participacao real (`uniqueWallets60s`, `transferCount60s`)
+- `Bitquery DexOrders` como reforco leve de pressao compradora (`buyOrders30s`, `buyPressureRatio`)
 
 Penalidades que continuam ativas nesse modo:
 

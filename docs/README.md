@@ -153,6 +153,7 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 - [Mitigação de Banda e Monitoramento](MITIGACAO_BANDA_E_MONITORAMENTO_2026-03-20.md) - Registro do que foi ajustado
 - [Governança Adaptativa de Entrada](GOVERNANCA_ADAPTATIVA_ENTRADA_2026-03-20.md) - Ajuste local do funil de BUY, sizing adaptativo e recheck
 - [Fast Lane e Execution Preflight](FAST_LANE_E_EXECUTION_PREFLIGHT_2026-03-23.md) - Camada local inspirada em go-trader e Hummingbot para decisão determinística, exposição e preflight operacional
+- [Bitquery CoreCast Multi-Stream](BITQUERY_CORECAST_MULTI_STREAM_2026-03-25.md) - Discovery redundante e enriquecimento assíncrono com `DexTrades`, `Transactions`, `DexPools`, `Transfers`, `DexOrders` e `Balances`
 - [Integração AI SDK Google](AI_SDK_GOOGLE_INTEGRATION_2026-03-20.md) - Gateway LLM unificado, fallback, saída estruturada e tool calling local
 - [Correção de Conectividade LLM](LLM_CONNECTIVITY_FIX_2026-03-23.md) - Ajuste local do modelo NVIDIA, URL legada explícita e validação do fallback Google
 - [Hardening de Segurança](SECURITY_HARDENING.md) - Protocolo de proteção e auditoria da VPS

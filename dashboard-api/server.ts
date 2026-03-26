@@ -1707,15 +1707,7 @@ function buildBotRuntimeSummary(agentEnabled: boolean) {
 
     const runtimeStatus = !agentEnabled
         ? "DISABLED"
-        : !runtime
-            ? "BOT_OFFLINE"
-            : !runtimeEval.processHealthy
-                ? "BOT_OFFLINE"
-                : !runtimeEval.streamConnected
-                    ? "STREAM_DISCONNECTED"
-                    : !runtimeEval.streamHealthy
-                        ? "STREAM_STALLED"
-                        : "OPERATIONAL";
+        : runtimeEval.runtimeStatus;
 
     return {
         runtime,
@@ -1727,6 +1719,10 @@ function buildBotRuntimeSummary(agentEnabled: boolean) {
         streamLagMs: runtimeEval.streamLagMs,
         heartbeatThresholdMs: runtimeEval.heartbeatThresholdMs,
         stallThresholdMs: runtimeEval.stallThresholdMs,
+        degraded: runtimeEval.degraded,
+        runtimeWarnings: runtimeEval.warnings,
+        recentTransferReloadCount: runtimeEval.recentTransferReloadCount,
+        transferReloadWindowMs: runtimeEval.transferReloadWindowMs,
     };
 }
 
@@ -2091,8 +2087,15 @@ app.get("/api/bot-health", async (req, res) => {
             streamLagMs: runtimeSummary.streamLagMs,
             heartbeatThresholdMs: runtimeSummary.heartbeatThresholdMs,
             stallThresholdMs: runtimeSummary.stallThresholdMs,
+            degraded: runtimeSummary.degraded,
+            runtimeWarnings: runtimeSummary.runtimeWarnings,
+            recentTransferReloadCount: runtimeSummary.recentTransferReloadCount,
+            transferReloadWindowMs: runtimeSummary.transferReloadWindowMs,
             latencyMs: rpcLatencyMs,
             rpcName,
+            grpcProvider: runtimeSummary.runtime?.stream?.provider || null,
+            grpcSubstreams: runtimeSummary.runtime?.stream?.substreams || {},
+            grpcTransfers: runtimeSummary.runtime?.stream?.transfers || null,
             runtime: runtimeSummary.runtime,
             uptimeSince: process.uptime(),
             timestamp: new Date().toISOString(),

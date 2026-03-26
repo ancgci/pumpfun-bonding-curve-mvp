@@ -213,6 +213,71 @@ pm2 start bot
 pm2 restart all
 ```
 
+### Forma canônica de aplicar configuração do PM2
+Quando houver mudança de código ou da configuração do processo, prefira reaplicar o ecossistema:
+
+```bash
+cd /home/anto/pumpfun-bot
+cp deploy/ecosystem.config.js .
+pm2 delete bot || true
+pm2 delete dashboard-api || true
+pm2 start ecosystem.config.js --update-env
+pm2 save
+```
+
+Isso garante que `bot` e `dashboard-api` rodem pelo entrypoint direto do `ts-node`, sem wrapper intermediário de `npm exec`/`npx`.
+
+### Sanidade pós-restart: detectar processo órfão
+Após restart ou deploy, confirme que existe apenas uma árvore real do bot:
+
+```bash
+ps -eo pid,ppid,args | grep -E 'ts-node/dist/bin.js.*index.ts|ts-node/dist/bin.js.*server.ts' | grep -v grep
+```
+
+Esperado:
+
+- uma linha `node .../ts-node/dist/bin.js index.ts`
+- uma linha `node .../ts-node/dist/bin.js server.ts`
+
+Se aparecer mais de uma linha para o mesmo entrypoint, existe processo órfão antigo e o runtime pode ficar inconsistente.
+
+Para conferir qual processo real está escrevendo o health runtime:
+
+```bash
+cat /home/anto/pumpfun-bot/data/bot-runtime.json
+```
+
+O campo `pid` deve bater com o processo `node ... ts-node/dist/bin.js index.ts` ativo.
+
+Para inspecionar rapidamente a telemetria nova do gRPC/Transfers sem abrir logs:
+
+```bash
+cd /home/anto/pumpfun-bot
+cat data/bot-runtime.json | jq '.stream.provider, .stream.substreams, .stream.transfers'
+```
+
+Se preferir pela API já agregada do dashboard:
+
+```bash
+curl -s http://localhost:3001/api/bot-health \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" | jq '.grpcProvider, .grpcSubstreams, .grpcTransfers'
+```
+
+Campos mais úteis em `.grpcTransfers`:
+
+- `watchlistSize`: quantos mints estão atualmente no filtro de `Transfers`
+- `activeStreamCount`: quantos `Transfers#N` estão ativos
+- `reloadCount`: quantos reloads reais de substream ocorreram desde o boot
+- `refreshCount`: quantas avaliações de refresh foram executadas
+- `streamAssignments`: quantos mints cada `Transfers#N` está carregando
+- `trackedMintsPreview`: amostra dos mints mais recentes na watchlist
+
+Warnings operacionais úteis em `/api/bot-health`:
+
+- `GRPC_FALLBACK_ACTIVE`: o primário Bitquery caiu e o bot está rodando no fallback
+- `TRANSFERS_WATCHLIST_NEAR_CAPACITY`: a watchlist de `Transfers` está perto do teto configurado
+- `TRANSFERS_RELOAD_SPIKE`: houve churn recente demais de reload em `Transfers`
+
 ### Parada segura em caso de consumo elevado
 
 Se o tráfego subir além do esperado ou houver novo aviso do provedor:

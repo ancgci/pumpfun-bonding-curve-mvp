@@ -127,4 +127,52 @@ describe("technical score", () => {
     expect(result.regime).toBe("BULLISH");
     expect(result.score).toBeGreaterThanOrEqual(20);
   });
+
+  test("adds light Bitquery transfer and order-pressure boosts in PumpFun compact mode", () => {
+    const result = calculateConfluenceScore(
+      makeSnapshot({
+        candlesAvailable1s: 1,
+        priceAboveVWAP: true,
+        volumeRelative: {
+          ratio: 1.1,
+          currentVol: 110,
+          avgVol: 100,
+          isBurst: false,
+          isSpike: false,
+        },
+        microTrend: {
+          changePct: 0.5,
+          samples: 3,
+        },
+      }),
+      DEFAULT_TA_CONFIG,
+      {
+        protocol: "pumpfun",
+        bondingCurvePercent: 92,
+        transferParticipation: {
+          mint: "mint",
+          transferCount60s: 5,
+          uniqueWallets60s: 6,
+          uniqueSenders60s: 3,
+          uniqueReceivers60s: 3,
+          tokenVolume60s: 10,
+          lastUpdatedAt: Date.now(),
+        },
+        orderPressure: {
+          mint: "mint",
+          buyOrders30s: 4,
+          sellOrders30s: 1,
+          cancelOrders30s: 0,
+          buyVolume30s: 9,
+          sellVolume30s: 2,
+          buyPressureRatio: 4,
+          lastUpdatedAt: Date.now(),
+        },
+      }
+    );
+
+    expect(result.breakdown.transferParticipationBoost).toBeGreaterThan(0);
+    expect(result.breakdown.orderPressureBoost).toBeGreaterThan(0);
+    expect(result.score).toBeGreaterThanOrEqual(25);
+  });
 });

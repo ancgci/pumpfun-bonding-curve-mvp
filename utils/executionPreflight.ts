@@ -3,6 +3,7 @@ import logger from "./logger";
 import { rpcPool } from "./rpcPool";
 import { getActiveTradingWallet } from "./walletStore";
 import { validateTradeExecution } from "./tradeExecutionValidator";
+import { getCachedWalletNativeBalanceSol } from "./bitqueryRealtimeState";
 import {
   PortfolioGovernorConfig,
   PortfolioGovernorResult,
@@ -38,6 +39,11 @@ async function getActiveWalletBalanceSol(): Promise<number> {
   const activeWallet = getActiveTradingWallet();
   if (!activeWallet?.wallet?.publicKey) {
     throw new Error("NO_ACTIVE_TRADING_WALLET");
+  }
+
+  const cachedBalance = getCachedWalletNativeBalanceSol(activeWallet.wallet.publicKey);
+  if (cachedBalance !== null) {
+    return cachedBalance;
   }
 
   const connection = await rpcPool.getBestConnection();
