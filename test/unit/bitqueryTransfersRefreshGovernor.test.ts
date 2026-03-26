@@ -2,7 +2,6 @@ import {
   buildBitqueryTransferSubscriptionKey,
   chunkBitqueryTransferSubscriptionMints,
   getBitqueryTransferRefreshDelay,
-  getBitqueryTransferRefreshMinInterval,
   planBitqueryTransferSubscriptionChunks,
 } from "../../utils/bitqueryTransfersRefreshGovernor";
 
@@ -51,30 +50,6 @@ describe("bitqueryTransfersRefreshGovernor", () => {
         minIntervalMs: 4_000,
       })
     ).toBe(2_500);
-  });
-
-  it("batches refreshes longer when the transfer watchlist is saturated", () => {
-    expect(
-      getBitqueryTransferRefreshMinInterval({
-        watchlistSize: 48,
-        maxWatchlistSize: 48,
-        activeTransferStreamCount: 3,
-        baseMinIntervalMs: 4_000,
-        saturatedMinIntervalMs: 15_000,
-      })
-    ).toBe(15_000);
-  });
-
-  it("keeps the fast refresh cadence while transfer streams are still bootstrapping", () => {
-    expect(
-      getBitqueryTransferRefreshMinInterval({
-        watchlistSize: 48,
-        maxWatchlistSize: 48,
-        activeTransferStreamCount: 0,
-        baseMinIntervalMs: 4_000,
-        saturatedMinIntervalMs: 15_000,
-      })
-    ).toBe(4_000);
   });
 
   it("reuses previous chunk assignments to avoid reloading every transfer stream", () => {

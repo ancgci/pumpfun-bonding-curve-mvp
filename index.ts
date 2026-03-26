@@ -29,7 +29,7 @@ import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from 
 import { getOpenTradesFromDb, rebuildMetricsFromFile } from "./utils/simulationEngine";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
 import { recordPriceSample, getLatestPrice } from './utils/volatilityMonitor';
-import { backfillTokenHistory, DEFAULT_PUMPFUN_BACKFILL_TRADES } from './utils/pumpfunHistory';
+import { backfillTokenHistory } from './utils/pumpfunHistory';
 import { recordOrganicityTrade, loadOrganicityFromDisk, saveOrganicityToDisk } from "./utils/organicityMonitor";
 import { runLearningCycle } from "./utils/learnerAgent";
 import { runPostMortemCycle } from "./utils/postMortemAgent";
@@ -1316,7 +1316,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
         // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
         // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
-        await backfillTokenHistory(tOutput.mint, DEFAULT_PUMPFUN_BACKFILL_TRADES);
+        await backfillTokenHistory(tOutput.mint, 50);
 
         recordTransaction(tOutput.mint);
       }
@@ -2610,7 +2610,7 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
 
     watchBitqueryTransferMint(candidate.mint);
     const tokenMetadata = await loadTokenMetadataSafe(candidate.mint, "token Bitquery PumpFun");
-    await backfillTokenHistory(candidate.mint, DEFAULT_PUMPFUN_BACKFILL_TRADES);
+    await backfillTokenHistory(candidate.mint, 50);
 
     await runProtocolSimulationDiscovery({
       protocolId: "pumpfun",

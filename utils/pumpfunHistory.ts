@@ -20,17 +20,12 @@ interface PumpTrade {
     price?: number; // Calculated or from API
 }
 
-export const DEFAULT_PUMPFUN_BACKFILL_TRADES = 200;
-
 /**
  * Fetches the last N trades for a token and populates the monitors.
  * @param mint Token address
- * @param limit Number of trades to fetch (default: 200)
+ * @param limit Number of trades to fetch (default: 50)
  */
-export async function backfillTokenHistory(
-    mint: string,
-    limit: number = DEFAULT_PUMPFUN_BACKFILL_TRADES
-): Promise<void> {
+export async function backfillTokenHistory(mint: string, limit: number = 50): Promise<void> {
     try {
         const url = `https://frontend-api.pump.fun/trades/all/${mint}?limit=${limit}&offset=0`;
         logger.info(`🔄 [History] Buscando backfill para ${mint}...`);

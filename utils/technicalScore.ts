@@ -341,75 +341,43 @@ function calculatePumpfunCompactScore(
     context: ScoreContext
 ): ScoreResult {
     const bd = makeEmptyBreakdown();
-    const launchContext = snap.launchContext;
     const volumeRatio = snap.volumeRelative?.ratio ?? null;
     const microTrendPct = snap.microTrend?.changePct ?? null;
-    const rawMomentumPct = launchContext?.rawMomentumPct ?? microTrendPct;
     const trendChange = snap.trend?.changePct ?? null;
-    const tickVelocityPerSec = launchContext?.tickVelocityPerSec ?? null;
-    const rawRangePct = launchContext?.priceRangePct10s ?? snap.candleRangePct ?? null;
-    const dataQualityScore = launchContext?.dataQualityScore ?? 0;
-    const vwapWindowUsed = launchContext?.vwapWindowUsed ?? 0;
-    const volumeWindowUsed = snap.volumeRelative?.windowUsed ?? launchContext?.volumeWindowUsed ?? null;
     const bondingCurvePercent = typeof context.bondingCurvePercent === "number" ? context.bondingCurvePercent : null;
     const transferParticipation = context.transferParticipation;
     const orderPressure = context.orderPressure;
-    const vwapMomentumConfirmed =
-        snap.priceAboveVWAP &&
-        (vwapWindowUsed >= 2 || (rawMomentumPct ?? 0) >= 0.5 || (tickVelocityPerSec ?? 0) >= 1.5);
-    const hasRawLaunchFlow =
-        (rawMomentumPct ?? 0) >= 0.25 ||
-        (tickVelocityPerSec ?? 0) >= 1.2 ||
-        (rawRangePct ?? 0) >= 0.6;
     const hasPositiveFlow =
-        vwapMomentumConfirmed ||
-        (rawMomentumPct ?? 0) >= 0.5 ||
+        snap.priceAboveVWAP ||
+        (microTrendPct ?? 0) >= 0.5 ||
         (trendChange ?? 0) > 0 ||
         (volumeRatio ?? 0) >= 1.05 ||
         snap.volumeRelative?.isBurst === true ||
-        hasRawLaunchFlow ||
         (transferParticipation?.uniqueWallets60s ?? 0) >= 4 ||
         (orderPressure?.buyPressureRatio ?? 0) >= 1.1;
     const hasWeakness =
-        !vwapMomentumConfirmed &&
-        (rawMomentumPct ?? 0) <= -0.5 &&
+        !snap.priceAboveVWAP &&
+        (microTrendPct ?? 0) <= -0.5 &&
         (volumeRatio ?? 0) < 1 &&
-        (trendChange ?? 0) <= 0 &&
-        (tickVelocityPerSec ?? 0) < 1;
+        (trendChange ?? 0) <= 0;
 
     if (snap.priceAboveVWAP) {
-        if (vwapWindowUsed >= 5) bd.priceAboveVWAP = 15;
-        else if (vwapWindowUsed >= 2) bd.priceAboveVWAP = 12;
-        else if (hasRawLaunchFlow) bd.priceAboveVWAP = 6;
+        bd.priceAboveVWAP = 15;
     }
 
     if (trendChange !== null && trendChange > 0) {
         bd.emaSlope = 6;
-    } else if (trendChange === null && (rawMomentumPct ?? 0) >= 0.5) {
-        bd.emaSlope = 4;
     }
 
     if (snap.volumeRelative !== null) {
-        if (snap.volumeRelative.ratio >= 1.05) {
-            bd.volumeBurst = (volumeWindowUsed ?? 0) >= 3 ? 12 : 8;
-        }
-        if (snap.volumeRelative.isBurst) {
-            bd.volumeBurstExtra = (volumeWindowUsed ?? 0) >= 3 ? 4 : 2;
-        }
-    } else if ((tickVelocityPerSec ?? 0) >= 1.5) {
-        bd.volumeBurst = 6;
-        if ((tickVelocityPerSec ?? 0) >= 3) bd.volumeBurstExtra = 2;
+        if (snap.volumeRelative.ratio >= 1.05) bd.volumeBurst = 12;
+        if (snap.volumeRelative.isBurst) bd.volumeBurstExtra = 4;
     }
 
     if (microTrendPct !== null) {
         if (microTrendPct >= 2.0) bd.microTrendPositive = 32;
         else if (microTrendPct >= 1.0) bd.microTrendPositive = 28;
         else if (microTrendPct >= 0.5) bd.microTrendPositive = 20;
-    } else if (rawMomentumPct !== null) {
-        if (rawMomentumPct >= 2.0) bd.microTrendPositive = 24;
-        else if (rawMomentumPct >= 1.0) bd.microTrendPositive = 18;
-        else if (rawMomentumPct >= 0.5) bd.microTrendPositive = 12;
-        else if (rawMomentumPct >= 0.25) bd.microTrendPositive = 6;
     }
 
     if (bondingCurvePercent !== null && bondingCurvePercent >= 85 && hasPositiveFlow) {
@@ -441,8 +409,6 @@ function calculatePumpfunCompactScore(
         bd.weakFollowThroughPenalty = -8;
     } else if (microTrendPct !== null && microTrendPct <= -0.1) {
         bd.weakFollowThroughPenalty = -3;
-    } else if (microTrendPct === null && rawMomentumPct !== null && rawMomentumPct <= -0.5) {
-        bd.weakFollowThroughPenalty = -6;
     }
 
     if (snap.distVWAPPct !== null && Math.abs(snap.distVWAPPct) > 8) {
@@ -469,18 +435,18 @@ function calculatePumpfunCompactScore(
     let classification: ScoreClassification = "WEAK_SETUP";
     let classificationReason = "Sem sinais curtos suficientes para PumpFun";
 
-    if (snap.candlesAvailable1s < 1 || (snap.candlesAvailable1s === 1 && !hasPositiveFlow && dataQualityScore < 30)) {
+    if (snap.candlesAvailable1s < 1 || (snap.candlesAvailable1s === 1 && !hasPositiveFlow)) {
         classification = "LOW_DATA";
         classificationReason = "Launch novo sem confirmação mínima de fluxo";
     } else if (hasWeakness) {
         classification = "WEAK_SETUP";
         classificationReason = "PumpFun sem follow-through, abaixo da VWAP ou perdendo fluxo";
-    } else if (hasPositiveFlow && score >= (dataQualityScore >= 45 ? 18 : 20)) {
+    } else if (hasPositiveFlow && score >= 20) {
         classification = "VALID";
-        classificationReason = "PumpFun com VWAP adaptativa, momentum bruto e fluxo curto suficientes para scalper";
-    } else if (hasPositiveFlow && score >= (dataQualityScore >= 45 ? 8 : 10)) {
+        classificationReason = "PumpFun com VWAP, micro-momentum e fluxo curto suficientes para scalper";
+    } else if (hasPositiveFlow && score >= 10) {
         classification = "EARLY_MOMENTUM";
-        classificationReason = "Momentum inicial detectado com contexto técnico adaptativo antes da confirmação completa";
+        classificationReason = "Momentum inicial detectado antes da confirmação completa do launch";
     }
 
     return {

@@ -53,19 +53,10 @@ export function assessAdaptiveEntryProfile(params: {
     bondingCurvePercent <= 100;
   const hasVolumeData = snap.volumeRelative !== null;
   const hasStrongVolume = (snap.volumeRelative?.ratio ?? 0) >= config.volumeRelativeMin;
-  const rawLaunchDataQuality = snap.launchContext?.dataQualityScore ?? 0;
-  const rawMomentumPct = snap.launchContext?.rawMomentumPct ?? snap.microTrend?.changePct ?? 0;
-  const rawTickVelocity = snap.launchContext?.tickVelocityPerSec ?? 0;
-  const rawRangePct = snap.launchContext?.priceRangePct10s ?? snap.candleRangePct ?? 0;
-  const hasRawLaunchFlow =
-    rawMomentumPct >= Math.max(0.2, config.minFollowThroughPct * 0.5) ||
-    rawTickVelocity >= 1.2 ||
-    rawRangePct >= 0.6;
   const hasMomentumSignal =
     snap.donchian?.breakoutUp === true ||
     snap.priceAboveVWAP ||
-    (snap.microTrend?.changePct ?? 0) >= config.minFollowThroughPct ||
-    hasRawLaunchFlow;
+    (snap.microTrend?.changePct ?? 0) >= config.minFollowThroughPct;
   const hasSlowSignal =
     (snap.macd?.histogram ?? 0) > 0 ||
     (snap.rsi ?? 0) >= config.rsiBullishMin ||
@@ -88,18 +79,16 @@ export function assessAdaptiveEntryProfile(params: {
   if (hasMomentumSignal) dataQualityScore += 10;
   if (hasSlowSignal) dataQualityScore += 10;
   if (execScore.score >= Math.max(10, Math.floor(config.scoreSizingMid / 2))) dataQualityScore += 10;
-  if (hasRawLaunchFlow) dataQualityScore += 8;
-  dataQualityScore = Math.max(dataQualityScore, Math.round(rawLaunchDataQuality * 0.6));
   dataQualityScore -= Math.min(20, Math.round(blockPressure / 4));
   dataQualityScore = clampNumber(dataQualityScore, 0, 100);
 
   let confidenceCap = 100;
   if (snap.candlesAvailable1s < earlyEntryCandles) {
-    confidenceCap = Math.min(confidenceCap, hasRawLaunchFlow && rawLaunchDataQuality >= 45 ? 76 : 72);
+    confidenceCap = Math.min(confidenceCap, 72);
   } else if (snap.candlesAvailable1s < fullEntryCandles) {
     confidenceCap = Math.min(confidenceCap, 85);
   }
-  if (!hasVolumeData) confidenceCap = Math.min(confidenceCap, hasRawLaunchFlow && rawLaunchDataQuality >= 45 ? 82 : 78);
+  if (!hasVolumeData) confidenceCap = Math.min(confidenceCap, 78);
   if (!hasMomentumSignal) confidenceCap = Math.min(confidenceCap, 80);
   if (execScore.score < 10) {
     confidenceCap = Math.min(confidenceCap, 70);
@@ -114,11 +103,11 @@ export function assessAdaptiveEntryProfile(params: {
 
   let requiredConfidence = baseMinConfidence;
   if (snap.candlesAvailable1s < earlyEntryCandles) {
-    requiredConfidence += hasRawLaunchFlow && rawLaunchDataQuality >= 45 ? 10 : 15;
+    requiredConfidence += 15;
   } else if (snap.candlesAvailable1s < fullEntryCandles) {
     requiredConfidence += 8;
   }
-  if (!hasVolumeData) requiredConfidence += hasRawLaunchFlow ? 4 : 8;
+  if (!hasVolumeData) requiredConfidence += 8;
   if (!hasMomentumSignal) requiredConfidence += 6;
   if (execScore.score < 10) {
     requiredConfidence += 10;

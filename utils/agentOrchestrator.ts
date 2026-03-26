@@ -165,8 +165,6 @@ function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
     return {
       taScore: tokenAnalysis.taScore ?? null,
       taScoreBreakdown: tokenAnalysis.taScoreBreakdown ?? null,
-      taClassification: tokenAnalysis.taClassification ?? null,
-      taClassificationReason: tokenAnalysis.taClassificationReason ?? null,
       snapshot: null,
     };
   }
@@ -174,8 +172,6 @@ function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
   return {
     taScore: tokenAnalysis.taScore ?? null,
     taScoreBreakdown: tokenAnalysis.taScoreBreakdown ?? null,
-    taClassification: tokenAnalysis.taClassification ?? null,
-    taClassificationReason: tokenAnalysis.taClassificationReason ?? null,
     bitquery: {
       transferWallets60s: tokenAnalysis.bitqueryTransferWallets60s ?? null,
       transferCount60s: tokenAnalysis.bitqueryTransferCount60s ?? null,
@@ -213,35 +209,14 @@ function summarizeTaForTool(tokenAnalysis: TokenAnalysis) {
           ratio: taSnapshot.volumeRelative.ratio,
           isBurst: taSnapshot.volumeRelative.isBurst,
           isSpike: taSnapshot.volumeRelative.isSpike,
-          windowUsed: taSnapshot.volumeRelative.windowUsed ?? null,
-          adaptive: taSnapshot.volumeRelative.adaptive ?? null,
         }
         : null,
       microTrend: taSnapshot.microTrend ?? null,
-      launchContext: taSnapshot.launchContext ?? null,
       trend: taSnapshot.trend ?? null,
       atrPct: taSnapshot.atrPct ?? null,
       candlesAvailable1s: taSnapshot.candlesAvailable1s ?? null,
     },
   };
-}
-
-function buildTaContextLine(tokenAnalysis: TokenAnalysis): string | null {
-  const launchContext = tokenAnalysis.taSnapshot?.launchContext;
-  if (!launchContext) return null;
-
-  const segments = [
-    `dq=${launchContext.dataQualityScore}/100`,
-    `candles1s=${launchContext.candleCount1s}`,
-    `rawSamples10s=${launchContext.rawSampleCount10s}`,
-    launchContext.tickVelocityPerSec !== null ? `tickVelocity=${launchContext.tickVelocityPerSec.toFixed(2)}/s` : null,
-    launchContext.rawMomentumPct !== null ? `rawMomentum=${launchContext.rawMomentumPct.toFixed(2)}%` : null,
-    launchContext.priceRangePct10s !== null ? `range10s=${launchContext.priceRangePct10s.toFixed(2)}%` : null,
-    `vwapWindow=${launchContext.vwapWindowUsed}`,
-    launchContext.volumeWindowUsed !== null ? `volumeWindow=${launchContext.volumeWindowUsed}` : null,
-  ].filter(Boolean);
-
-  return segments.length > 0 ? `TA_Context: ${segments.join(" | ")}` : null;
 }
 
 function summarizeRiskForTool(tokenAnalysis: TokenAnalysis) {
@@ -357,13 +332,9 @@ function buildAgentUserPrompt(tokenAnalysis: TokenAnalysis): string {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `HoneypotRisk: ${tokenAnalysis.honeypotRisk}`,
-    tokenAnalysis.taClassification
-      ? `TA_Status: ${tokenAnalysis.taClassification}${tokenAnalysis.taClassificationReason ? ` | ${tokenAnalysis.taClassificationReason}` : ""}`
-      : null,
     tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100` : null,
-    buildTaContextLine(tokenAnalysis),
     tokenAnalysis.taSnapshot?.volumeRelative
-      ? `VolumeRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x${tokenAnalysis.taSnapshot.volumeRelative.windowUsed ? ` (window=${tokenAnalysis.taSnapshot.volumeRelative.windowUsed})` : ""}`
+      ? `VolumeRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x`
       : null,
     tokenAnalysis.rsi ? `RSI(1s): ${tokenAnalysis.rsi.toFixed(1)}` : null,
     tokenAnalysis.taSnapshot?.microTrend

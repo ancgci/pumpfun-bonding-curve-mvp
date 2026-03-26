@@ -8,7 +8,7 @@ import {
 import { getAgentDecision, executeAgentTrade, getCurrentTokenPrice } from "./agentOrchestrator";
 import { getCachedTokenMetadata } from "./metadataCache";
 import { analyzeToken } from "./riskEngine";
-import { backfillTokenHistory, DEFAULT_PUMPFUN_BACKFILL_TRADES } from "./pumpfunHistory";
+import { backfillTokenHistory } from "./pumpfunHistory";
 import { getProtocolAdjustedTAConfig, getTAConfig } from "./technicalConfig";
 import { getLatestPrice, getTASnapshotV2, getVolatility, recordPriceSample } from "./volatilityMonitor";
 
@@ -413,7 +413,7 @@ export class WinnerReentryAgentService {
         return;
       }
 
-      await backfillTokenHistory(candidate.mint, DEFAULT_PUMPFUN_BACKFILL_TRADES);
+      await backfillTokenHistory(candidate.mint, 50);
       const currentMarket = await getCurrentTokenPrice(candidate.mint);
       const livePrice = currentMarket?.price ?? getLatestPrice(candidate.mint) ?? candidate.lastExitPrice ?? candidate.lastEntryPrice;
       if (!livePrice || !Number.isFinite(livePrice) || livePrice <= 0) {
