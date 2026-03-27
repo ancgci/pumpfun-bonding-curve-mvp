@@ -701,20 +701,37 @@ export async function getAgentDecision(
 
   let taLabel = `${C_RED}REPROVADO${C_RST}`;
   let taEmoji = "⚠️";
+  const hasQualitative = tokenAnalysis.taQualitativeSummary?.includes("Positive_Signals");
   if (scoreResult.classification === "VALID") {
     taLabel = `${C_BLUE}APROVADO${C_RST}`;
     taEmoji = "✅";
   } else if (scoreResult.classification === "LOW_DATA") {
-    taLabel = `${C_BLUE}DADOS_INSUFICIENTES${C_RST}`;
-    taEmoji = "⏳";
+    if (hasQualitative) {
+      taLabel = `${C_GREEN}DADOS_PARCIAIS (sinais qualitativos enviados ao LLM)${C_RST}`;
+      taEmoji = "📋";
+    } else {
+      taLabel = `${C_BLUE}DADOS_INSUFICIENTES${C_RST}`;
+      taEmoji = "⏳";
+    }
   } else if (scoreResult.classification === "EARLY_MOMENTUM") {
     taLabel = `${C_BLUE}MOMENTUM_INICIAL${C_RST}`;
     taEmoji = "🚀";
   }
 
-  logger.info(
-    `[Pipeline 3/8 - Technical Analysis] ${taEmoji} ${taLabel} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) Technical Report (Score: ${scoreResult.score}, Status: ${scoreResult.classification}, Regime: ${scoreResult.regime}, Mode: ${scoreResult.mode}).`
-  );
+  if (hasQualitative) {
+    // Count positive signals for a cleaner log
+    const positiveCount = (tokenAnalysis.taQualitativeSummary!.match(/\|/g) || []).length + 1;
+    const warningCount = tokenAnalysis.taQualitativeSummary!.includes("Warning_Signals")
+      ? (tokenAnalysis.taQualitativeSummary!.split("Warning_Signals:")[1]?.match(/\|/g) || []).length + 1
+      : 0;
+    logger.info(
+      `[Pipeline 3/8 - Technical Analysis] ${taEmoji} ${taLabel} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) — ${positiveCount} sinais positivos, ${warningCount} warnings (Score numérico: ${scoreResult.score}, Mode: ${scoreResult.mode}).`
+    );
+  } else {
+    logger.info(
+      `[Pipeline 3/8 - Technical Analysis] ${taEmoji} ${taLabel} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) Technical Report (Score: ${scoreResult.score}, Status: ${scoreResult.classification}, Regime: ${scoreResult.regime}, Mode: ${scoreResult.mode}).`
+    );
+  }
 
   // ── FILTROS RÁPIDOS PRÉ-LLM (< 1ms, apenas casos óbvios) ──
   // Bloqueios de gestão de risco: cooldown e stops consecutivos

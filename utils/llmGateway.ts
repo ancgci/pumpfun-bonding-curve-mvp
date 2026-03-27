@@ -3,7 +3,7 @@ import { generateObject, generateText, jsonSchema, stepCountIs } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import logger from "./logger";
 
-export type LlmProvider = "google" | "legacy";
+export type LlmProvider = "google" | "legacy" | "legacy_fallback";
 export type LlmTask = "agent" | "learner" | "postmortem";
 
 type ToolMap = Record<string, any>;
@@ -50,7 +50,8 @@ function normalizeProviderName(value: string): LlmProvider | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return null;
   if (normalized === "google" || normalized === "gemini") return "google";
-  if (normalized === "legacy" || normalized === "nvidia" || normalized === "nvidia_compat") return "legacy";
+  if (normalized === "legacy_fallback" || normalized === "nvidia") return "legacy_fallback";
+  if (normalized === "legacy" || normalized === "groq") return "legacy";
   return null;
 }
 
@@ -320,9 +321,16 @@ export async function generateStructuredLlm<TOutput>(
       }
     }
 
-    const model = normalizeLegacyModel(request.legacyModel);
-    const legacyApiUrl = getLegacyApiUrl(request.legacyApiUrl);
-    const apiKey = (request.legacyApiKey || "").trim();
+    let model = normalizeLegacyModel(request.legacyModel);
+    let legacyApiUrl = getLegacyApiUrl(request.legacyApiUrl);
+    let apiKey = (request.legacyApiKey || "").trim();
+
+    if (provider === "legacy_fallback") {
+      model = normalizeLegacyModel(process.env.NVIDIA_FALLBACK_MODEL || "z-ai/glm5");
+      legacyApiUrl = (process.env.NVIDIA_FALLBACK_API_URL || "https://integrate.api.nvidia.com/v1/chat/completions").trim();
+      apiKey = (process.env.NVIDIA_FALLBACK_API_KEY || "").trim();
+    }
+
     if (!apiKey) {
       attempts.push({ provider, model, success: false, reason: "missing_legacy_api_key" });
       continue;
@@ -370,7 +378,7 @@ export async function generateStructuredLlm<TOutput>(
       };
     } catch (error: any) {
       attempts.push({ provider, model, success: false, reason: error.message });
-      logger.warn(`[LLM Gateway] Legacy ${request.task} failed: ${error.message}`);
+      logger.warn(`[LLM Gateway] ${provider} ${request.task} failed: ${error.message}`);
     }
   }
 
