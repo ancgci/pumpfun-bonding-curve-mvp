@@ -3224,39 +3224,47 @@ async function handleBitqueryStream(provider: GrpcProviderConfig) {
     }
   );
 
-  registerManagedStream(
-    "DexPools",
-    () =>
-      createBitqueryDexPoolsStream({
-        endpoint: provider.endpoint,
-        token: provider.token,
-        programAddresses,
-      }),
-    async (message: any) => {
-      const poolSnapshot = decodeBitqueryDexPoolMessage(message);
-      if (poolSnapshot && poolSnapshot.protocolProgram === PUMP_FUN_PROGRAM_ID.toBase58()) {
-        bitqueryEventBus.publishPoolSnapshot(poolSnapshot);
+  if (CONFIG.BITQUERY_DEXPOOLS_ENABLED) {
+    registerManagedStream(
+      "DexPools",
+      () =>
+        createBitqueryDexPoolsStream({
+          endpoint: provider.endpoint,
+          token: provider.token,
+          programAddresses,
+        }),
+      async (message: any) => {
+        const poolSnapshot = decodeBitqueryDexPoolMessage(message);
+        if (poolSnapshot && poolSnapshot.protocolProgram === PUMP_FUN_PROGRAM_ID.toBase58()) {
+          bitqueryEventBus.publishPoolSnapshot(poolSnapshot);
+        }
       }
-    }
-  );
+    );
+  } else {
+    logger.info("ℹ️  [gRPC] DexPools stream desabilitado (BITQUERY_DEXPOOLS_ENABLED=false). Economia de banda ativa.");
+  }
 
-  registerManagedStream(
-    "DexOrders",
-    () =>
-      createBitqueryDexOrdersStream({
-        endpoint: provider.endpoint,
-        token: provider.token,
-        programAddresses,
-      }),
-    async (message: any) => {
-      const orderEvent = decodeBitqueryDexOrderMessage(message);
-      if (!orderEvent) return;
-      recordOrderPressure(orderEvent.mint, orderEvent.side, orderEvent.type, orderEvent.amount);
-    }
-  );
+  if (CONFIG.BITQUERY_DEXORDERS_ENABLED) {
+    registerManagedStream(
+      "DexOrders",
+      () =>
+        createBitqueryDexOrdersStream({
+          endpoint: provider.endpoint,
+          token: provider.token,
+          programAddresses,
+        }),
+      async (message: any) => {
+        const orderEvent = decodeBitqueryDexOrderMessage(message);
+        if (!orderEvent) return;
+        recordOrderPressure(orderEvent.mint, orderEvent.side, orderEvent.type, orderEvent.amount);
+      }
+    );
+  } else {
+    logger.info("ℹ️  [gRPC] DexOrders stream desabilitado (BITQUERY_DEXORDERS_ENABLED=false). Economia de banda ativa.");
+  }
 
   const activeWalletAddress = getActiveTradingWalletAddress();
-  if (activeWalletAddress) {
+  if (CONFIG.BITQUERY_BALANCES_ENABLED && activeWalletAddress) {
     registerManagedStream(
       "Balances",
       () =>
@@ -3274,6 +3282,8 @@ async function handleBitqueryStream(provider: GrpcProviderConfig) {
         });
       }
     );
+  } else {
+    logger.info("ℹ️  [gRPC] Balances stream desabilitado (BITQUERY_BALANCES_ENABLED=false). Economia de banda ativa.");
   }
 
   criticalStreamMonitorTimer = setInterval(() => {

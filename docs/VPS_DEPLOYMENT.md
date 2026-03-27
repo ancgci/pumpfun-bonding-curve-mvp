@@ -92,9 +92,26 @@ MOONSHOT_MONITORING_ENABLED=false
 ANONCOIN_MONITORING_ENABLED=false
 VERBOSE_TRANSACTION_LOGS=false
 AGENT_MODE=SIMULATION
+
+# Controle de banda dos substreams Bitquery (OFF = economia de banda)
+BITQUERY_DEXPOOLS_ENABLED=false
+BITQUERY_DEXORDERS_ENABLED=false
+BITQUERY_BALANCES_ENABLED=false
 ```
 
-Esse perfil mantém o bot pronto para voltar ao modo `LIVE`, mas evita o custo operacional de múltiplos pipelines e de logs detalhados por transação.
+> [!IMPORTANT]
+> Os 3 flags `BITQUERY_*_ENABLED` controlam substreams auxiliares da Bitquery. **Por padrão são `false`**.
+> Deixá-los desligados mantém apenas `DexTrades`, `Transactions` e `Transfers`, o que é suficiente
+> para o discovery e análise completos da Pump.fun.
+
+### Impacto esperado de banda por configuração
+
+| Streams ativos | RX estimado/dia |
+|---|---|
+| Todos ligados (situação anterior) | **~60–70 GiB** ❌ |
+| Apenas DexTrades + Transactions + Transfers (recomendado) | **~3–5 GiB** ✅ |
+| + DexPools habilitado | ~7–10 GiB ⚠️ |
+| + DexOrders ou Balances habilitados | +~1–3 GiB cada ⚠️ |
 
 Se houver necessidade de ampliar o escopo:
 

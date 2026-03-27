@@ -1103,6 +1103,33 @@ app.post("/api/wallet/select/:id", (req, res) => {
 });
 
 /**
+ * DELETE /api/wallet/:id - Deleta uma wallet existente
+ */
+app.delete("/api/wallet/:id", (req, res) => {
+    try {
+        const user = getRequestUser(req);
+        if (!user) return res.status(401).json({ error: "Account not found" });
+
+        const walletId = Number(req.params.id);
+        
+        // Import must be here if not already imported globally, but let's assume `deleteUserWallet` is available.
+        // Wait, I need to check if `deleteUserWallet` is imported in server.ts.
+        // I will add the import at the top of server.ts if missing, but for now I'll just use it. Let me verify imports first... actually I will just add the require inline to be safe if it's not imported or just call it directly assuming I will add the import.
+        // Let's add the route first...
+        
+        const { deleteUserWallet } = require("../utils/userAccess");
+        const deletedWallet = deleteUserWallet(user.id, walletId);
+
+        return res.json({
+            success: true,
+            wallet: deletedWallet,
+        });
+    } catch (error: any) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+/**
  * GET /api/wallet/export - Exporta a wallet atual ou uma wallet específica da conta
  */
 app.get("/api/wallet/export", (req, res) => {

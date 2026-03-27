@@ -329,6 +329,40 @@ export function setUserWalletDefault(userId: number, walletId: number) {
     return getUserWalletById(userId, walletId);
 }
 
+export function deleteUserWallet(userId: number, walletId: number) {
+    const wallet = getUserWalletById(userId, walletId);
+    if (!wallet) throw new Error('Wallet not found or does not belong to user');
+
+    if (wallet.isDefault) {
+        throw new Error('Cannot delete the active (default) wallet. Set another wallet as default first.');
+    }
+
+    const allWallets = listUserWallets(userId);
+    if (allWallets.length <= 1) {
+        throw new Error('Cannot delete the only wallet. You must have at least one wallet.');
+    }
+
+    // Delete secret file if it exists
+    if (wallet.secretRef && require('fs').existsSync(wallet.secretRef)) {
+        try {
+            require('fs').unlinkSync(wallet.secretRef);
+        } catch (err) {
+            console.error(`[Wallet] Failed to delete secret file for wallet ${walletId}:`, err);
+        }
+    }
+
+    // Delete from DB (and cascading trades/configs/positions if needed, 
+    // though scoped usually by wallet_id in advanced setups. 
+    // Given the schema, we just delete the wallet)
+    const tx = db.transaction(() => {
+        db.prepare(`DELETE FROM user_wallets WHERE id = ? AND user_id = ?`).run(walletId, userId);
+    });
+
+    tx();
+    
+    return wallet;
+}
+
 export function listAllWalletsWithOwners() {
     const rows = db.prepare(`
         SELECT

@@ -65,6 +65,10 @@ export const CONFIG = {
   PUBLICNODE_GRPC_TOKEN: process.env.PUBLICNODE_GRPC_TOKEN || "",
   BITQUERY_GRPC_URL: process.env.BITQUERY_GRPC_URL || "",
   BITQUERY_GRPC_TOKEN: process.env.BITQUERY_GRPC_TOKEN || "",
+  // Bandwidth-control flags for optional Bitquery substreams (default OFF to save bandwidth)
+  BITQUERY_DEXPOOLS_ENABLED: process.env.BITQUERY_DEXPOOLS_ENABLED === "true",
+  BITQUERY_DEXORDERS_ENABLED: process.env.BITQUERY_DEXORDERS_ENABLED === "true",
+  BITQUERY_BALANCES_ENABLED: process.env.BITQUERY_BALANCES_ENABLED === "true",
 
   // Telegram
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || "",

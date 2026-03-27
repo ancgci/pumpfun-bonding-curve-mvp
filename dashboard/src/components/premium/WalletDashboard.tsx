@@ -9,7 +9,8 @@ import {
     Check,
     ExternalLink,
     Search,
-    Filter
+    Filter,
+    Trash2
 } from 'lucide-react';
 import { PremiumCard } from './PremiumCard';
 import { useDashboardData } from '../../hooks/useDashboardData';
@@ -124,6 +125,24 @@ export const WalletDashboard = () => {
         }
     };
 
+    const handleDeleteWallet = async (walletId: number) => {
+        if (!window.confirm('Tem certeza que deseja DELETAR esta carteira? A chave privada será perdida permanentemente e os fundos não poderão mais ser acessados pelo bot. Esta ação é irreversível.')) {
+            return;
+        }
+
+        try {
+            setLoadingWallet(true);
+            await api.delete(`${API_BASE}/wallet/${walletId}`);
+            await loadAccountWallets();
+            await refreshData();
+        } catch (err: any) {
+            console.error('Delete wallet failed', err);
+            alert(`Erro ao excluir carteira: ${err.response?.data?.error || err.message}`);
+        } finally {
+            setLoadingWallet(false);
+        }
+    };
+
     const renderContent = () => {
         switch (activeTab) {
             case 'saldo':
@@ -193,6 +212,16 @@ export const WalletDashboard = () => {
                                                 >
                                                     Exportar
                                                 </button>
+                                                {!wallet.isDefault && (
+                                                    <button
+                                                        onClick={() => { void handleDeleteWallet(wallet.id); }}
+                                                        disabled={loadingWallet}
+                                                        className="p-2 rounded-xl text-xs font-bold bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 disabled:opacity-50 transition-colors"
+                                                        title="Excluir carteira"
+                                                    >
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
