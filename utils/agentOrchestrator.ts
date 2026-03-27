@@ -21,7 +21,7 @@ const C_RED = "\x1b[31m";
 const C_GREEN = "\x1b[32m";
 const C_RST = "\x1b[0m";
 
-import { calculateConfluenceScore, formatScoreLog } from "./technicalScore";
+import { calculateConfluenceScore, formatScoreLog, buildTAQualitativeSummary } from "./technicalScore";
 import {
   checkEntryBlocks,
   registerPriceForLegDetection,
@@ -332,7 +332,7 @@ function buildAgentUserPrompt(tokenAnalysis: TokenAnalysis): string {
     `Liquidity: ${tokenAnalysis.liquiditySol} SOL`,
     `RiskScore: ${tokenAnalysis.riskScore}`,
     `HoneypotRisk: ${tokenAnalysis.honeypotRisk}`,
-    tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100` : null,
+    tokenAnalysis.taQualitativeSummary ? `--- TECHNICAL ANALYSIS REPORT ---\n${tokenAnalysis.taQualitativeSummary}\n--- END TA REPORT ---` : (tokenAnalysis.taScore !== undefined ? `TA_Score: ${tokenAnalysis.taScore}/100` : null),
     tokenAnalysis.taSnapshot?.volumeRelative
       ? `VolumeRelative: ${tokenAnalysis.taSnapshot.volumeRelative.ratio.toFixed(2)}x`
       : null,
@@ -476,6 +476,7 @@ interface TokenAnalysis {
   // TA V2 — snapshot completo
   taSnapshot?: TASnapshotV2;
   taScore?: number;            // score de confluência (0-100)
+  taQualitativeSummary?: string; // resumo qualitativo completo para o LLM
   taScoreBreakdown?: string;   // breakdown formatado
   taClassification?: "VALID" | "LOW_DATA" | "WEAK_SETUP" | "EARLY_MOMENTUM";
   taClassificationReason?: string;
@@ -689,7 +690,14 @@ export async function getAgentDecision(
   tokenAnalysis.taScoreBreakdown = formatScoreLog(scoreResult);
   tokenAnalysis.taClassification = scoreResult.classification;
   tokenAnalysis.taClassificationReason = scoreResult.classificationReason;
+  tokenAnalysis.taQualitativeSummary = buildTAQualitativeSummary(taSnap, scoreResult, {
+    protocol: tokenAnalysis.protocol,
+    bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+    transferParticipation,
+    orderPressure,
+  });
   logger.info(`📊 [TA V2 Pre-LLM] ${tokenAnalysis.symbol} Score=${scoreResult.score}/100 Regime=${scoreResult.regime} Class=${scoreResult.classification} Mode=${scoreResult.mode}`);
+  logger.info(`📋 [TA Qualitative] ${tokenAnalysis.symbol}:\n${tokenAnalysis.taQualitativeSummary}`);
 
   let taLabel = `${C_RED}REPROVADO${C_RST}`;
   let taEmoji = "⚠️";

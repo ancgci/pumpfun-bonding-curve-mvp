@@ -461,3 +461,112 @@ function calculatePumpfunCompactScore(
         mode,
     };
 }
+
+// ============================================================
+// RESUMO QUALITATIVO PARA ALIMENTAR O LLM
+// Gera um resumo textual dos sinais disponíveis,
+// INDEPENDENTE do score numérico. Mesmo com score=0,
+// o LLM recebe contexto útil para decidir.
+// ============================================================
+export function buildTAQualitativeSummary(
+    snap: TASnapshotV2,
+    scoreResult: ScoreResult,
+    context: ScoreContext = {}
+): string {
+    const signals: string[] = [];
+    const warnings: string[] = [];
+
+    // --- Sinais de preço ---
+    if (snap.priceAboveVWAP) {
+        signals.push("Price above VWAP (bullish)");
+    } else if (snap.priceAboveVWAP === false && snap.currentPrice) {
+        warnings.push("Price below VWAP");
+    }
+
+    // --- MicroTrend (10s) ---
+    if (snap.microTrend) {
+        const pct = snap.microTrend.changePct;
+        if (pct >= 2.0) signals.push(`MicroTrend(10s): +${pct.toFixed(1)}% (strong momentum)`);
+        else if (pct >= 0.5) signals.push(`MicroTrend(10s): +${pct.toFixed(1)}% (positive)`);
+        else if (pct <= -1.0) warnings.push(`MicroTrend(10s): ${pct.toFixed(1)}% (dumping)`);
+        else if (pct <= -0.3) warnings.push(`MicroTrend(10s): ${pct.toFixed(1)}% (weakening)`);
+        else signals.push(`MicroTrend(10s): ${pct.toFixed(1)}% (flat)`);
+    }
+
+    // --- Trend ---
+    if (snap.trend) {
+        if (snap.trend.changePct > 0.5) signals.push(`Trend: +${snap.trend.changePct.toFixed(1)}% (rising)`);
+        else if (snap.trend.changePct < -0.5) warnings.push(`Trend: ${snap.trend.changePct.toFixed(1)}% (falling)`);
+    }
+
+    // --- Volume ---
+    if (snap.volumeRelative) {
+        const ratio = snap.volumeRelative.ratio;
+        if (snap.volumeRelative.isBurst) signals.push(`Volume: ${ratio.toFixed(1)}x (BURST detected)`);
+        else if (ratio >= 1.5) signals.push(`Volume: ${ratio.toFixed(1)}x (elevated)`);
+        else if (ratio >= 1.05) signals.push(`Volume: ${ratio.toFixed(1)}x (above average)`);
+        else warnings.push(`Volume: ${ratio.toFixed(1)}x (low)`);
+    }
+
+    // --- RSI ---
+    if (snap.rsi !== null) {
+        if (snap.rsi > 92) warnings.push(`RSI: ${snap.rsi.toFixed(0)} (extreme overbought)`);
+        else if (snap.rsi > 75) warnings.push(`RSI: ${snap.rsi.toFixed(0)} (overbought zone)`);
+        else if (snap.rsi >= 40) signals.push(`RSI: ${snap.rsi.toFixed(0)} (healthy range)`);
+        else if (snap.rsi < 30) signals.push(`RSI: ${snap.rsi.toFixed(0)} (oversold, potential reversal)`);
+    }
+
+    // --- Bonding Curve ---
+    const bc = context.bondingCurvePercent;
+    if (typeof bc === "number") {
+        if (bc >= 90) signals.push(`BondingCurve: ${bc}% (near migration, high urgency)`);
+        else if (bc >= 80) signals.push(`BondingCurve: ${bc}% (advanced stage)`);
+        else if (bc < 50) warnings.push(`BondingCurve: ${bc}% (early stage, higher risk)`);
+    }
+
+    // --- Transfer Participation (Bitquery gRPC) ---
+    const tp = context.transferParticipation;
+    if (tp) {
+        if (tp.uniqueWallets60s >= 8) signals.push(`UniqueWallets(60s): ${tp.uniqueWallets60s} (high participation)`);
+        else if (tp.uniqueWallets60s >= 4) signals.push(`UniqueWallets(60s): ${tp.uniqueWallets60s} (moderate)`);
+        else if (tp.uniqueWallets60s >= 1) warnings.push(`UniqueWallets(60s): ${tp.uniqueWallets60s} (low participation)`);
+    }
+
+    // --- Order Pressure (Bitquery gRPC) ---
+    const op = context.orderPressure;
+    if (op) {
+        const ratio = op.buyPressureRatio ?? 0;
+        if (ratio >= 2.0 && op.buyOrders30s >= 4) signals.push(`BuyPressure(30s): ${ratio.toFixed(1)}x with ${op.buyOrders30s} buys (strong demand)`);
+        else if (ratio >= 1.3) signals.push(`BuyPressure(30s): ${ratio.toFixed(1)}x (buyers dominating)`);
+        else if (ratio < 0.7 && ratio > 0) warnings.push(`BuyPressure(30s): ${ratio.toFixed(1)}x (sellers dominating)`);
+    }
+
+    // --- Candle availability ---
+    if (snap.candlesAvailable1s < 1) {
+        warnings.push("Candles: 0 (just discovered, no price history yet)");
+    } else if (snap.candlesAvailable1s < 3) {
+        signals.push(`Candles: ${snap.candlesAvailable1s} (very early launch data)`);
+    }
+
+    // --- Distância VWAP ---
+    if (snap.distVWAPPct !== null && Math.abs(snap.distVWAPPct) > 5) {
+        if (snap.distVWAPPct > 0) warnings.push(`VWAP distance: +${snap.distVWAPPct.toFixed(1)}% above (stretched)`);
+        else warnings.push(`VWAP distance: ${snap.distVWAPPct.toFixed(1)}% below`);
+    }
+
+    // --- Build final summary ---
+    const parts: string[] = [];
+    parts.push(`TA_Score: ${scoreResult.score}/100 (${scoreResult.classification})`);
+    parts.push(`TA_Regime: ${scoreResult.regime}`);
+    parts.push(`TA_Reason: ${scoreResult.classificationReason}`);
+
+    if (signals.length > 0) {
+        parts.push(`Positive_Signals: ${signals.join(" | ")}`);
+    }
+    if (warnings.length > 0) {
+        parts.push(`Warning_Signals: ${warnings.join(" | ")}`);
+    }
+
+    return parts.join("\n");
+}
+
