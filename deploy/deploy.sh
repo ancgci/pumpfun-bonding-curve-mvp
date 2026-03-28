@@ -206,7 +206,7 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
 
   echo ""
   echo "  Runtime process validation:"
-  for proc in "bot" "dashboard-api"; do
+  for proc in "bot" "dashboard-api" "chatops"; do
     if pm2 info "\$proc" | grep -q "status.*online"; then
       echo "  ✅ \$proc is online (PM2)"
     else
