@@ -69,6 +69,8 @@ rsync -avz --progress \
   --exclude 'test-results/' \
   --exclude '*.log' \
   --exclude 'data/*.db' \
+  --exclude 'data/simulation/' \
+  --exclude 'data/bot-runtime.json' \
   --exclude 'dashboard-api/db/pnl_history.db' \
   --exclude 'dashboard-api/db/pnl_history.db-shm' \
   --exclude 'dashboard-api/db/pnl_history.db-wal' \

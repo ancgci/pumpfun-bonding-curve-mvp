@@ -261,7 +261,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       isAgentActive: !(prev?.isAgentActive === true),
     }));
     await apiFetch(`${API_BASE}/agent/toggle`, { method: "POST" });
-    await refreshData();
   };
 
   const toggleMode = async () => {
@@ -271,7 +270,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       updatedAt: new Date().toISOString(),
     }));
     await apiFetch(`${API_BASE}/agent/mode`, { method: "POST" });
-    await refreshData();
   };
 
   const updateConfig = async (updates: any) => {
@@ -282,7 +280,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),
     });
-    await refreshData();
   };
 
   const triggerEmergencyStop = async (active: boolean, reason?: string) => {
@@ -291,12 +288,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active, reason: reason || "" }),
     });
-    await refreshData();
   };
 
   const resetCircuitBreaker = async () => {
     await apiFetch(`${API_BASE}/cb-reset`, { method: "POST" });
-    await refreshData();
   };
 
   const toggleProtocol = async (key: string) => {
@@ -317,7 +312,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [key]: next }),
       });
-      await refreshData();
     } catch (err) {
       // rollback on failure
       setProtocolConfig(prev || null);

@@ -4,7 +4,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import logger from "./logger";
 
 export type LlmProvider = "google" | "legacy" | "legacy_fallback";
-export type LlmTask = "agent" | "learner" | "postmortem";
+export type LlmTask = "agent" | "learner" | "postmortem" | "chatops_copilot";
 
 type ToolMap = Record<string, any>;
 
@@ -72,7 +72,9 @@ function getProviderOrder(task: LlmTask): LlmProvider[] {
     ? process.env.LLM_PROVIDER_ORDER
     : task === "learner"
       ? process.env.LEARNER_LLM_PROVIDER_ORDER
-      : process.env.POSTMORTEM_LLM_PROVIDER_ORDER;
+      : task === "chatops_copilot"
+        ? process.env.CHATOPS_LLM_PROVIDER_ORDER || "google,legacy_fallback"
+        : process.env.POSTMORTEM_LLM_PROVIDER_ORDER;
 
   return parseProviderOrder(taskSpecific || process.env.LLM_PROVIDER_ORDER);
 }

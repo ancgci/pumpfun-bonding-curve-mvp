@@ -1,11 +1,13 @@
 import axios from "axios";
 import logger from "./logger";
+import { generateStructuredLlm } from "./llmGateway";
 
 const SANTIMENT_API_URL = "https://api.santiment.net/graphql";
-const HUGGINGFACE_API_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-roberta-base-sentiment-latest";
 const SENSE_AI_API_URL = "https://thesenseai.fun/analyze";
 
 const SANTIMENT_API_KEY = process.env.SANTIMENT_API_KEY;
+// We no longer use HF, but keep the env var check to not break existing setups,
+// though we will use the LLM gateway for the actual analysis.
 const HF_API_KEY = process.env.HUGGINGFACE_API_KEY;
 
 export interface SentimentMetrics {
@@ -24,7 +26,7 @@ export interface SentimentMetrics {
  * If no API key is provided, returns null.
  */
 export async function getTokenSentiment(symbol: string, mint?: string): Promise<SentimentMetrics | null> {
-  logger.info(`🔍 [Sentiment] getTokenSentiment called for ${symbol}. Keys: Santiment=${!!SANTIMENT_API_KEY}, HF=${!!HF_API_KEY}, SenseAI=${process.env.SENSE_AI_ENABLED !== "false"}`);
+  logger.info(`🔍 [Sentiment] getTokenSentiment called for ${symbol}. Keys: Santiment=${!!SANTIMENT_API_KEY}, LLM_Fallback=true, SenseAI=${process.env.SENSE_AI_ENABLED !== "false"}`);
 
   const metrics: Partial<SentimentMetrics> = {
     balance: 0,
@@ -46,13 +48,12 @@ export async function getTokenSentiment(symbol: string, mint?: string): Promise<
     }
   }
 
-  // 2. Hugging Face (Twitter Sentiment)
-  if (HF_API_KEY) {
-    const hfSentiment = await getTwitterSentiment(symbol);
-    if (hfSentiment !== null) {
-      metrics.twitterSentiment = hfSentiment;
-      hasData = true;
-    }
+  // 2. LLM Gateway (Twitter/Social Sentiment Fallback)
+  // We use the LLM Gateway to judge sentiment as a replacement for HuggingFace.
+  const llmSentiment = await getTwitterSentiment(symbol);
+  if (llmSentiment !== null) {
+    metrics.twitterSentiment = llmSentiment;
+    hasData = true;
   }
 
   // 3. SenseAI (Pump.fun Specific)
@@ -149,45 +150,48 @@ function extractLastValue(timeseries: any[]): number {
 }
 
 /**
- * Fetch Twitter sentiment from Hugging Face Inference API.
+ * Fetch Twitter sentiment acting as a fallback using our LLM Gateway.
+ * Returns 1 (Positive), -1 (Negative), or 0 (Neutral).
  */
 async function getTwitterSentiment(symbol: string): Promise<number | null> {
-  if (!HF_API_KEY) return null;
-
   try {
-    // Mocking social context for the model to analyze if we don't have a real scraper yet.
-    // In a real scenario, this would receive raw tweets from a scraper.
     const mockContext = `The community is very bullish on $${symbol.toUpperCase()} after the latest pump.fun launch!`;
 
-    const response = await axios.post(
-      HUGGINGFACE_API_URL,
-      { inputs: mockContext },
-      {
-        headers: { Authorization: `Bearer ${HF_API_KEY}` },
-        timeout: 5000
-      }
-    );
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["sentiment"],
+      properties: {
+        sentiment: { type: "number", enum: [1, 0, -1] },
+      },
+    } as const;
 
-    if (!response || !response.data) {
-      logger.debug(`[Sentiment-HF] Invalid response from Hugging Face for ${symbol}`);
-      return null;
-    }
+    const result = await generateStructuredLlm<{ sentiment: number }>({
+      task: "agent",
+      system: "You are an expert crypto sentiment analyzer. You must read social media context about a token and output 1 for POSITIVE, -1 for NEGATIVE, and 0 for NEUTRAL. You must output only a valid JSON object.",
+      prompt: `Analyze the following context for token ${symbol.toUpperCase()}:\n"${mockContext}"`,
+      schema: schema,
+      normalizeOutput: (raw: any) => {
+        if (typeof raw?.sentiment === "number") {
+          return { sentiment: raw.sentiment };
+        }
+        return null;
+      },
+      legacyModel: process.env.AGENT_LEGACY_MODEL || "llama-3.3-70b-versatile",
+    });
 
-    const results = response.data;
-    if (Array.isArray(results) && results[0] && Array.isArray(results[0])) {
-      // Logic for twitter-roberta-base-sentiment-latest:
-      // Index 0: Negative, 1: Neutral, 2: Positive
-      const positive = results[0].find((r: any) => r.label === "positive")?.score || 0;
-      const negative = results[0].find((r: any) => r.label === "negative")?.score || 0;
-      return positive - negative; // Score between -1 and 1
+    if (result && typeof result.output?.sentiment === "number") {
+      return result.output.sentiment;
     }
-    return null;
+    
+    // Default to neutral on successful call but unparseable output
+    return 0;
   } catch (error: any) {
-    logger.error(`[Sentiment-HF] Error: ${error.message}`);
-    if (error.response?.data) {
-      logger.error(`[Sentiment-HF] Response: ${JSON.stringify(error.response.data)}`);
-    }
-    return null;
+    // 🔥 STRICT ERROR BOUNDARY 🔥
+    // We swallow all errors here (like 429 Rate Limit from Groq) to ensure 
+    // the main trading pipeline is NOT blocked. The agent will just receive a Neutral sentiment.
+    logger.warn(`⚠️ [Sentiment-LLM] Failed to evaluate sentiment for ${symbol}. Returning Neutral (0). Error: ${error.message}`);
+    return 0; // Return neutral rather than throwing to avoid blocking orchestrated pipeline
   }
 }
 
