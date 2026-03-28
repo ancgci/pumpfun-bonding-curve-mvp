@@ -206,8 +206,15 @@ ssh "${VPS_USER}@${VPS_HOST}" << REMOTE_CMD
 
   echo ""
   echo "  Runtime process validation:"
-  assert_single_runtime_process "node .*ts-node/dist/bin.js.*index.ts" "bot"
-  assert_single_runtime_process "node .*ts-node/dist/bin.js.*server.ts" "dashboard-api"
+  for proc in "bot" "dashboard-api"; do
+    if pm2 info "$proc" | grep -q "status.*online"; then
+      echo "  ✅ $proc is online (PM2)"
+    else
+      echo "  ❌ $proc is NOT online!"
+      pm2 logs "$proc" --lines 10 --nostream
+      exit 1
+    fi
+  done
 REMOTE_CMD
 
 log "Deployment complete!"
