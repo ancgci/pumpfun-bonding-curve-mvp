@@ -109,6 +109,17 @@ function getLegacyApiUrl(override?: string): string {
   ).trim();
 }
 
+function getLegacyApiKey(override?: string): string {
+  return (
+    (override || "").trim() ||
+    (process.env.GROQ_API_KEY || "").trim() ||
+    (process.env.LEGACY_LLM_API_KEY || "").trim() ||
+    (process.env.NV_LLM_API_KEY || "").trim() ||
+    (process.env.NVIDIA_API_KEY || "").trim() ||
+    ""
+  ).trim();
+}
+
 function normalizeLegacyModel(model: string): string {
   const normalized = model.trim();
   if (!normalized) return normalized;
@@ -325,7 +336,7 @@ export async function generateStructuredLlm<TOutput>(
 
     let model = normalizeLegacyModel(request.legacyModel);
     let legacyApiUrl = getLegacyApiUrl(request.legacyApiUrl);
-    let apiKey = (request.legacyApiKey || "").trim();
+    let apiKey = getLegacyApiKey(request.legacyApiKey);
 
     if (provider === "legacy_fallback") {
       model = normalizeLegacyModel(process.env.NVIDIA_FALLBACK_MODEL || "z-ai/glm5");

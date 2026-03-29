@@ -22,14 +22,15 @@ interface BitqueryTransfersStreamParams {
 }
 
 export function createBitqueryTransfersStream(params: BitqueryTransfersStreamParams): any {
-  const request = {
+  const request: any = {
     token: {
       addresses: params.tokenMints.filter(Boolean),
     },
+    select: ["Block.Slot", "Transaction.Signature", "Transaction.Status", "Transfer.Sender", "Transfer.Receiver", "Transfer.Amount", "Transfer.Currency"],
   };
 
   logger.info(
-    `🌊 Bitquery CoreCast transfers subscription starting for ${request.token.addresses.length} token(s)`
+    `🌊 Bitquery CoreCast transfers subscription starting for ${request.token.addresses.length} token(s) with field pruning`
   );
 
   return createBitqueryCoreCastStream({

@@ -75,16 +75,16 @@ export function isNativeSolCurrency(currency: any): boolean {
 function loadCoreCastDescriptor() {
   if (cachedCoreCastDescriptor) return cachedCoreCastDescriptor;
 
-  const packageRoot = path.dirname(require.resolve("bitquery-corecast-proto/package.json"));
-  const solanaPath = path.join(packageRoot, "solana");
+  const projectRoot = process.cwd();
+  const solanaPath = path.join(projectRoot, "utils", "proto", "bitquery");
   const protoFiles = [
-    "corecast/corecast.proto",
-    "corecast/request.proto",
-    "corecast/stream_message.proto",
-    "dex_block_message.proto",
-    "block_message.proto",
-    "token_block_message.proto",
-    "parsed_idl_block_message.proto",
+    "solana/corecast/corecast.proto",
+    "solana/corecast/request.proto",
+    "solana/corecast/stream_message.proto",
+    "solana/dex_block_message.proto",
+    "solana/block_message.proto",
+    "solana/token_block_message.proto",
+    "solana/parsed_idl_block_message.proto",
   ].map((file) => path.join(solanaPath, file));
 
   const packageDefinition = protoLoader.loadSync(protoFiles, {
@@ -96,7 +96,7 @@ function loadCoreCastDescriptor() {
     bytes: Buffer,
     arrays: true,
     objects: true,
-    includeDirs: [packageRoot, solanaPath],
+    includeDirs: [solanaPath, path.join(solanaPath, "solana")],
   });
 
   cachedCoreCastDescriptor = grpc.loadPackageDefinition(packageDefinition);

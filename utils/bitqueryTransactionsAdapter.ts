@@ -117,14 +117,15 @@ function detectDecimals(namedAccounts: Map<string, string>, instruction: any): n
 }
 
 export function createBitqueryTransactionsStream(params: BitqueryTransactionsStreamParams): any {
-  const request = {
+  const request: any = {
     program: {
       addresses: params.programAddresses.filter(Boolean),
     },
+    select: ["Transaction.Signature", "Block.Slot", "Transaction.ParsedIdlInstructions"],
   };
 
   logger.info(
-    `🌊 Bitquery CoreCast transactions subscription starting for ${request.program.addresses.length} program(s)`
+    `🌊 Bitquery CoreCast transactions subscription starting for ${request.program.addresses.length} program(s) with field pruning`
   );
 
   return createBitqueryCoreCastStream({

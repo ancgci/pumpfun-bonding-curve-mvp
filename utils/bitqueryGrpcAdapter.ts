@@ -28,14 +28,15 @@ interface BitqueryDexTradesStreamParams {
 }
 
 export function createBitqueryDexTradesStream(params: BitqueryDexTradesStreamParams): any {
-  const request = {
+  const request: any = {
     program: {
       addresses: params.programAddresses.filter(Boolean),
     },
+    select: ["Block.Slot", "Transaction.Signature", "Trade.Dex", "Trade.Market", "Trade.Buy", "Trade.Sell"],
   };
 
   logger.info(
-    `🌊 Bitquery CoreCast subscription starting for ${request.program.addresses.length} program(s)`
+    `🌊 Bitquery CoreCast DexTrades subscription starting for ${request.program.addresses.length} program(s) with field pruning`
   );
 
   return createBitqueryCoreCastStream({

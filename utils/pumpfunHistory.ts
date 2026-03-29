@@ -30,7 +30,7 @@ export async function backfillTokenHistory(mint: string, limit: number = 50): Pr
         const url = `https://frontend-api.pump.fun/trades/all/${mint}?limit=${limit}&offset=0`;
         logger.info(`🔄 [History] Buscando backfill para ${mint}...`);
 
-        const response = await axios.get(url, { timeout: 5000 });
+        const response = await axios.get(url, { timeout: 10000 });
 
         if (!response.data || !Array.isArray(response.data)) {
             logger.warn(`⚠️ [History] Nenhum histórico encontrado para ${mint} (ou erro na API).`);
