@@ -14,6 +14,7 @@ export interface BitqueryDexTradeEvent {
   marketAddress: string;
   signature: string;
   slot: number;
+  timestamp: number;
   mint: string;
   trader: string;
   type: "BUY" | "SELL";
@@ -32,7 +33,7 @@ export function createBitqueryDexTradesStream(params: BitqueryDexTradesStreamPar
     program: {
       addresses: params.programAddresses.filter(Boolean),
     },
-    select: ["Block.Slot", "Transaction.Signature", "Trade.Dex", "Trade.Market", "Trade.Buy", "Trade.Sell"],
+    select: ["Block.Slot", "Block.Timestamp", "Transaction.Signature", "Trade.Dex", "Trade.Market", "Trade.Buy", "Trade.Sell"],
   };
 
   logger.info(
@@ -93,6 +94,13 @@ export function decodeBitqueryDexTradeMessage(message: any): BitqueryDexTradeEve
     return null;
   }
 
+  const rawTimestamp = Number(pickField(block, "Timestamp", "timestamp") || 0);
+  const timestamp = rawTimestamp > 1_000_000_000_000
+    ? rawTimestamp
+    : rawTimestamp > 0
+      ? rawTimestamp * 1000
+      : Date.now();
+
   const buyOrder = pickField(buy, "Order", "order");
   const sellOrder = pickField(sell, "Order", "order");
   const buyAccount = pickField(buy, "Account", "account");
@@ -113,6 +121,7 @@ export function decodeBitqueryDexTradeMessage(message: any): BitqueryDexTradeEve
     marketAddress: encodeBase58(pickField(market, "MarketAddress", "marketAddress")),
     signature: encodeBase58(pickField(transaction, "Signature", "signature")),
     slot: Number(pickField(block, "Slot", "slot") || 0),
+    timestamp,
     mint,
     trader,
     type,

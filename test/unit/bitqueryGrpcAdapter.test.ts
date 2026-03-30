@@ -11,9 +11,10 @@ describe("bitqueryGrpcAdapter", () => {
     const market = "4Nd1mLxkQ8foh2jT2x9VY9ycYzaPt6VxDRKCVhcdtrzX";
     const trader = "8HoQnePLqPj4M7PUDzfw8e3Ymdwgc7NLGnaTUapubyvu";
     const signature = "5j7sGQ2rD1jz7gGfK1rGx9o9Kj6Xc7uFq8jW4i6Q6Tvd7gnP4z1SUgYG3PaY5E9sDcV1YQUAECEV4VpWwfvX2gYV";
+    const blockTimestamp = 1_712_345_678;
 
     const decoded = decodeBitqueryDexTradeMessage({
-      Block: { Slot: "123456" },
+      Block: { Slot: "123456", Timestamp: String(blockTimestamp) },
       Transaction: { Signature: b58(signature) },
       Trade: {
         Dex: {
@@ -60,6 +61,7 @@ describe("bitqueryGrpcAdapter", () => {
       marketAddress: market,
       signature,
       slot: 123456,
+      timestamp: blockTimestamp * 1000,
       mint,
       trader,
       type: "BUY",

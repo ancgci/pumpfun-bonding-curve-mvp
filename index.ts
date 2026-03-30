@@ -79,6 +79,7 @@ import { createBitqueryDexPoolsStream, decodeBitqueryDexPoolMessage } from "./ut
 import { createBitqueryTransfersStream, decodeBitqueryTransferMessage } from "./utils/bitqueryTransfersAdapter";
 import { createBitqueryDexOrdersStream, decodeBitqueryDexOrderMessage } from "./utils/bitqueryDexOrdersAdapter";
 import { createBitqueryBalancesStream, decodeBitqueryBalanceUpdateMessage } from "./utils/bitqueryBalancesAdapter";
+import { recordLiveTrade } from "./utils/liveTradeCache";
 import { bitqueryEventBus, BitqueryDiscoveryCandidate } from "./utils/bitqueryEventBus";
 import {
   cleanupBitqueryRealtimeState,
@@ -1389,7 +1390,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
 
         // REAL-TIME BACKFILL: Buscar histórico antes de seguir no pipeline
         // Isso garante que o Step 3 (TA) tenha dados para MACD/RSI instantaneamente.
-        await backfillTokenHistory(tOutput.mint, 50);
+        await backfillTokenHistory(tOutput.mint, 50, tOutput.bondingCurve);
 
         recordTransaction(tOutput.mint);
       }
@@ -2664,7 +2665,7 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
 
     watchBitqueryTransferMint(candidate.mint);
     const tokenMetadata = await loadTokenMetadataSafe(candidate.mint, "token Bitquery PumpFun");
-    await backfillTokenHistory(candidate.mint, 50);
+    await backfillTokenHistory(candidate.mint, 50, candidate.marketAddress);
 
     await runProtocolSimulationDiscovery({
       protocolId: "pumpfun",
@@ -3259,6 +3260,20 @@ async function handleBitqueryStream(provider: GrpcProviderConfig) {
     async (message: any) => {
       const tradeEvent = decodeBitqueryDexTradeMessage(message);
       if (!tradeEvent) return;
+
+      const price = tradeEvent.tokenAmount > 0 ? tradeEvent.solAmount / tradeEvent.tokenAmount : 0;
+      if (price > 0) {
+        recordLiveTrade(tradeEvent.mint, {
+          timestamp: tradeEvent.timestamp,
+          wallet: tradeEvent.trader,
+          side: tradeEvent.type,
+          solAmount: tradeEvent.solAmount,
+          tokenAmount: tradeEvent.tokenAmount,
+          price,
+          signature: tradeEvent.signature,
+        });
+      }
+
       bitqueryEventBus.publishDiscoveryFromTrade(tradeEvent);
     }
   );
