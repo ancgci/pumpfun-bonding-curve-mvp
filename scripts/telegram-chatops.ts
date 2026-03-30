@@ -2,7 +2,14 @@ import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import util from 'util';
-import { generateStructuredLlm } from '../utils/llmGateway';
+import {
+  formatAgentSummaryForTelegram,
+  formatDashboardSummaryForTelegram,
+  formatPositionsSummaryForTelegram,
+  formatSimulationSummaryForTelegram,
+  getDashboardSnapshot,
+} from '../utils/dashboardSnapshot';
+import { answerTelegramCopilotQuestion } from '../utils/telegramCopilot';
 
 const execPromise = util.promisify(exec);
 
@@ -43,17 +50,20 @@ bot.onText(/\/(start|help)/, (msg) => {
   const chatId = msg.chat.id;
   
   const options = {
-    parse_mode: "Markdown" as const,
+    parse_mode: "HTML" as const,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🖥️ Consultar Status", callback_data: "/status" }],
+        [{ text: "📊 Dashboard", callback_data: "/dashboard" }],
+        [{ text: "🖥️ Consultar Status PM2", callback_data: "/status" }],
+        [{ text: "🤖 Agent", callback_data: "/agent" }, { text: "📌 Positions", callback_data: "/positions" }],
+        [{ text: "🧪 Simulação", callback_data: "/sim" }],
         [{ text: "📜 Ver Últimos Logs", callback_data: "/logs" }],
         [{ text: "🔄 Reiniciar Bot", callback_data: "/restart" }, { text: "🛑 Parar Bot", callback_data: "/stop" }]
       ]
     }
   };
 
-  bot.sendMessage(chatId, `🚀 *Antigravity ChatOps*\nOlá chefia! Clique em um dos botões abaixo para comandar a VPS remotamente:`, options);
+  bot.sendMessage(chatId, `🚀 <b>Antigravity ChatOps</b>\nUse os botões abaixo ou mande uma pergunta livre no privado.`, options);
 });
 
 // Comando /status
@@ -84,6 +94,54 @@ bot.onText(/\/status/, async (msg) => {
     bot.sendMessage(chatId, report, { parse_mode: "Markdown" });
   } catch (error: any) {
     bot.sendMessage(chatId, `❌ Falha ao buscar status: ${error.message}`);
+  }
+});
+
+bot.onText(/\/dashboard/, async (msg) => {
+  if (!isAuthorized(msg)) return;
+  const snapshot = getDashboardSnapshot({ recentTradesLimit: 5, recentPositionsLimit: 5 });
+  bot.sendMessage(msg.chat.id, formatDashboardSummaryForTelegram(snapshot), { parse_mode: "HTML" });
+});
+
+bot.onText(/\/agent/, async (msg) => {
+  if (!isAuthorized(msg)) return;
+  const snapshot = getDashboardSnapshot({ recentTradesLimit: 5, recentPositionsLimit: 5 });
+  bot.sendMessage(msg.chat.id, formatAgentSummaryForTelegram(snapshot), { parse_mode: "HTML" });
+});
+
+bot.onText(/\/positions/, async (msg) => {
+  if (!isAuthorized(msg)) return;
+  const snapshot = getDashboardSnapshot({ recentTradesLimit: 5, recentPositionsLimit: 5 });
+  bot.sendMessage(msg.chat.id, formatPositionsSummaryForTelegram(snapshot), { parse_mode: "HTML" });
+});
+
+bot.onText(/\/sim/, async (msg) => {
+  if (!isAuthorized(msg)) return;
+  const snapshot = getDashboardSnapshot({ recentTradesLimit: 5, recentPositionsLimit: 5 });
+  bot.sendMessage(msg.chat.id, formatSimulationSummaryForTelegram(snapshot), { parse_mode: "HTML" });
+});
+
+bot.onText(/\/ask(?:\s+([\s\S]+))?/, async (msg, match) => {
+  if (!isAuthorized(msg)) return;
+  const question = (match?.[1] || "").trim();
+  if (!question) {
+    bot.sendMessage(msg.chat.id, "Uso: /ask sua pergunta");
+    return;
+  }
+
+  const pendingMsg = await bot.sendMessage(msg.chat.id, "🤔 Lendo dashboard e raciocinando...");
+
+  try {
+    const result = await answerTelegramCopilotQuestion(question, { includeLogs: true });
+    bot.editMessageText(result.reply, {
+      chat_id: msg.chat.id,
+      message_id: pendingMsg.message_id
+    });
+  } catch (error: any) {
+    bot.editMessageText(`⚠️ Falha de comunicação com o Cérebro LLM: ${error.message}`, {
+      chat_id: msg.chat.id,
+      message_id: pendingMsg.message_id
+    });
   }
 });
 
@@ -144,66 +202,10 @@ bot.on('message', async (msg) => {
   const pendingMsg = await bot.sendMessage(chatId, "🤔 Analisando logs e raciocinando...");
   
   try {
-    let logs = "";
-    try {
-      const { stdout } = await execPromise("tail -n 30 logs/error.log");
-      logs = stdout;
-    } catch(e) {}
-    
-    let processStatus = "";
-    try {
-      const { stdout } = await execPromise("pm2 jlist");
-      const json = JSON.parse(stdout || "[]");
-      processStatus = json.map((p: any) => `${p.name}: ${p.pm2_env.status}`).join(", ");
-    } catch(e) {}
-    
-    let agentState = "";
-    try {
-      const { stdout } = await execPromise("cat data/agent/status.json 2>/dev/null || echo ''");
-      agentState = stdout;
-    } catch(e) {}
-    
-    const systemPrompt = `Você é o Antigravity Copilot, um assistente de inteligência e operações via Telegram de um robô de trading de criptomoedas da Solana (PumpFun/Meteora). 
-A sua função é tirar dúvidas operacionais do usuário, analisar os logs e cruzar os dados de forma cirúrgica.
-
-REGRAS RÍGIDAS (NÃO QUEBRE EM HIPÓTESE ALGUMA): 
-1. Responda SEMPRE em português do Brasil (pt-BR).
-2. Seja EXTREMAMENTE CURTO, direto, frio e objetivo. Vá direto ao ponto. Use no máximo 2 ou 3 frases. 
-3. Não use jargões de "inteligência artificial" ou saudações corporativas (como "Olá! Posso ajudar").
-4. Se o usuário perguntar se há erro, diga se sim ou não baseado estritamente na seção [LOGS RECENTES] abaixo, cite o erro e sugira a causa em 1 frase apenas.
-5. Se não houver erro listado nos logs, afirme que os logs estão limpos.
-
-OBRIGATÓRIO: A sua saída final DEVE ser 100% um JSON puro no formato {"reply": "Sua resposta aqui"}. NÃO use blocos de código markdown (\`\`\`) e NÃO adicione nenhum outro texto fora das chaves!
-
-[CONTEXTO DO SISTEMA EM TEMPO REAL]
-
-[LOGS RECENTES (ÚLTIMAS 30 LINHAS DE ERRO)]
-${logs || "Nenhum log de erro detectado."}
-
-[STATUS FÍSICO DA MÁQUINA E PROCESSOS]
-Processos Ativos Node: ${processStatus || "Desconhecido"}
-Estado do Agente Mestre: ${agentState || "Normal"}
-`;
-
-    const result = await generateStructuredLlm<{ reply: string }>({
-      task: "chatops_copilot",
-      legacyModel: process.env.NVIDIA_FALLBACK_MODEL || "z-ai/glm5",
-      googleModel: "gemini-3.1-flash-lite",
-      prompt: prompt,
-      system: systemPrompt,
-      schema: {
-        type: "object",
-        required: ["reply"],
-        properties: { reply: { type: "string" } },
-        additionalProperties: false
-      },
-      normalizeOutput: (data) => data as { reply: string }
-    });
-    
-    bot.editMessageText(result.output.reply, {
+    const result = await answerTelegramCopilotQuestion(prompt, { includeLogs: true });
+    bot.editMessageText(result.reply, {
       chat_id: chatId,
-      message_id: pendingMsg.message_id,
-      parse_mode: "Markdown"
+      message_id: pendingMsg.message_id
     });
   } catch (error: any) {
     bot.editMessageText(`⚠️ Falha de comunicação com o Cérebro LLM: ${error.message}`, {

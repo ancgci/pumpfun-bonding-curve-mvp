@@ -156,6 +156,7 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 - [Bitquery CoreCast Multi-Stream](BITQUERY_CORECAST_MULTI_STREAM_2026-03-25.md) - Discovery redundante e enriquecimento assíncrono com `DexTrades`, `Transactions`, `DexPools`, `Transfers`, `DexOrders` e `Balances`
 - [Integração AI SDK Google](AI_SDK_GOOGLE_INTEGRATION_2026-03-20.md) - Gateway LLM unificado, fallback, saída estruturada e tool calling local
 - [Correção de Conectividade LLM](LLM_CONNECTIVITY_FIX_2026-03-23.md) - Ajuste local do modelo NVIDIA, URL legada explícita e validação do fallback Google
+- [Telegram Copilot com Dashboard](TELEGRAM_DASHBOARD_COPILOT_2026-03-30.md) - Snapshot compartilhado do dashboard, novos comandos `/dashboard`, `/agent`, `/positions`, `/sim`, `/ask` e IA com contexto operacional real
 - [Hardening de Segurança](SECURITY_HARDENING.md) - Protocolo de proteção e auditoria da VPS
 - [API do Dashboard](API.md) - Endpoints REST
 - [Configuração](CONFIGURATION.md) - Todas as variáveis de ambiente
