@@ -1355,6 +1355,24 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     try {
       if (shouldAlert) {
         sentAddresses.set(tOutput.mint, Date.now());
+        
+        const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
+        const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+        const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
+        const timestamp = new Date().toLocaleTimeString('pt-BR');
+
+        // Alertando imediatamente antes do Risco/IA barrar o pipeline
+        sendMessage(
+          `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
+          `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
+          `Symbol: <b>${tokenSymbol}</b>\n` +
+          `Fonte: 💊 <b>Pumpfun</b>\n` +
+          `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
+          `Market Cap: <b>${marketCap}</b>\n` +
+          `Type: <b>${tOutput.type}</b>\n` +
+          `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
+          `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`
+        );
       }
       if (isDiscovery) {
         logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
@@ -1576,26 +1594,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         logger.error(`❌ [Decisão] Erro: ${agentErr.message}`);
       }
 
-      // Alerta Telegram (apenas se atingir o limiar configurado)
-      if (shouldAlert) {
-        const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
-        const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
-        const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
 
-        const timestamp = new Date().toLocaleTimeString('pt-BR');
-        sendMessage(
-          `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
-          `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
-          `Symbol: <b>${tokenSymbol}</b>\n` +
-          `Fonte: 💊 <b>Pumpfun</b>\n` +
-          `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
-          riskSection + `\n` +
-          `Market Cap: <b>${marketCap}</b>\n` +
-          `Type: <b>${tOutput.type}</b>\n` +
-          `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
-          `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`
-        );
-      }
     } finally {
       if (isDiscovery) currentlyProcessing.delete(tOutput.mint);
     }
