@@ -24,7 +24,7 @@ import { bnLayoutFormatter } from "./utils/bn-layout-formatter";
 import { transactionOutput } from "./utils/transactionOutput";
 import { getBondingCurveAddress, calculateMarketCap } from "./utils/getBonding";
 import { calculateCurveProgress } from "./utils/curveConstants";
-import { alertQueue } from "./utils/alertQueue";
+import { alertQueue, AlertPriority } from "./utils/alertQueue";
 import { getAgentDecision, executeAgentTrade, resumeSimulationMonitoring } from "./utils/agentOrchestrator";
 import { getOpenTradesFromDb, rebuildMetricsFromFile } from "./utils/simulationEngine";
 import { getCopyTradeDecision, isFollowedWallet } from "./utils/copyTradingEngine";
@@ -78,6 +78,7 @@ import { createBitqueryTransactionsStream, decodeBitqueryPumpFunTransactionMessa
 import { createBitqueryDexPoolsStream, decodeBitqueryDexPoolMessage } from "./utils/bitqueryDexPoolsAdapter";
 import { createBitqueryTransfersStream, decodeBitqueryTransferMessage } from "./utils/bitqueryTransfersAdapter";
 import { createBitqueryDexOrdersStream, decodeBitqueryDexOrderMessage } from "./utils/bitqueryDexOrdersAdapter";
+import { buildTelegramLink, escapeTelegramHtml } from "./utils/telegramHtml";
 import { createBitqueryBalancesStream, decodeBitqueryBalanceUpdateMessage } from "./utils/bitqueryBalancesAdapter";
 import { recordLiveTrade } from "./utils/liveTradeCache";
 import { bitqueryEventBus, BitqueryDiscoveryCandidate } from "./utils/bitqueryEventBus";
@@ -293,6 +294,7 @@ winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
 const ADDR_MAX_SIZE = 10_000;
 const ADDR_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 let sentAddresses = new Map<string, number>();
+let pendingAlertAddresses = new Set<string>();
 // Create a Map to track tokens that have received a FINAL AI decision — value = timestamp
 let aiProcessedAddresses = new Map<string, number>();
 let currentlyProcessing = new Set<string>();
@@ -389,29 +391,98 @@ const limiter = new Bottleneck({
   maxConcurrent: 1
 });
 
-// Send message via alert queue (async, non-blocking)
-function sendMessage(message: string) {
-  const useQueue = process.env.ALERT_QUEUE_ENABLED !== "false";
+interface SendMessageOptions {
+  priority?: AlertPriority;
+  onSent?: () => void;
+  onPermanentFailure?: (error: Error) => void;
+  throwOnError?: boolean;
+}
 
-  if (useQueue) {
-    alertQueue.enqueue(message, 'normal');
-    logger.debug("Message added to alert queue");
-  } else {
-    return limiter.schedule(async () => {
+// Send message via alert queue (async, non-blocking)
+function sendMessage(message: string, options: SendMessageOptions = {}): Promise<void> {
+  const useQueue = process.env.ALERT_QUEUE_ENABLED !== "false";
+  const priority = options.priority || 'normal';
+  const operation = useQueue
+    ? alertQueue.enqueueAsync(message, priority, {
+      onSuccess: options.onSent,
+      onPermanentFailure: options.onPermanentFailure,
+    })
+    : limiter.schedule(async () => {
       try {
-        const result = await bot.sendMessage(chatId, message, {
+        await bot.sendMessage(chatId, message, {
           parse_mode: "HTML",
           disable_web_page_preview: true
         });
         lastMessageTime = Date.now();
         logger.info("Message sent successfully");
-        return result;
+        options.onSent?.();
       } catch (error: any) {
-        logger.error("Error sending message:", error.message || error);
-        throw error;
+        const normalizedError = normalizeTelegramError(error);
+        logger.error("Error sending message:", normalizedError.message);
+        options.onPermanentFailure?.(normalizedError);
+        throw normalizedError;
       }
     });
+
+  if (useQueue) {
+    logger.debug("Message added to alert queue");
   }
+
+  return operation.catch((error: unknown) => {
+    if (options.throwOnError) {
+      throw normalizeTelegramError(error);
+    }
+  });
+}
+
+function hasQueuedOrSentAlert(mint: string): boolean {
+  return pendingAlertAddresses.has(mint) || sentAddresses.has(mint);
+}
+
+function queueTokenAlert(mint: string, message: string, priority: AlertPriority = "normal"): Promise<void> {
+  pendingAlertAddresses.add(mint);
+
+  return sendMessage(message, {
+    priority,
+    onSent: () => {
+      pendingAlertAddresses.delete(mint);
+      sentAddresses.set(mint, Date.now());
+    },
+    onPermanentFailure: (error) => {
+      pendingAlertAddresses.delete(mint);
+      logger.warn(`⚠️ [Telegram] Alerta para ${mint} não enviado: ${error.message}`);
+    },
+  });
+}
+
+function buildPumpFunTerminalUrl(mint: string, bondingCurve: string): string {
+  return `https://trojan.com/terminal?token=${encodeURIComponent(mint)}&pool=${encodeURIComponent(bondingCurve)}&ref=juniocarlosbr`;
+}
+
+function buildTelegramWalletUrl(address: string): string {
+  return `https://trojan.com/wallet?address=${encodeURIComponent(address)}&period=1d`;
+}
+
+function buildSolscanTxUrl(signature: string): string {
+  return `https://solscan.io/tx/${encodeURIComponent(signature)}`;
+}
+
+function buildTokenViewerLinkUrl(mint: string): string {
+  return `${TOKEN_VIEWER_URL}/token/${encodeURIComponent(mint)}?cluster=mainnet`;
+}
+
+function formatTxLinks(signature: string): string {
+  const txUrl = buildSolscanTxUrl(signature);
+  return `${buildTelegramLink(txUrl, `${signature.substring(0, 12)}...`)} (${buildTelegramLink(txUrl, "link")})`;
+}
+
+function normalizeTelegramError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  const message = (error as any)?.message;
+  return new Error(typeof message === "string" ? message : String(error));
 }
 
 const TXN_FORMATTER = new TransactionFormatter();
@@ -1281,14 +1352,18 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       const timestamp = new Date().toLocaleTimeString('pt-BR');
       const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
       const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+      const safeTokenName = escapeTelegramHtml(tokenName);
+      const safeTokenSymbol = escapeTelegramHtml(tokenSymbol);
+      const safeActionText = escapeTelegramHtml(actionText);
+      const safeHoldingText = isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`;
 
       const alertMsg = `${emojiHeader} [${timestamp}]\n\n` +
-        `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
-        `Symbol: <b>${tokenSymbol}</b>\n` +
-        `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
-        `Action: <b>${actionText}</b>\n` +
-        `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n` +
-        (isHolding ? `⚠️ <b>VOCÊ POSSUI ESTE TOKEN!</b>` : `Acompanhando...`);
+        `Token: <b>${safeTokenName}</b> (${buildTelegramLink(buildPumpFunTerminalUrl(tOutput.mint, tOutput.bondingCurve), tOutput.mint)})\n` +
+        `Symbol: <b>${safeTokenSymbol}</b>\n` +
+        `Dev Wallet: ${buildTelegramLink(buildTelegramWalletUrl(creator), creator)}\n` +
+        `Action: <b>${safeActionText}</b>\n` +
+        `Signature: ${formatTxLinks(txn.transaction.signatures[0])}\n` +
+        safeHoldingText;
 
       sendMessage(alertMsg);
 
@@ -1323,13 +1398,15 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       const timestamp = new Date().toLocaleTimeString('pt-BR');
       const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
       const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
+      const safeTokenName = escapeTelegramHtml(tokenName);
+      const safeTokenSymbol = escapeTelegramHtml(tokenSymbol);
 
       const whaleAlertMsg = `${headerEmoji} [${timestamp}]\n\n` +
-        `Token: <b>${tokenName}</b> (<a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr">${tOutput.mint}</a>)\n` +
-        `Symbol: <b>${tokenSymbol}</b>\n` +
+        `Token: <b>${safeTokenName}</b> (${buildTelegramLink(buildPumpFunTerminalUrl(tOutput.mint, tOutput.bondingCurve), tOutput.mint)})\n` +
+        `Symbol: <b>${safeTokenSymbol}</b>\n` +
         `Amount: <b>${Number(tOutput.solAmount).toFixed(2)} SOL</b> ${emoji}\n` +
-        `Whale Wallet: <a href="https://trojan.com/wallet?address=${tOutput.user}&period=1d">${tOutput.user}</a>\n` +
-        `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)\n`;
+        `Whale Wallet: ${buildTelegramLink(buildTelegramWalletUrl(tOutput.user), tOutput.user)}\n` +
+        `Signature: ${formatTxLinks(txn.transaction.signatures[0])}\n`;
 
       sendMessage(whaleAlertMsg);
     }
@@ -1350,30 +1427,33 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
   // AI discovery tracks NEW tokens for analysis, ignoring alert state
   const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint) && !currentlyProcessing.has(tOutput.mint);
   // shouldAlert tracks if we ALREADY sent a telegram message (prevents spam)
-  const shouldAlert = withinAlertBand && !sentAddresses.has(tOutput.mint);
+  const shouldAlert = withinAlertBand && !hasQueuedOrSentAlert(tOutput.mint);
 
   if (followedWallet || isDiscovery || shouldAlert) {
     if (isDiscovery) currentlyProcessing.add(tOutput.mint);
     try {
       if (shouldAlert) {
-        sentAddresses.set(tOutput.mint, Date.now());
-        
         const tokenSymbol = tokenMetadata?.symbol && tokenMetadata.symbol !== "UNK" ? tokenMetadata.symbol : tOutput.mint.substring(0, 4).toUpperCase();
         const tokenName = tokenMetadata?.name && tokenMetadata.name !== "Unknown" ? tokenMetadata.name : `Pump-${tokenSymbol}`;
         const marketCap = tokenMetadata?.marketCap ? `$${tokenMetadata.marketCap.toLocaleString('en-US')}` : "N/A";
         const timestamp = new Date().toLocaleTimeString('pt-BR');
+        const safeTokenName = escapeTelegramHtml(tokenName);
+        const safeTokenSymbol = escapeTelegramHtml(tokenSymbol);
+        const safeMarketCap = escapeTelegramHtml(marketCap);
+        const safeType = escapeTelegramHtml(tOutput.type);
 
         // Alertando imediatamente antes do Risco/IA barrar o pipeline
-        sendMessage(
+        void queueTokenAlert(
+          tOutput.mint,
           `🚨 <b>ALERTA PUMPFUN - ${currentAlertThreshold}%+</b> 🚨 [${timestamp}]\n\n` +
-          `Token: <a href="https://trojan.com/terminal?token=${tOutput.mint}&pool=${tOutput.bondingCurve}&ref=juniocarlosbr"><b>${tokenName}</b></a> (<a href="${TOKEN_VIEWER_URL}/token/${tOutput.mint}?cluster=mainnet">${tOutput.mint}</a>)\n` +
-          `Symbol: <b>${tokenSymbol}</b>\n` +
+          `Token: ${buildTelegramLink(buildPumpFunTerminalUrl(tOutput.mint, tOutput.bondingCurve), tokenName)} (${buildTelegramLink(buildTokenViewerLinkUrl(tOutput.mint), tOutput.mint)})\n` +
+          `Symbol: <b>${safeTokenSymbol}</b>\n` +
           `Fonte: 💊 <b>Pumpfun</b>\n` +
-          `Dev Wallet: <a href="https://trojan.com/wallet?address=${creator}&period=1d">${creator}</a>\n` +
-          `Market Cap: <b>${marketCap}</b>\n` +
-          `Type: <b>${tOutput.type}</b>\n` +
+          `Dev Wallet: ${buildTelegramLink(buildTelegramWalletUrl(creator), creator)}\n` +
+          `Market Cap: <b>${safeMarketCap}</b>\n` +
+          `Type: <b>${safeType}</b>\n` +
           `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
-          `Signature: <a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">${txn.transaction.signatures[0].substring(0, 12)}...</a> (<a href="https://solscan.io/tx/${txn.transaction.signatures[0]}">link</a>)`
+          `Signature: ${formatTxLinks(txn.transaction.signatures[0])}`
         );
       }
       if (isDiscovery) {
@@ -1743,7 +1823,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
     const shouldAlert =
       Number(progress) >= currentMeteoraThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint);
+      !hasQueuedOrSentAlert(tOutput.mint);
 
     let tokenMetadata = null;
     if (shouldSimulate || shouldAlert) {
@@ -1817,7 +1897,8 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       }
 
       // Enviar alerta
-      sendMessage(
+      void queueTokenAlert(
+        tOutput.mint,
         `🚨 <b>ALERTA METEORA DBC - ${METEORA_DBC_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
         `Fonte: ☄️ <b>Meteora DBC</b>\n` +
@@ -1825,9 +1906,6 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-
-      // Adicionar endereço aos enviados
-      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação Meteora DBC:", error);
@@ -1943,7 +2021,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
     const shouldAlert =
       Number(progress) >= currentBonkThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint);
+      !hasQueuedOrSentAlert(tOutput.mint);
 
     let tokenMetadata = null;
     if (shouldSimulate || shouldAlert) {
@@ -2017,7 +2095,8 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
       }
 
       // Enviar alerta
-      sendMessage(
+      void queueTokenAlert(
+        tOutput.mint,
         `🚨 <b>ALERTA BONK.FUN - ${BONK_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
         `Fonte: 🐕 <b>Bonk.fun</b>\n` +
@@ -2025,9 +2104,6 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-
-      // Adicionar endereço aos enviados
-      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação bonk.fun:", error);
@@ -2144,7 +2220,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
     const shouldAlert =
       Number(progress) >= currentMoonshotThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint);
+      !hasQueuedOrSentAlert(tOutput.mint);
 
     let tokenMetadata = null;
     if (shouldSimulate || shouldAlert) {
@@ -2218,7 +2294,8 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
       }
 
       // Enviar alerta
-      sendMessage(
+      void queueTokenAlert(
+        tOutput.mint,
         `🚨 <b>ALERTA MOONSHOT - ${MOONSHOT_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
         `Fonte: 🚀 <b>Moonshot</b>\n` +
@@ -2226,9 +2303,6 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-
-      // Adicionar endereço aos enviados
-      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação moonshot:", error);
@@ -2334,7 +2408,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
     if (
       Number(progress) >= currentAnonThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint)
+      !hasQueuedOrSentAlert(tOutput.mint)
     ) {
       // Registrar transação no monitor de desempenho
       recordTransaction(tOutput.mint);
@@ -2400,7 +2474,8 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
       }
 
       // Enviar alerta
-      sendMessage(
+      void queueTokenAlert(
+        tOutput.mint,
         `🚨 <b>ALERTA ANONCOIN.IT - ${ANONCOIN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
         `Fonte: 🎭 <b>Anoncoin.it</b>\n` +
@@ -2408,9 +2483,6 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-
-      // Adicionar endereço aos enviados
-      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação anoncoin.it:", error);
@@ -2539,7 +2611,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
     const shouldAlert =
       Number(progress) >= currentDaosThreshold &&
       Number(progress) <= 100 &&
-      !sentAddresses.has(tOutput.mint);
+      !hasQueuedOrSentAlert(tOutput.mint);
 
     let tokenMetadata = null;
     if (shouldSimulate || shouldAlert) {
@@ -2613,7 +2685,8 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
       }
 
       // Enviar alerta
-      sendMessage(
+      void queueTokenAlert(
+        tOutput.mint,
         `🚨 <b>ALERTA DAOS.FUN - ${DAOS_FUN_ALERT_THRESHOLD}%+</b> 🚨\n\n` +
         tokenInfo +
         `Fonte: 🏦 <b>Daos.fun</b>\n` +
@@ -2621,9 +2694,6 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
         `Curve Progress: <b>${Number(progress).toFixed(1)} %</b>\n` +
         `Signature: <code>${txn.transaction.signatures[0].substring(0, 8)}...</code>`
       );
-
-      // Adicionar endereço aos enviados
-      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação daos.fun:", error);
@@ -3935,7 +4005,7 @@ setTimeout(async () => {
     const botInfo = await bot.getMe();
     logger.info(`✅ Bot conectado: ${botInfo.username} (ID: ${botInfo.id})`);
 
-    await sendMessage(`✅ Bot PumpFun monitor está funcionando! Aguardando tokens chegarem a ${ALERT_THRESHOLD}% da curva...`);
+    await sendMessage(`✅ Bot PumpFun monitor está funcionando! Aguardando tokens chegarem a ${ALERT_THRESHOLD}% da curva...`, { throwOnError: true });
     logger.info("✅ Mensagem de teste enviada com sucesso!");
     updateBotHealth(true);
   } catch (error) {
