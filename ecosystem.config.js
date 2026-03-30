@@ -28,7 +28,7 @@ module.exports = {
             args: 'index.ts',
             interpreter: 'node',
             cwd: PROJECT_DIR,
-            node_args: '--max-old-space-size=8192',
+            node_args: '--max-old-space-size=4096 --expose-gc',
             env: {
                 NODE_ENV: 'production',
                 POSTMORTEM_AGENT_ENABLED: process.env.POSTMORTEM_AGENT_ENABLED || 'true',

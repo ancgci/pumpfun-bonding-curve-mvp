@@ -477,14 +477,17 @@ export function computeVolatilityEfficiency(trades: TradeRecord[]): number {
 // ============================================================
 
 const HISTORY_PATH = path.join(process.cwd(), "data", "organicity-history.json");
+const HISTORY_JSONL_PATH = path.join(process.cwd(), "data", "organicity-history.jsonl");
 
-/** Salva o estado atual do histories Map em disco (JSON) */
+/** Salva o estado atual do histories Map em disco (JSONL — uma linha por token) */
 export function saveOrganicityToDisk(): void {
     try {
         cleanupInactiveOrganicityHistories();
-        const data: Record<string, any> = {};
+        const stream = fs.createWriteStream(HISTORY_JSONL_PATH, { flags: "w" });
+        let count = 0;
         for (const [mint, h] of histories.entries()) {
-            data[mint] = {
+            const serialized = {
+                mint,
                 ...h,
                 buyerSet_30s: Array.from(h.buyerSet_30s),
                 sellerSet_30s: Array.from(h.sellerSet_30s),
@@ -494,36 +497,65 @@ export function saveOrganicityToDisk(): void {
                 sellerVolumes_60s: Object.fromEntries(h.sellerVolumes_60s),
                 snapshots: Object.fromEntries(h.snapshots),
             };
+            stream.write(JSON.stringify(serialized) + "\n");
+            count++;
         }
-        fs.promises.writeFile(HISTORY_PATH, JSON.stringify(data, null, 2))
-            .then(() => logger.info(`💾 [Organicity] Histórico persistido em disco (${histories.size} tokens)`))
-            .catch(err => logger.error(`❌ [Organicity] Erro na gravação do histórico: ${err}`));
+        stream.end(() => {
+            logger.info(`💾 [Organicity] Histórico persistido em disco JSONL (${count} tokens)`);
+        });
+        stream.on("error", (err) => {
+            logger.error(`❌ [Organicity] Erro na gravação JSONL: ${err}`);
+        });
     } catch (err) {
         logger.error(`❌ [Organicity] Erro na preparação do histórico: ${err}`);
     }
 }
 
-/** Carrega o estado salvo em disco para a RAM */
+function hydrateHistory(rawH: any): OrganicityWindowData {
+    return {
+        ...rawH,
+        buyerSet_30s: new Set(rawH.buyerSet_30s),
+        sellerSet_30s: new Set(rawH.sellerSet_30s),
+        totalUniqueWalletsSet: new Set(rawH.totalUniqueWalletsSet),
+        walletVolumes_60s: new Map(Object.entries(rawH.walletVolumes_60s || {}) as any),
+        buyerVolumes_60s: new Map(Object.entries(rawH.buyerVolumes_60s || {}) as any),
+        sellerVolumes_60s: new Map(Object.entries(rawH.sellerVolumes_60s || {}) as any),
+        snapshots: new Map(Object.entries(rawH.snapshots || {}).map(([k, v]) => [Number(k), v]) as any),
+    };
+}
+
+/** Carrega o estado salvo em disco para a RAM (suporta JSONL e legacy JSON) */
 export function loadOrganicityFromDisk(): void {
     try {
-        if (!fs.existsSync(HISTORY_PATH)) return;
-        const raw = fs.readFileSync(HISTORY_PATH, "utf-8");
-        const data = JSON.parse(raw);
-        for (const mint in data) {
-            const rawH = data[mint];
-            histories.set(mint, {
-                ...rawH,
-                buyerSet_30s: new Set(rawH.buyerSet_30s),
-                sellerSet_30s: new Set(rawH.sellerSet_30s),
-                totalUniqueWalletsSet: new Set(rawH.totalUniqueWalletsSet),
-                walletVolumes_60s: new Map(Object.entries(rawH.walletVolumes_60s || {}) as any),
-                buyerVolumes_60s: new Map(Object.entries(rawH.buyerVolumes_60s || {}) as any),
-                sellerVolumes_60s: new Map(Object.entries(rawH.sellerVolumes_60s || {}) as any),
-                snapshots: new Map(Object.entries(rawH.snapshots || {}).map(([k, v]) => [Number(k), v]) as any),
-            });
+        const useJsonl = fs.existsSync(HISTORY_JSONL_PATH);
+        const useLegacy = !useJsonl && fs.existsSync(HISTORY_PATH);
+
+        if (!useJsonl && !useLegacy) return;
+
+        if (useJsonl) {
+            const raw = fs.readFileSync(HISTORY_JSONL_PATH, "utf-8");
+            const lines = raw.split("\n").filter(line => line.trim().length > 0);
+            for (const line of lines) {
+                try {
+                    const rawH = JSON.parse(line);
+                    const mint = rawH.mint;
+                    if (!mint) continue;
+                    delete rawH.mint;
+                    histories.set(mint, hydrateHistory(rawH));
+                } catch {
+                    // Skip malformed lines
+                }
+            }
+        } else {
+            const raw = fs.readFileSync(HISTORY_PATH, "utf-8");
+            const data = JSON.parse(raw);
+            for (const mint in data) {
+                histories.set(mint, hydrateHistory(data[mint]));
+            }
         }
+
         const removed = cleanupInactiveOrganicityHistories();
-        logger.info(`📋 [Organicity] Histórico carregado do disco (${histories.size} tokens)`);
+        logger.info(`📋 [Organicity] Histórico carregado do disco${useJsonl ? " (JSONL)" : " (legacy JSON)"} (${histories.size} tokens)`);
         if (removed > 0) {
             logger.info(`🧹 [Organicity] Removidos ${removed} históricos inativos após load.`);
         }

@@ -113,6 +113,7 @@ import TelegramBot from "node-telegram-bot-api";
 import fs from "fs";
 import path from "path";
 import Bottleneck from "bottleneck";
+import { discoverySemaphore } from "./utils/memorySemaphore";
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -234,6 +235,19 @@ setInterval(() => {
   cleanupBitqueryRealtimeState();
 }, 60_000);
 
+// Memory pruning: limpa Sets/Maps antigos a cada 5 min
+setInterval(() => {
+  pruneAddressMaps();
+}, 300_000);
+
+// GC hint: pede ao V8 para rodar coleta de lixo a cada 10 min (requer --expose-gc)
+setInterval(() => {
+  if (typeof global.gc === "function") {
+    global.gc();
+    logger.info("🧹 [GC] Manual garbage collection executado.");
+  }
+}, 600_000);
+
 // Initialize the Dip Waitlist Monitor
 dipMonitor.initialize(async (mint: string, token) => {
   logger.info(`🚀 [index.ts] Dip Sniper executing LIVE BUY for ${mint} (kind=${token?.kind || "LEGACY_DIP"})`);
@@ -274,10 +288,12 @@ winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
   }
 });
 
-// Create a Set to track sent addresses (Telegram alerts)
-let sentAddresses = new Set<string>();
-// Create a Set to track tokens that have received a FINAL AI decision
-let aiProcessedAddresses = new Set<string>();
+// Create a Map to track sent addresses (Telegram alerts) — value = timestamp
+const ADDR_MAX_SIZE = 10_000;
+const ADDR_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+let sentAddresses = new Map<string, number>();
+// Create a Map to track tokens that have received a FINAL AI decision — value = timestamp
+let aiProcessedAddresses = new Map<string, number>();
 let currentlyProcessing = new Set<string>();
 // Creator Watchlist: mint -> creatorAddress
 const creatorWatchlist = new Map<string, string>();
@@ -288,7 +304,8 @@ const SENT_ADDRESSES_FILE = path.join(__dirname, 'sent_addresses.json');
 // Function to save monitored addresses
 function saveSentAddresses() {
   try {
-    fs.writeFileSync(SENT_ADDRESSES_FILE, JSON.stringify([...sentAddresses]));
+    const entries = Array.from(sentAddresses.entries());
+    fs.writeFileSync(SENT_ADDRESSES_FILE, JSON.stringify(entries));
     logger.info(`Saved ${sentAddresses.size} addresses to ${SENT_ADDRESSES_FILE}`);
   } catch (error: any) {
     logger.error("Error saving addresses:", error.message);
@@ -300,15 +317,53 @@ function loadSentAddresses() {
   try {
     if (fs.existsSync(SENT_ADDRESSES_FILE)) {
       const data = fs.readFileSync(SENT_ADDRESSES_FILE, 'utf8');
-      const addresses = JSON.parse(data);
-      sentAddresses = new Set(addresses);
+      const parsed = JSON.parse(data);
+      // Support legacy format (array of strings) and new format (array of [key, timestamp])
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed[0])) {
+          sentAddresses = new Map(parsed as [string, number][]);
+        } else {
+          sentAddresses = new Map((parsed as string[]).map(addr => [addr, Date.now()]));
+        }
+      }
       logger.info(`Loaded ${sentAddresses.size} addresses from ${SENT_ADDRESSES_FILE}`);
     } else {
-      logger.info("No address file found. Starting with empty set.");
-      sentAddresses = new Set();
+      logger.info("No address file found. Starting with empty map.");
+      sentAddresses = new Map();
     }
   } catch (error: any) {
     logger.error("Error loading addresses:", error.message);
+  }
+}
+
+/** Limpa entradas antigas dos Maps de controle e aplica cap de tamanho */
+function pruneAddressMaps(now: number = Date.now()): void {
+  let prunedSent = 0;
+  let prunedAi = 0;
+
+  for (const [key, ts] of sentAddresses.entries()) {
+    if (now - ts > ADDR_TTL_MS) { sentAddresses.delete(key); prunedSent++; }
+  }
+  for (const [key, ts] of aiProcessedAddresses.entries()) {
+    if (now - ts > ADDR_TTL_MS) { aiProcessedAddresses.delete(key); prunedAi++; }
+  }
+
+  // Cap de tamanho (FIFO)
+  if (sentAddresses.size > ADDR_MAX_SIZE) {
+    const overflow = sentAddresses.size - ADDR_MAX_SIZE;
+    const iter = sentAddresses.keys();
+    for (let i = 0; i < overflow; i++) { const k = iter.next().value; if (k) sentAddresses.delete(k); }
+    prunedSent += overflow;
+  }
+  if (aiProcessedAddresses.size > ADDR_MAX_SIZE) {
+    const overflow = aiProcessedAddresses.size - ADDR_MAX_SIZE;
+    const iter = aiProcessedAddresses.keys();
+    for (let i = 0; i < overflow; i++) { const k = iter.next().value; if (k) aiProcessedAddresses.delete(k); }
+    prunedAi += overflow;
+  }
+
+  if (prunedSent > 0 || prunedAi > 0) {
+    logger.info(`🧹 [MemPrune] Removidos ${prunedSent} sentAddresses, ${prunedAi} aiProcessed. Restantes: sent=${sentAddresses.size} ai=${aiProcessedAddresses.size}`);
   }
 }
 
@@ -1144,7 +1199,7 @@ async function runProtocolSimulationDiscovery(params: {
     });
 
     if (tradeResult.persistDecision) {
-      aiProcessedAddresses.add(tokenKey);
+      aiProcessedAddresses.set(tokenKey, Date.now());
       logger.info(`🎯 [Agent] Token ${tokenKey} marcado como processado (Decision: ${decision.action}).`);
     } else {
       logger.info(`⏳ [Agent] Token ${tokenKey} skippado temporariamente: ${tradeResult.reason}. Tentará novamente.`);
@@ -1299,7 +1354,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     if (isDiscovery) currentlyProcessing.add(tOutput.mint);
     try {
       if (shouldAlert) {
-        sentAddresses.add(tOutput.mint);
+        sentAddresses.set(tOutput.mint, Date.now());
       }
       if (isDiscovery) {
         logger.info(`[Pipeline 1/8 - Discovery] 🔍 ${C_BLUE}APROVADO${C_RST} | Token ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) descoberto aos ${Number(progress).toFixed(1)}% da curva.`);
@@ -1508,7 +1563,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
           });
 
           if (tradeResult.persistDecision) {
-            aiProcessedAddresses.add(tOutput.mint);
+            aiProcessedAddresses.set(tOutput.mint, Date.now());
             logger.info(`🎯 [Agent] Token ${tOutput.mint} marcado como processado (Decision: ${decision.action})`);
           } else {
             logger.info(`⏳ [Agent] Token ${tOutput.mint} skippado temporariamente: ${tradeResult.reason}. Tentará novamente.`);
@@ -1771,7 +1826,7 @@ async function processMeteoraDBCTransaction(txn: any, parsedTxn: any) {
       );
 
       // Adicionar endereço aos enviados
-      sentAddresses.add(tOutput.mint);
+      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação Meteora DBC:", error);
@@ -1971,7 +2026,7 @@ async function processBonkFunTransaction(txn: any, parsedTxn: any) {
       );
 
       // Adicionar endereço aos enviados
-      sentAddresses.add(tOutput.mint);
+      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação bonk.fun:", error);
@@ -2172,7 +2227,7 @@ async function processMoonshotTransaction(txn: any, parsedTxn: any) {
       );
 
       // Adicionar endereço aos enviados
-      sentAddresses.add(tOutput.mint);
+      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação moonshot:", error);
@@ -2354,7 +2409,7 @@ async function processAnoncoinTransaction(txn: any, parsedTxn: any) {
       );
 
       // Adicionar endereço aos enviados
-      sentAddresses.add(tOutput.mint);
+      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação anoncoin.it:", error);
@@ -2567,7 +2622,7 @@ async function processDaosFunTransaction(txn: any, parsedTxn: any) {
       );
 
       // Adicionar endereço aos enviados
-      sentAddresses.add(tOutput.mint);
+      sentAddresses.set(tOutput.mint, Date.now());
     }
   } catch (error) {
     logger.error("❌ Erro ao processar transação daos.fun:", error);
@@ -2632,7 +2687,10 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
 }
 
 bitqueryEventBus.subscribeDiscovery((candidate) => {
-  void processBitqueryPumpFunDiscoveryCandidate(candidate);
+  const accepted = discoverySemaphore.tryRun(() => processBitqueryPumpFunDiscoveryCandidate(candidate));
+  if (!accepted) {
+    logger.debug(`⏳ [Semaphore] Discovery descartado (slots cheios): ${candidate.mint?.substring(0, 8)}...`);
+  }
 });
 
 function getBitqueryProgramAddresses(): string[] {
