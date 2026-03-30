@@ -296,6 +296,7 @@ let sentAddresses = new Map<string, number>();
 // Create a Map to track tokens that have received a FINAL AI decision — value = timestamp
 let aiProcessedAddresses = new Map<string, number>();
 let currentlyProcessing = new Set<string>();
+const bitqueryDiscoveryWarmupInFlight = new Set<string>();
 // Creator Watchlist: mint -> creatorAddress
 const creatorWatchlist = new Map<string, string>();
 
@@ -2647,10 +2648,15 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
   if (!candidate.marketAddress || !candidate.mint || !candidate.trader) return;
 
   const tokenKey = getProtocolTokenKey("pumpfun", candidate.mint);
-  if (aiProcessedAddresses.has(tokenKey) || currentlyProcessing.has(tokenKey)) {
+  if (
+    aiProcessedAddresses.has(tokenKey) ||
+    currentlyProcessing.has(tokenKey) ||
+    bitqueryDiscoveryWarmupInFlight.has(tokenKey)
+  ) {
     return;
   }
 
+  bitqueryDiscoveryWarmupInFlight.add(tokenKey);
   try {
     const poolSnapshot = bitqueryEventBus.getLatestPoolSnapshot(candidate.marketAddress);
     const balance =
@@ -2683,6 +2689,8 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
     });
   } catch (error: any) {
     logger.error(`❌ Erro ao processar candidate Bitquery PumpFun ${candidate.mint}: ${error.message}`);
+  } finally {
+    bitqueryDiscoveryWarmupInFlight.delete(tokenKey);
   }
 }
 

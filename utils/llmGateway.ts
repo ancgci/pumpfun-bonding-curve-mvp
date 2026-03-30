@@ -3,7 +3,7 @@ import { generateObject, generateText, jsonSchema, stepCountIs } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import logger from "./logger";
 
-export type LlmProvider = "google" | "legacy" | "legacy_fallback";
+export type LlmProvider = "google" | "legacy" | "legacy_fallback" | "moonshot";
 export type LlmTask = "agent" | "learner" | "postmortem" | "chatops_copilot";
 
 type ToolMap = Record<string, any>;
@@ -49,6 +49,7 @@ export interface StructuredLlmResult<TOutput> {
 function normalizeProviderName(value: string): LlmProvider | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return null;
+  if (normalized === "moonshot" || normalized === "kimi") return "moonshot";
   if (normalized === "google" || normalized === "gemini") return "google";
   if (normalized === "legacy_fallback" || normalized === "nvidia") return "legacy_fallback";
   if (normalized === "legacy" || normalized === "groq") return "legacy";
@@ -98,6 +99,27 @@ function getGoogleModel(task: LlmTask, override?: string): string {
     return process.env.POSTMORTEM_GOOGLE_LLM_MODEL;
   }
   return process.env.GOOGLE_LLM_MODEL || "gemini-2.5-flash";
+}
+
+function getMoonshotApiUrl(): string {
+  return (
+    process.env.MOONSHOT_LLM_API_URL ||
+    process.env.MOONSHOT_API_URL ||
+    process.env.MOONSHOT_BASE_URL ||
+    "https://api.moonshot.ai/v1/chat/completions"
+  ).trim().replace(/\/$/, "");
+}
+
+function getMoonshotApiKey(): string {
+  return (
+    process.env.MOONSHOT_LLM_API_KEY ||
+    process.env.MOONSHOT_API_KEY ||
+    ""
+  ).trim();
+}
+
+function getMoonshotModel(): string {
+  return (process.env.MOONSHOT_LLM_MODEL || "kimi-k2.5").trim();
 }
 
 function getLegacyApiUrl(override?: string): string {
@@ -246,6 +268,69 @@ export async function generateStructuredLlm<TOutput>(
   const hasTools = !!request.tools && Object.keys(request.tools).length > 0;
 
   for (const provider of providerOrder) {
+    if (provider === "moonshot") {
+      const apiKey = getMoonshotApiKey();
+      const model = getMoonshotModel();
+      const moonshotApiUrl = getMoonshotApiUrl();
+
+      if (!apiKey) {
+        attempts.push({ provider, model, success: false, reason: "missing_moonshot_api_key" });
+        continue;
+      }
+
+      try {
+        const requestBody: Record<string, any> = {
+          model,
+          max_tokens: request.maxOutputTokens ?? 1024,
+          temperature: request.temperature ?? 0.2,
+          stream: false,
+          messages: [
+            { role: "system", content: `${request.system}\n\nReturn exactly one JSON object and no markdown fences.` },
+            { role: "user", content: request.prompt },
+          ],
+        };
+
+        if (model === "kimi-k2.5") {
+          requestBody.thinking = { type: "disabled" };
+        }
+
+        const response = await axios.post(
+          moonshotApiUrl,
+          requestBody,
+          {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            timeout: request.legacyTimeoutMs ?? 20000,
+          }
+        );
+
+        const { parsed, rawText } = parseLegacyChatResponse(response.data);
+        const normalized = request.normalizeOutput(parsed);
+        if (!normalized) {
+          throw new Error(`moonshot_structured_output_invalid:${rawText.slice(0, 120)}`);
+        }
+
+        attempts.push({ provider, model, success: true });
+
+        return {
+          output: normalized,
+          provider,
+          model,
+          attempts,
+          toolCalls: [],
+          steps: 1,
+          rawText,
+        };
+      } catch (error: any) {
+        attempts.push({ provider, model, success: false, reason: error.message });
+        logger.warn(`[LLM Gateway] Moonshot ${request.task} failed: ${error.message}`);
+        continue;
+      }
+    }
+
     if (provider === "google") {
       const apiKey = getGoogleApiKey();
       const model = getGoogleModel(request.task, request.googleModel);
