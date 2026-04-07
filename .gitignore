@@ -52,3 +52,15 @@ backup_top_vps/
 *.tsbuildinfo
 .vps_host
 backups/
+
+# Runtime data (não commitar — gerado em execução, sobrescreveria dados da VPS)
+data/protocol-config.json
+data/trading-config.json
+data/bot-runtime.json
+data/organicity-history.jsonl
+data/organicity-shadow.jsonl
+data/organicity-shadow-stats.json
+data/agent/funnel-metrics.json
+circuit_breaker_state.json
+sent_addresses.json
+dashboard-api/db/
