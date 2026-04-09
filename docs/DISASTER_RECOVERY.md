@@ -46,6 +46,7 @@ The snapshot does **not** include:
 - logs
 - `node_modules`
 - temporary output folders
+- raw `*.db` runtime files in git history going forward
 
 ## Restore From GitHub Snapshot
 
@@ -66,3 +67,14 @@ backups/vps-runtime/20260409_123456/runtime-state.tgz
 ```
 
 It contains the complete runtime state, including `.env`. If GitHub is not enough, this is the authoritative local disaster recovery backup.
+
+## Git Safety Guard
+
+Commits now run `scripts/backup/guard-git-artifacts.sh` before `lint-staged`.
+
+This blocks:
+
+- raw SQLite/runtime files like `*.db`, `*.db-wal`, `*.db-shm`
+- oversized staged artifacts above `45 MiB`
+
+That keeps the repository focused on compact recovery snapshots such as `recovery/github-state/latest/**/*.gz`.

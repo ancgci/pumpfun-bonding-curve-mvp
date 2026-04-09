@@ -1,1 +1,2 @@
+./scripts/backup/guard-git-artifacts.sh
 npx lint-staged

@@ -35,6 +35,7 @@
     "skill:list": "npx ts-node tools/import-skill.ts --list",
     "skill:import": "npx ts-node tools/import-skill.ts",
     "skill:delete": "npx ts-node tools/import-skill.ts --delete",
+    "guard:git-artifacts": "./scripts/backup/guard-git-artifacts.sh",
     "test:fast": "npm run typecheck && npm run test:core",
     "test:fast:full": "npm run test:fast && npm run test:ai-agent",
     "test:core": "jest --config jest.config.js test/unit test/integration",

@@ -39,6 +39,7 @@ This repository now supports a two-layer backup strategy:
 
 - local full VPS backup in `backups/vps-runtime/`
 - GitHub-safe runtime snapshot in `recovery/github-state/latest/`
+- raw runtime databases are blocked at commit time; keep only compressed recovery artifacts in git
 
 See **[DISASTER_RECOVERY](docs/DISASTER_RECOVERY.md)** for the backup and restore flow.
 
