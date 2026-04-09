@@ -111,13 +111,43 @@ export const PremiumDashboardPage = () => {
         : botHealth?.status
             ? botHealth.status.replace(/_/g, " ").toUpperCase()
             : "Unknown";
+    const subAgents = agentStatus?.subAgents || botHealth?.subAgents || [];
+    const subAgentSummary = agentStatus?.subAgentSummary || botHealth?.subAgentSummary || null;
 
     const rpcLatencyMs = (botHealth as any)?.latencyMs ?? null;
-    const botLiveLabel = isBotOnline
-        ? "Bot Live"
-        : isAgentActive
-            ? "Bot Stalled"
-            : "Bot Off";
+    const botLiveLabel = !isAgentActive
+        ? "Bot Off"
+        : botHealth?.status === "CIRCUIT_BREAKER_TRIPPED"
+            ? "CB Tripped"
+            : botHealth?.status === "EMERGENCY_STOP"
+                ? "Emergency Stop"
+                : botHealth?.status === "PROCESS_DEAD"
+                    ? "Process Down"
+                    : botHealth?.status === "STREAM_DISCONNECTED"
+                        ? "Stream Down"
+                        : botHealth?.status === "STREAM_STALLED"
+                            ? "Stream Stalled"
+                            : isBotOnline
+                                ? "Bot Live"
+                                : "Bot Stalled";
+
+    const getSubAgentTone = (status: string) => {
+        switch (status) {
+            case 'healthy':
+                return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
+            case 'running':
+                return 'border-sky-500/20 bg-sky-500/10 text-sky-300';
+            case 'degraded':
+                return 'border-amber-500/20 bg-amber-500/10 text-amber-300';
+            case 'disabled':
+                return 'border-slate-500/20 bg-slate-500/10 text-slate-300';
+            case 'error':
+                return 'border-rose-500/20 bg-rose-500/10 text-rose-300';
+            case 'idle':
+            default:
+                return 'border-white/10 bg-white/5 text-muted-foreground';
+        }
+    };
 
     const handleDragStart = (tab: string, id: string) => {
         setDraggedCard({ tab, id });
@@ -249,6 +279,47 @@ export const PremiumDashboardPage = () => {
                                     <p className="text-sm font-bold text-primary">{rpcLatencyMs ? `${rpcLatencyMs} ms` : '--'}</p>
                                 </div>
                             </div>
+
+                            {subAgentSummary && (
+                                <div className="space-y-4 rounded-3xl border border-white/8 bg-white/5 p-4">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-[10px] text-muted-foreground uppercase tracking-[0.22em] mb-1">Sub-Agents</p>
+                                            <p className="text-sm font-semibold text-foreground">
+                                                {subAgentSummary.total} registrados
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2 text-[10px]">
+                                            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-emerald-300">
+                                                Healthy {subAgentSummary.healthy}
+                                            </span>
+                                            <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-sky-300">
+                                                Running {subAgentSummary.running}
+                                            </span>
+                                            <span className="rounded-full border border-slate-500/20 bg-slate-500/10 px-2.5 py-1 text-slate-300">
+                                                Disabled {subAgentSummary.disabled}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2">
+                                        {subAgents.map((agent: any) => (
+                                            <div
+                                                key={agent.name}
+                                                className={`rounded-2xl border px-3 py-2 text-xs ${getSubAgentTone(agent.status || 'idle')}`}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-semibold text-foreground/95">{agent.label || agent.name}</span>
+                                                    <span className="opacity-80">{String(agent.status || 'idle').toUpperCase()}</span>
+                                                    {typeof agent.queueSize === 'number' && agent.queueSize > 0 ? (
+                                                        <span className="opacity-70">Q {agent.queueSize}</span>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </PremiumCard>
                 );

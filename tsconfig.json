@@ -24,9 +24,13 @@
 		"exemplo",
 		"node_modules",
 		"dist",
+		"backups",
 		"test",
 		"tools",
 		"website",
-		"dashboard"
+		"dashboard",
+		"config.ts",
+		"*.bak-*",
+		"**/*.bak-*"
 	]
 }

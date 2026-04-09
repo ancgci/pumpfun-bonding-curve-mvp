@@ -16,7 +16,7 @@ import * as fs from "fs";
 import * as path from "path";
 import axios from "axios";
 
-const SKILLS_DIR = path.join(__dirname, "../.agents/skills");
+const SKILLS_DIR = path.join(__dirname, "../.agents/skills/custom");
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -54,12 +54,12 @@ function listSkills(): void {
     const files = fs.readdirSync(SKILLS_DIR).filter(f => f.endsWith(".md"));
 
     if (files.length === 0) {
-        console.log("📭 No skills installed.");
+        console.log("📭 No custom skills installed.");
         console.log(`   Directory: ${SKILLS_DIR}`);
         return;
     }
 
-    console.log(`\n🎯 Installed Skills (${files.length}):\n`);
+    console.log(`\n🎯 Installed Custom Skills (${files.length}):\n`);
     console.log(`  ${"NAME".padEnd(22)}${"VERSION".padEnd(12)}${"AUTHOR".padEnd(12)}DESCRIPTION`);
     console.log("  " + "-".repeat(70));
 
@@ -164,7 +164,7 @@ Usage:
   npx ts-node tools/import-skill.ts --delete <SkillName>
 
 Examples:
-  # List all installed skills
+  # List imported custom skills
   npx ts-node tools/import-skill.ts --list
 
   # Import from a direct URL

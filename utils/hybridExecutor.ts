@@ -842,6 +842,7 @@ export async function executeHybridTrade(
     }
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
+    const normalizedErrorMsg = errorMsg.toLowerCase();
     logger.error(`❌ Erro ao executar trade híbrido para token ${tokenData.mint}:`, error);
 
     // Classificar o tipo de erro
@@ -850,10 +851,23 @@ export async function executeHybridTrade(
       'socket hang up', 'getaddrinfo', 'Network request failed', 'timeout', 'rate limit',
       '429', '503', '502', 'Server responded with', 'could not find account',
       'AccountNotFound', 'Invalid param', 'block height exceeded', 'Blockhash not found'
-    ].some(pattern => errorMsg.toLowerCase().includes(pattern.toLowerCase()));
+    ].some(pattern => normalizedErrorMsg.includes(pattern.toLowerCase()));
 
-    if (isRpcError) {
-      logger.warn(`⚠️ Erro de RPC/rede: ${errorMsg.substring(0, 100)}`);
+    const isSimulationOrPreflightError = [
+      'simulation failed',
+      'failed to simulate',
+      'transaction simulation failed',
+      'preflight',
+      'instructionerror',
+      'custom program error',
+      'slippage tolerance exceeded',
+      'insufficient funds',
+      'already been processed',
+    ].some(pattern => normalizedErrorMsg.includes(pattern));
+
+    if (isRpcError || isSimulationOrPreflightError) {
+      const errorClass = isSimulationOrPreflightError ? 'simulação/preflight' : 'RPC/rede';
+      logger.warn(`⚠️ Erro de ${errorClass}: ${errorMsg.substring(0, 160)}`);
     } else {
       circuitBreaker.recordFailure(error);
     }

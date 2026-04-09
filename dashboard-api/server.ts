@@ -53,6 +53,7 @@ import {
 import { evaluateBotRuntimeHealth, readBotRuntimeHealth } from "../utils/botRuntimeHealth";
 import { rpcPool } from "../utils/rpcPool";
 import { getFunnelMetrics } from "../utils/decisionFunnelMetrics";
+import { readAgentHealthSnapshot } from "../utils/agentHealth";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -984,6 +985,7 @@ app.get("/api/agent/stats", (req, res) => {
         const learningMetrics = loadLearningMetrics();
         const mainnetMetrics = loadMainnetLearningMetrics();
         const agentStatus = loadAgentStatus();
+        const subAgentHealth = loadSubAgentHealth();
 
         res.json({
             enabled: agentConfig.enabled || false,
@@ -1005,6 +1007,8 @@ app.get("/api/agent/stats", (req, res) => {
             rateLimited: agentStatus.rateLimited || false,
             rateLimitAt: agentStatus.at || null,
             rateLimitReason: agentStatus.reason || null,
+            subAgents: subAgentHealth.subAgents,
+            subAgentSummary: subAgentHealth.subAgentSummary,
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -1574,25 +1578,49 @@ function loadPositions() {
 }
 
 function loadCBState() {
+    const defaultState = {
+        isTripped: false,
+        tripReason: null as string | null,
+        dailyLossSol: 0,
+        consecutiveFailures: 0,
+        lastResetTime: Date.now(),
+    };
+
+    const normalizeState = (rawState: unknown, fallbackTimestamp?: number) => {
+        const candidate = rawState && typeof rawState === "object"
+            ? rawState as Partial<typeof defaultState>
+            : {};
+
+        const dailyLossSol = Number(candidate.dailyLossSol);
+        const consecutiveFailures = Number(candidate.consecutiveFailures);
+        const lastResetTime = Number(candidate.lastResetTime);
+        const fallbackResetTime = Number(fallbackTimestamp);
+
+        return {
+            isTripped: candidate.isTripped === true,
+            tripReason: typeof candidate.tripReason === "string" && candidate.tripReason.trim().length > 0
+                ? candidate.tripReason
+                : null,
+            dailyLossSol: Number.isFinite(dailyLossSol) ? dailyLossSol : defaultState.dailyLossSol,
+            consecutiveFailures: Number.isFinite(consecutiveFailures) ? consecutiveFailures : defaultState.consecutiveFailures,
+            lastResetTime: Number.isFinite(lastResetTime) && lastResetTime > 0
+                ? lastResetTime
+                : (Number.isFinite(fallbackResetTime) && fallbackResetTime > 0
+                    ? fallbackResetTime
+                    : defaultState.lastResetTime),
+        };
+    };
+
     try {
         if (!fs.existsSync(CB_STATE_FILE)) {
-            return {
-                isTripped: false,
-                dailyLossSol: 0,
-                consecutiveFailures: 0,
-                lastResetTime: Date.now(),
-            };
+            return defaultState;
         }
+        const fileStat = fs.statSync(CB_STATE_FILE);
         const data = fs.readFileSync(CB_STATE_FILE, "utf-8");
-        return JSON.parse(data);
+        return normalizeState(JSON.parse(data), fileStat.mtimeMs);
     } catch (error) {
         console.error("Erro ao carregar CB state:", error);
-        return {
-            isTripped: false,
-            dailyLossSol: 0,
-            consecutiveFailures: 0,
-            lastResetTime: Date.now(),
-        };
+        return defaultState;
     }
 }
 
@@ -1726,6 +1754,49 @@ function loadAgentStatus() {
         console.error("Erro ao carregar status do agente:", error);
         return { rateLimited: false };
     }
+}
+
+function humanizeSubAgentName(name: string) {
+    return name
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function loadSubAgentHealth() {
+    const snapshot = readAgentHealthSnapshot();
+    const subAgents = Object.entries(snapshot.agents)
+        .map(([name, entry]) => ({
+            name,
+            label: humanizeSubAgentName(name),
+            enabled: entry.enabled === true,
+            status: entry.status,
+            lastRunAt: entry.lastRunAt || null,
+            lastSuccessAt: entry.lastSuccessAt || null,
+            lastHeartbeatAt: entry.lastHeartbeatAt || null,
+            lastError: entry.lastError || null,
+            lastErrorAt: entry.lastErrorAt || null,
+            queueSize: typeof entry.queueSize === "number" ? entry.queueSize : null,
+            notes: Array.isArray(entry.notes) ? entry.notes : [],
+            details: entry.details || {},
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+
+    return {
+        subAgents,
+        subAgentSummary: {
+            total: subAgents.length,
+            enabled: subAgents.filter((agent) => agent.enabled).length,
+            healthy: subAgents.filter((agent) => agent.status === "healthy").length,
+            degraded: subAgents.filter((agent) => agent.status === "degraded").length,
+            disabled: subAgents.filter((agent) => agent.status === "disabled").length,
+            error: subAgents.filter((agent) => agent.status === "error").length,
+            running: subAgents.filter((agent) => agent.status === "running").length,
+            idle: subAgents.filter((agent) => agent.status === "idle").length,
+        },
+    };
 }
 
 function buildBotRuntimeSummary(agentEnabled: boolean) {
@@ -2069,6 +2140,7 @@ app.get("/api/bot-health", async (req, res) => {
         const cbState = loadCBState();
         const agentConfig = loadAgentConfig();
         const agentStatus = loadAgentStatus();
+        const subAgentHealth = loadSubAgentHealth();
         const emergencyStop = fs.existsSync(EMERGENCY_STOP_FILE)
             ? JSON.parse(fs.readFileSync(EMERGENCY_STOP_FILE, "utf-8"))
             : { active: false };
@@ -2123,6 +2195,8 @@ app.get("/api/bot-health", async (req, res) => {
             grpcProvider: runtimeSummary.runtime?.stream?.provider || null,
             grpcSubstreams: runtimeSummary.runtime?.stream?.substreams || {},
             grpcTransfers: runtimeSummary.runtime?.stream?.transfers || null,
+            subAgents: subAgentHealth.subAgents,
+            subAgentSummary: subAgentHealth.subAgentSummary,
             runtime: runtimeSummary.runtime,
             uptimeSince: process.uptime(),
             timestamp: new Date().toISOString(),

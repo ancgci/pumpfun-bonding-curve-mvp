@@ -47,11 +47,38 @@ class CircuitBreaker {
         };
     }
 
+    private normalizeState(rawState: unknown, fallbackTimestamp?: number): CircuitBreakerState {
+        const initialState = this.getInitialState();
+        const candidate = rawState && typeof rawState === "object"
+            ? rawState as Partial<CircuitBreakerState>
+            : {};
+
+        const dailyLossSol = Number(candidate.dailyLossSol);
+        const consecutiveFailures = Number(candidate.consecutiveFailures);
+        const lastResetTime = Number(candidate.lastResetTime);
+        const fallbackResetTime = Number(fallbackTimestamp);
+
+        return {
+            dailyLossSol: Number.isFinite(dailyLossSol) ? dailyLossSol : initialState.dailyLossSol,
+            consecutiveFailures: Number.isFinite(consecutiveFailures) ? consecutiveFailures : initialState.consecutiveFailures,
+            lastResetTime: Number.isFinite(lastResetTime) && lastResetTime > 0
+                ? lastResetTime
+                : (Number.isFinite(fallbackResetTime) && fallbackResetTime > 0
+                    ? fallbackResetTime
+                    : initialState.lastResetTime),
+            isTripped: candidate.isTripped === true,
+            tripReason: typeof candidate.tripReason === "string" && candidate.tripReason.trim().length > 0
+                ? candidate.tripReason
+                : undefined,
+        };
+    }
+
     private loadState(): CircuitBreakerState {
         try {
             if (fs.existsSync(STATE_FILE)) {
+                const fileStat = fs.statSync(STATE_FILE);
                 const data = fs.readFileSync(STATE_FILE, "utf-8");
-                return JSON.parse(data);
+                return this.normalizeState(JSON.parse(data), fileStat.mtimeMs);
             }
         } catch (error) {
             logger.error("⚠️  Erro ao carregar estado do Circuit Breaker, usando padrão:", error);

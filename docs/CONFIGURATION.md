@@ -1017,6 +1017,17 @@ O bot utiliza uma estrutura de múltiplos agentes especializados localizados em 
 - `.agents/agents/SentimentAgent/`: Análise de hype e social.
 - `.agents/orchestrator/`: Cérebro central que coordena a equipe.
 
+### Estado Persistido do Runtime
+- `data/agent/config.json`: configuração efetiva do agente.
+- `data/agent/status.json`: status salvo do agente.
+- `data/agent/health.json`: snapshot consolidado de saúde dos subagentes.
+- `data/agent/patterns.json`: regras aprendidas em uso pelo runtime.
+- `data/agent/learner-state.json`: checkpoint do learner.
+
+### Diretórios Auxiliares e Legados
+- `.agents/shared-memory/`: legado/orfão. Mantido por histórico, mas não utilizado pelo runtime atual.
+- `.agent/`: pacote externo de tooling local de desenvolvimento. Não é o diretório de runtime do bot.
+
 ### Comandos de Ativação (via Dashboard/Chat)
 - `/agent:scalper`: Ativa apenas o modo scalper 5s.
 - `/agent:risk`: Foca exclusivamente em proteção.

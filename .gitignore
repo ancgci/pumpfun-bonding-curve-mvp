@@ -12,6 +12,7 @@ data/organicity-history.json
 data/telegram-alerts.jsonl
 data/cached-*.json
 .env
+.env.bak-*
 bot-wallet.json
 
 # Docusaurus
@@ -42,6 +43,8 @@ Thumbs.db
 # Test reports and results
 playwright-report/
 test-results/
+.playwright-cli/
+output/
 
 # Backups and local data
 backup_top_vps/
@@ -61,6 +64,7 @@ data/organicity-history.jsonl
 data/organicity-shadow.jsonl
 data/organicity-shadow-stats.json
 data/agent/funnel-metrics.json
+data/agent/health.json
 circuit_breaker_state.json
 sent_addresses.json
 dashboard-api/db/

@@ -1,6 +1,14 @@
 import { CONFIG, getRuntimeConfig } from "./config";
 import logger from "./logger";
 import { getTASnapshot } from "./volatilityMonitor";
+import {
+    heartbeatAgent,
+    markAgentError,
+    markAgentIdle,
+    markAgentSuccess,
+    registerAgentHealth,
+    upsertAgentHealth,
+} from "./agentHealth";
 
 export type WaitlistKind = "LEGACY_DIP" | "MICRO_RECHECK";
 
@@ -71,6 +79,15 @@ export class DipMonitorService {
         const scanIntervalMs = Math.max(500, Number(getRuntimeConfig().DIP_MONITOR_SCAN_INTERVAL_MS || CONFIG.DIP_MONITOR_SCAN_INTERVAL_MS || 2000));
         this.interval = setInterval(() => this.scanWaitlist(), scanIntervalMs);
         logger.info(`🔍 [DipMonitor] Service initialized. Scanning every ${scanIntervalMs}ms for Dip Snipes.`);
+        markAgentIdle("dipMonitor", {
+            enabled: true,
+            queueSize: this.waitlist.size,
+            details: {
+                scanIntervalMs,
+                legacyQueue: 0,
+                microQueue: 0,
+            },
+        });
     }
 
     public shutdown() {
@@ -82,6 +99,14 @@ export class DipMonitorService {
 
     public clear() {
         this.waitlist.clear();
+        markAgentIdle("dipMonitor", {
+            enabled: true,
+            queueSize: 0,
+            details: {
+                legacyQueue: 0,
+                microQueue: 0,
+            },
+        });
     }
 
     public getSnapshot(): WaitlistSnapshot {
@@ -117,6 +142,15 @@ export class DipMonitorService {
 
         if (kind === "MICRO_RECHECK" && options.eligibleForMicroWaitlist !== true) {
             logger.warn(`🚫 [DipMonitor] Rejected ${symbol}: MICRO_RECHECK requires explicit near-execution eligibility.`);
+            heartbeatAgent("dipMonitor", {
+                enabled: true,
+                queueSize: this.waitlist.size,
+                details: {
+                    ...this.buildHealthDetails(),
+                    lastRejectedSymbol: symbol,
+                    lastRejectedReason: "MICRO_WAITLIST_NOT_ELIGIBLE",
+                },
+            }, 5_000);
             return {
                 accepted: false,
                 action: "rejected",
@@ -143,6 +177,18 @@ export class DipMonitorService {
                 existing.kind = kind;
             }
             logger.info(`🎯 [DipMonitor] Updated ${symbol} in waitlist (${existing.kind}, priority=${existing.priorityScore.toFixed(1)}).`);
+            upsertAgentHealth("dipMonitor", {
+                enabled: true,
+                status: "healthy",
+                lastSuccessAt: new Date().toISOString(),
+                lastHeartbeatAt: new Date().toISOString(),
+                queueSize: this.waitlist.size,
+                details: {
+                    ...this.buildHealthDetails(),
+                    lastQueuedSymbol: symbol,
+                    lastQueueAction: "updated",
+                },
+            });
             return {
                 accepted: true,
                 action: "updated",
@@ -170,6 +216,15 @@ export class DipMonitorService {
                         `🚫 [DipMonitor] Rejected ${symbol}: MICRO_RECHECK backlog full ` +
                         `(${microEntries.length}/${microMaxTokens}, incoming=${priorityScore.toFixed(1)}).`
                     );
+                    heartbeatAgent("dipMonitor", {
+                        enabled: true,
+                        queueSize: this.waitlist.size,
+                        details: {
+                            ...this.buildHealthDetails(),
+                            lastRejectedSymbol: symbol,
+                            lastRejectedReason: "MICRO_WAITLIST_BACKLOG_FULL",
+                        },
+                    }, 5_000);
                     return {
                         accepted: false,
                         action: "rejected",
@@ -199,6 +254,18 @@ export class DipMonitorService {
             `👀 [DipMonitor] Added ${symbol} (${mint}) to ${kind} waitlist ` +
             `(Immediate=${immediateBuy}, priority=${priorityScore.toFixed(1)}, ttl=${Math.round((expireAt - now) / 1000)}s).`
         );
+        upsertAgentHealth("dipMonitor", {
+            enabled: true,
+            status: "healthy",
+            lastSuccessAt: new Date().toISOString(),
+            lastHeartbeatAt: new Date().toISOString(),
+            queueSize: this.waitlist.size,
+            details: {
+                ...this.buildHealthDetails(),
+                lastQueuedSymbol: symbol,
+                lastQueueAction: existing ? "updated" : "added",
+            },
+        });
         return {
             accepted: true,
             action: "added",
@@ -218,9 +285,23 @@ export class DipMonitorService {
         return a.addedAt - b.addedAt;
     }
 
+    private buildHealthDetails() {
+        const snapshot = this.getSnapshot();
+        return {
+            legacyQueue: snapshot.legacy,
+            microQueue: snapshot.micro,
+            scanning: this.isScanning,
+        };
+    }
+
     private async scanWaitlist() {
         if (this.isScanning || this.waitlist.size === 0) return;
         this.isScanning = true;
+        heartbeatAgent("dipMonitor", {
+            enabled: true,
+            queueSize: this.waitlist.size,
+            details: this.buildHealthDetails(),
+        });
 
         try {
             const now = Date.now();
@@ -274,9 +355,31 @@ export class DipMonitorService {
                     this.waitlist.delete(token.mint);
 
                     if (this.onDipCallback) {
-                        await this.onDipCallback(token.mint, token).catch((e) =>
-                            logger.error(`❌ [DipMonitor] Error executing Snipe for ${token.symbol}: ${e.message}`)
-                        );
+                        let callbackFailed = false;
+                        await this.onDipCallback(token.mint, token).catch((e) => {
+                                callbackFailed = true;
+                                logger.error(`❌ [DipMonitor] Error executing Snipe for ${token.symbol}: ${e.message}`);
+                                markAgentError("dipMonitor", e, {
+                                    enabled: true,
+                                    queueSize: this.waitlist.size,
+                                    details: {
+                                        ...this.buildHealthDetails(),
+                                        lastTriggeredSymbol: token.symbol,
+                                        lastTriggerReason: reason,
+                                    },
+                                });
+                        });
+                        if (!callbackFailed) {
+                            markAgentSuccess("dipMonitor", {
+                                enabled: true,
+                                queueSize: this.waitlist.size,
+                                details: {
+                                    ...this.buildHealthDetails(),
+                                    lastTriggeredSymbol: token.symbol,
+                                    lastTriggerReason: reason,
+                                },
+                            });
+                        }
                     }
                 } else if (rsi && rsi >= 70 && token.kind === "LEGACY_DIP") {
                     logger.debug(`⏳ [DipMonitor] ${token.symbol} is Overbought (RSI=${rsi.toFixed(1)}). Waiting for the dump...`);
@@ -284,8 +387,24 @@ export class DipMonitorService {
             }
         } finally {
             this.isScanning = false;
+            heartbeatAgent("dipMonitor", {
+                enabled: true,
+                queueSize: this.waitlist.size,
+                details: this.buildHealthDetails(),
+            });
         }
     }
 }
 
 export const dipMonitor = new DipMonitorService();
+
+registerAgentHealth("dipMonitor", {
+    enabled: true,
+    status: "idle",
+    queueSize: 0,
+    details: {
+        scanIntervalMs: Math.max(500, Number(getRuntimeConfig().DIP_MONITOR_SCAN_INTERVAL_MS || CONFIG.DIP_MONITOR_SCAN_INTERVAL_MS || 2000)),
+        legacyQueue: 0,
+        microQueue: 0,
+    },
+});

@@ -3,6 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { jsonSchema, tool } from "ai";
 import { generateStructuredLlm } from "./llmGateway";
+import {
+    markAgentError,
+    markAgentIdle,
+    markAgentRunning,
+    markAgentSuccess,
+    registerAgentHealth,
+    upsertAgentHealth,
+} from "./agentHealth";
 
 /**
  * LEARNER AGENT – Self-Reflection Loop
@@ -58,6 +66,15 @@ interface LearnerState {
 interface LearnerLlmOutput {
     insights: string;
     learnedRules: Array<{ rule: string; weight?: number | null }>;
+}
+
+function hasLearnerLlmConfigured(): boolean {
+    const apiKey = getLlmApiKey();
+    const hasGoogleKey =
+        !!process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+        !!process.env.GOOGLE_API_KEY ||
+        !!process.env.GEMINI_API_KEY;
+    return !!apiKey || hasGoogleKey;
 }
 
 /**
@@ -122,11 +139,7 @@ function loadTrades(): any[] {
  */
 async function analyzeLosses(losses: any[]): Promise<string[]> {
     const apiKey = getLlmApiKey();
-    const hasGoogleKey =
-        !!process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
-        !!process.env.GOOGLE_API_KEY ||
-        !!process.env.GEMINI_API_KEY;
-    if (!apiKey && !hasGoogleKey) {
+    if (!hasLearnerLlmConfigured()) {
         logger.warn("[LearnerAgent] No LLM API key set, skipping analysis");
         return [];
     }
@@ -248,95 +261,170 @@ async function analyzeLosses(losses: any[]): Promise<string[]> {
  */
 export async function runLearningCycle(): Promise<void> {
     logger.info("🧠 [LearnerAgent] Starting self-reflection cycle...");
-
-    const state = loadLearnerState();
-    const allTrades = loadTrades();
-    const lastRunAtMs = state.lastRunAt ? Date.parse(state.lastRunAt) : NaN;
-
-    // The simulation JSON is trimmed to the most recent trades.
-    // Using only a raw array index can permanently stall learning once the file rotates.
-    const closedTrades = (Number.isFinite(lastRunAtMs) && lastRunAtMs > 0
-        ? allTrades.filter((t: any) => {
-            if (!t?.status || t.status === "OPEN") return false;
-            const closedAt = Number(t.exitTime || t.entryTime || 0);
-            return closedAt > lastRunAtMs;
-        })
-        : allTrades.slice(state.lastAnalyzedIndex).filter(
-            (t: any) => t.status && t.status !== "OPEN"
-        ));
-
-    if (closedTrades.length === 0) {
-        logger.info("🧠 [LearnerAgent] No new closed trades to analyze. Skipping.");
-        saveLearnerState({
-            lastAnalyzedIndex: allTrades.length,
-            lastRunAt: new Date().toISOString(),
-        });
-        return;
-    }
-
-    // Filter for losses
-    const losses = closedTrades.filter(
-        (t: any) => t.pnl < 0 || t.status === "CLOSED_SL"
-    );
-
-    logger.info(
-        `🧠 [LearnerAgent] Found ${closedTrades.length} new closed trades, ${losses.length} losses.`
-    );
-
-    if (losses.length === 0) {
-        logger.info("🧠 [LearnerAgent] No losses to analyze. Agent is performing well! 🎉");
-        saveLearnerState({
-            lastAnalyzedIndex: allTrades.length,
-            lastRunAt: new Date().toISOString(),
-        });
-        return;
-    }
-
-    // Cap to last 10 losses to avoid huge prompts
-    const recentLosses = losses.slice(-10);
-
-    logger.info(`🧠 [LearnerAgent] Analyzing ${recentLosses.length} losing trades with LLM...`);
-    const newRules = await analyzeLosses(recentLosses);
-
-    if (newRules.length === 0) {
-        logger.info("🧠 [LearnerAgent] LLM returned no new rules.");
-    } else {
-        const existingPatterns = loadPatterns();
-        const existingRules = new Set(existingPatterns.map((p) => p.rule.toLowerCase()));
-
-        // Add only truly new rules
-        let addedCount = 0;
-        for (const rule of newRules) {
-            if (!existingRules.has(rule.toLowerCase())) {
-                existingPatterns.push({
-                    rule,
-                    source: recentLosses[0]?.tokenMint || "batch",
-                    createdAt: new Date().toISOString(),
-                });
-                existingRules.add(rule.toLowerCase());
-                addedCount++;
-            }
-        }
-
-        // Trim to MAX_RULES (keep newest)
-        const trimmed = existingPatterns.slice(-MAX_RULES);
-        savePatterns(trimmed);
-
-        logger.info(
-            `🧠 [LearnerAgent] ✅ Added ${addedCount} new rules. Total rules: ${trimmed.length}`
-        );
-        for (const r of newRules) {
-            logger.info(`   📌 New Rule: "${r}"`);
-        }
-    }
-
-    // Update state
-    saveLearnerState({
-        lastAnalyzedIndex: allTrades.length,
-        lastRunAt: new Date().toISOString(),
+    markAgentRunning("learner", {
+        enabled: true,
+        details: {
+            model: LLM_MODEL,
+            llmConfigured: hasLearnerLlmConfigured(),
+        },
     });
 
-    logger.info("🧠 [LearnerAgent] Self-reflection cycle complete.");
+    try {
+        const state = loadLearnerState();
+        const allTrades = loadTrades();
+        const lastRunAtMs = state.lastRunAt ? Date.parse(state.lastRunAt) : NaN;
+
+        // The simulation JSON is trimmed to the most recent trades.
+        // Using only a raw array index can permanently stall learning once the file rotates.
+        const closedTrades = (Number.isFinite(lastRunAtMs) && lastRunAtMs > 0
+            ? allTrades.filter((t: any) => {
+                if (!t?.status || t.status === "OPEN") return false;
+                const closedAt = Number(t.exitTime || t.entryTime || 0);
+                return closedAt > lastRunAtMs;
+            })
+            : allTrades.slice(state.lastAnalyzedIndex).filter(
+                (t: any) => t.status && t.status !== "OPEN"
+            ));
+
+        if (closedTrades.length === 0) {
+            logger.info("🧠 [LearnerAgent] No new closed trades to analyze. Skipping.");
+            saveLearnerState({
+                lastAnalyzedIndex: allTrades.length,
+                lastRunAt: new Date().toISOString(),
+            });
+            markAgentIdle("learner", {
+                enabled: true,
+                details: {
+                    closedTrades: 0,
+                    losses: 0,
+                    model: LLM_MODEL,
+                },
+            });
+            return;
+        }
+
+        // Filter for losses
+        const losses = closedTrades.filter(
+            (t: any) => t.pnl < 0 || t.status === "CLOSED_SL"
+        );
+
+        logger.info(
+            `🧠 [LearnerAgent] Found ${closedTrades.length} new closed trades, ${losses.length} losses.`
+        );
+
+        if (losses.length === 0) {
+            logger.info("🧠 [LearnerAgent] No losses to analyze. Agent is performing well! 🎉");
+            saveLearnerState({
+                lastAnalyzedIndex: allTrades.length,
+                lastRunAt: new Date().toISOString(),
+            });
+            markAgentIdle("learner", {
+                enabled: true,
+                details: {
+                    closedTrades: closedTrades.length,
+                    losses: 0,
+                    model: LLM_MODEL,
+                },
+            });
+            return;
+        }
+
+        // Cap to last 10 losses to avoid huge prompts
+        const recentLosses = losses.slice(-10);
+        const llmConfigured = hasLearnerLlmConfigured();
+
+        logger.info(`🧠 [LearnerAgent] Analyzing ${recentLosses.length} losing trades with LLM...`);
+        const newRules = await analyzeLosses(recentLosses);
+
+        if (newRules.length === 0) {
+            logger.info("🧠 [LearnerAgent] LLM returned no new rules.");
+            if (!llmConfigured) {
+                upsertAgentHealth("learner", {
+                    enabled: true,
+                    status: "degraded",
+                    lastHeartbeatAt: new Date().toISOString(),
+                    notes: ["Losses available, but no compatible LLM key is configured for the learner."],
+                    details: {
+                        closedTrades: closedTrades.length,
+                        losses: losses.length,
+                        recentLosses: recentLosses.length,
+                        llmConfigured: false,
+                        model: LLM_MODEL,
+                    },
+                });
+            } else {
+                markAgentSuccess("learner", {
+                    status: "idle",
+                    enabled: true,
+                    details: {
+                        closedTrades: closedTrades.length,
+                        losses: losses.length,
+                        learnedRulesAdded: 0,
+                        totalRules: loadPatterns().length,
+                        llmConfigured: true,
+                        model: LLM_MODEL,
+                    },
+                });
+            }
+        } else {
+            const existingPatterns = loadPatterns();
+            const existingRules = new Set(existingPatterns.map((p) => p.rule.toLowerCase()));
+
+            // Add only truly new rules
+            let addedCount = 0;
+            for (const rule of newRules) {
+                if (!existingRules.has(rule.toLowerCase())) {
+                    existingPatterns.push({
+                        rule,
+                        source: recentLosses[0]?.tokenMint || "batch",
+                        createdAt: new Date().toISOString(),
+                    });
+                    existingRules.add(rule.toLowerCase());
+                    addedCount++;
+                }
+            }
+
+            // Trim to MAX_RULES (keep newest)
+            const trimmed = existingPatterns.slice(-MAX_RULES);
+            savePatterns(trimmed);
+
+            logger.info(
+                `🧠 [LearnerAgent] ✅ Added ${addedCount} new rules. Total rules: ${trimmed.length}`
+            );
+            for (const r of newRules) {
+                logger.info(`   📌 New Rule: "${r}"`);
+            }
+
+            markAgentSuccess("learner", {
+                enabled: true,
+                details: {
+                    closedTrades: closedTrades.length,
+                    losses: losses.length,
+                    recentLosses: recentLosses.length,
+                    learnedRulesAdded: addedCount,
+                    totalRules: trimmed.length,
+                    llmConfigured,
+                    model: LLM_MODEL,
+                },
+            });
+        }
+
+        // Update state
+        saveLearnerState({
+            lastAnalyzedIndex: allTrades.length,
+            lastRunAt: new Date().toISOString(),
+        });
+
+        logger.info("🧠 [LearnerAgent] Self-reflection cycle complete.");
+    } catch (error: any) {
+        markAgentError("learner", error, {
+            enabled: true,
+            details: {
+                model: LLM_MODEL,
+            },
+        });
+        throw error;
+    }
 }
 
 export const LearnerAgent = {
@@ -345,3 +433,12 @@ export const LearnerAgent = {
     isScheduled: true, // For test verification
     lastRun: new Date().toISOString() // Initial state
 };
+
+registerAgentHealth("learner", {
+    enabled: true,
+    status: "idle",
+    details: {
+        model: LLM_MODEL,
+        llmConfigured: hasLearnerLlmConfigured(),
+    },
+});

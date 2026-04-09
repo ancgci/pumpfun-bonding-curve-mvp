@@ -52,6 +52,15 @@ import {
 import { recordFunnelEvent } from "./decisionFunnelMetrics";
 import { assessAdaptiveEntryProfile, AdaptiveEntryProfile } from "./adaptiveEntryGovernance";
 import { getOrderPressureSnapshot, getTransferParticipationSnapshot } from "./bitqueryRealtimeState";
+import {
+  heartbeatAgent,
+  markAgentDisabled,
+  markAgentError,
+  markAgentRunning,
+  markAgentSuccess,
+  registerAgentHealth,
+  upsertAgentHealth,
+} from "./agentHealth";
 
 const AGENT_STATUS_FILE = path.join(__dirname, "../data/agent/status.json");
 const LEARNED_PATTERNS_FILE = path.join(__dirname, "../data/agent/patterns.json");
@@ -427,6 +436,14 @@ async function callLlm(tokenAnalysis: TokenAnalysis): Promise<AgentDecision> {
 function persistAgentStatus(status: { rateLimited: boolean; reason?: string; at?: number }) {
   try {
     fs.writeFileSync(AGENT_STATUS_FILE, JSON.stringify(status, null, 2));
+    upsertAgentHealth("orchestrator", {
+      enabled: getRuntimeConfig().AGENT_ENABLED === true,
+      details: {
+        rateLimited: status.rateLimited,
+        rateLimitReason: status.reason || null,
+        rateLimitAt: status.at || null,
+      },
+    });
   } catch (err) {
     logger.debug(`⚠️  Unable to persist agent status: ${(err as any).message}`);
   }
@@ -638,12 +655,27 @@ export async function getAgentDecision(
 
   if ((isDev && !isTest) || !agentEnabled) {
     logger.info(`⏭️  [Agent] Skipping: dev=${isDev}, test=${isTest}, enabled=${agentEnabled}`);
+    markAgentDisabled("orchestrator", !agentEnabled ? "AGENT_ENABLED=false" : "Development mode bypassed runtime agent execution", {
+      details: {
+        mode: agentMode,
+        devBypass: isDev && !isTest,
+      },
+    });
     return {
       action: "SKIP",
       confidence: 0,
       reasoning: "Agent disabled",
     };
   }
+
+  markAgentRunning("orchestrator", {
+    enabled: true,
+    details: {
+      mode: agentMode,
+      symbol: tokenAnalysis.symbol,
+      mint: tokenAnalysis.mint,
+    },
+  });
 
   // ══════════════════════════════════════════════════════════
   // TA V2 — Coleta snapshot para enriquecer o contexto LLM  
@@ -855,6 +887,17 @@ export async function getAgentDecision(
     pruneDecisionCache();
     const cached = decisionCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < DECISION_CACHE_TTL_MS) {
+      heartbeatAgent("orchestrator", {
+        enabled: true,
+        details: {
+          mode: agentMode,
+          cacheHit: true,
+          lastAction: cached.decision.action,
+          lastConfidence: cached.decision.confidence,
+          symbol: tokenAnalysis.symbol,
+          mint: tokenAnalysis.mint,
+        },
+      }, 10_000);
       return cached.decision;
     }
 
@@ -912,6 +955,17 @@ export async function getAgentDecision(
     }, 2);
 
     persistAgentStatus({ rateLimited: false, at: Date.now() });
+    markAgentSuccess("orchestrator", {
+      enabled: true,
+      details: {
+        mode: agentMode,
+        cacheHit: false,
+        lastAction: decision.action,
+        lastConfidence: decision.confidence,
+        symbol: tokenAnalysis.symbol,
+        mint: tokenAnalysis.mint,
+      },
+    });
     recordFunnelEvent({
       stage: "llm",
       outcome: decision.action === "BUY" ? "approved" : "skipped",
@@ -926,9 +980,19 @@ export async function getAgentDecision(
     return decision;
   } catch (error: any) {
     logger.error(`❌ [Agent] Error getting decision: ${error.message}`);
+    const isRateLimited = (error.message || "").toLowerCase().includes("rate limit");
     if ((error.message || "").toLowerCase().includes("rate limit")) {
       persistAgentStatus({ rateLimited: true, reason: error.message, at: Date.now() });
     }
+    markAgentError("orchestrator", error, {
+      enabled: true,
+      details: {
+        mode: agentMode,
+        rateLimited: isRateLimited,
+        symbol: tokenAnalysis.symbol,
+        mint: tokenAnalysis.mint,
+      },
+    });
     recordFunnelEvent({
       stage: "llm",
       outcome: "error",
@@ -1892,3 +1956,13 @@ export const agentOrchestrator = {
 };
 
 logger.info(`✅ Agent Orchestrator initialized`);
+
+const initialRuntimeConfig = getRuntimeConfig();
+registerAgentHealth("orchestrator", {
+  enabled: initialRuntimeConfig.AGENT_ENABLED === true,
+  status: initialRuntimeConfig.AGENT_ENABLED === true ? "idle" : "disabled",
+  details: {
+    mode: initialRuntimeConfig.AGENT_MODE || "SIMULATION",
+    llmModel: LLM_MODEL,
+  },
+});

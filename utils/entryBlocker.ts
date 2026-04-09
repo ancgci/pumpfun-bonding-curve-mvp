@@ -36,6 +36,11 @@ export interface GateAssessment {
     summary: string;
 }
 
+export interface EntryBlockerContext {
+    protocol?: string | null;
+    bondingCurvePercent?: number | null;
+}
+
 // Estado de runtime para cooldowns e stops consecutivos
 interface EntryBlockerState {
     lastLossTimestamp: number | null;
@@ -106,10 +111,31 @@ function detectLegsWithoutPullback(mint: string, config: TechnicalAnalysisConfig
 // ============================================================
 // VERIFICAR BLOQUEIOS
 // ============================================================
+function isCompactPumpfunLaunch(context?: EntryBlockerContext): boolean {
+    if (!context) return false;
+    return context.protocol === "pumpfun" && Number(context.bondingCurvePercent || 0) >= 93;
+}
+
+function applyCompactPumpfunSoftening(
+    blocks: BlockResult[],
+    context?: EntryBlockerContext
+): BlockResult[] {
+    if (!isCompactPumpfunLaunch(context)) return blocks;
+
+    const ignoredCodes = new Set([
+        "BLOCK_ATR_DEAD",
+        "BLOCK_HISTOGRAM_DECEL",
+        "BLOCK_RSI_SLOPE_NEG",
+    ]);
+
+    return blocks.filter((block) => !ignoredCodes.has(block.code));
+}
+
 export function checkEntryBlocks(
     snap: TASnapshotV2,
     config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG,
-    mint: string = ""
+    mint: string = "",
+    context?: EntryBlockerContext
 ): BlockResult[] {
     const blocks: BlockResult[] = [];
     const now = Date.now();
@@ -154,7 +180,7 @@ export function checkEntryBlocks(
             reason: `Nenhum candle de 1s disponível (mínimo 1)`,
             severity: "HARD",
         });
-        return blocks; // Sem dados suficientes, não verificar mais nada
+        return applyCompactPumpfunSoftening(blocks, context); // Sem dados suficientes, não verificar mais nada
     }
 
     // 4. BLOCK_VWAP_DISTANCE
@@ -275,7 +301,7 @@ export function checkEntryBlocks(
         }
     }
 
-    return blocks;
+    return applyCompactPumpfunSoftening(blocks, context);
 }
 
 // ============================================================
@@ -378,15 +404,41 @@ function buildGateAssessment(
 
 export function assessEntryBlockPressure(
     blocks: BlockResult[],
-    config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG
+    config: TechnicalAnalysisConfig = DEFAULT_TA_CONFIG,
+    context?: EntryBlockerContext
 ): GateAssessment {
-    return buildGateAssessment(
+    const assessment = buildGateAssessment(
         blocks,
         ENTRY_FATAL_CODES,
         ENTRY_WEIGHTS,
         config.entryBlockRecheckPressure,
         config.entryBlockFatalPressure
     );
+
+    if (!isCompactPumpfunLaunch(context)) {
+        return assessment;
+    }
+
+    const discountedPressure = Math.round(assessment.pressure * 0.5);
+    let action: GateAction = assessment.action;
+    if (assessment.fatalCodes.length > 0 || discountedPressure >= config.entryBlockFatalPressure) {
+        action = "BLOCK";
+    } else if (assessment.hardCodes.length > 0 || discountedPressure >= config.entryBlockRecheckPressure) {
+        action = "RECHECK";
+    } else {
+        action = "ALLOW";
+    }
+
+    const summary = blocks.length === 0
+        ? "sem bloqueios"
+        : `${action} pressure=${discountedPressure} hard=${assessment.hardCodes.length} soft=${assessment.softCodes.length}`;
+
+    return {
+        ...assessment,
+        action,
+        pressure: discountedPressure,
+        summary,
+    };
 }
 
 export function assessOrganicityBlockPressure(

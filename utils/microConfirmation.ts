@@ -25,6 +25,7 @@ export interface MicroConfirmationConfig {
     maxPriceAdvancePct: number;          // avanço máximo de preço na janela (default: 3.0)
     maxNewWalletSharePct: number;        // concentração explosiva de nova wallet (default: 60)
     minTradeActivity: number;            // mínimo de trades no período para confirmar atividade (default: 1)
+    minFollowThroughPct: number;         // usada por heurísticas adaptativas de confirmação
 }
 
 export const DEFAULT_MICRO_CONFIRM_CONFIG: MicroConfirmationConfig = {
@@ -34,7 +35,51 @@ export const DEFAULT_MICRO_CONFIRM_CONFIG: MicroConfirmationConfig = {
     maxPriceAdvancePct: 3.0,
     maxNewWalletSharePct: 75,
     minTradeActivity: 1,
+    minFollowThroughPct: 0.8,
 };
+
+export interface AdaptiveMicroConfirmContext {
+    protocol?: string | null;
+    bondingCurvePercent?: number | null;
+    entryProfile?: string | null;
+    dataQualityScore?: number | null;
+    taScore?: number | null;
+    candlesAvailable1s?: number | null;
+}
+
+export function buildAdaptiveMicroConfirmConfig(
+    context: AdaptiveMicroConfirmContext = {}
+): MicroConfirmationConfig {
+    const compactPumpfun =
+        context.protocol === "pumpfun" &&
+        Number(context.bondingCurvePercent || 0) >= 93;
+    const probe = context.entryProfile === "PROBE";
+    const fragile =
+        Number(context.dataQualityScore ?? 0) < 50 ||
+        Number(context.taScore ?? 0) < 15 ||
+        Number(context.candlesAvailable1s ?? 0) < 2;
+
+    if (compactPumpfun) {
+        return {
+            ...DEFAULT_MICRO_CONFIRM_CONFIG,
+            windowMs: 1800,
+            intervalMs: 600,
+            maxPriceAdvancePct: 4.5,
+            minFollowThroughPct: probe || fragile ? 0.15 : 0,
+        };
+    }
+
+    if (probe && fragile) {
+        return {
+            ...DEFAULT_MICRO_CONFIRM_CONFIG,
+            windowMs: 5000,
+            intervalMs: 1000,
+            minFollowThroughPct: 0.8,
+        };
+    }
+
+    return { ...DEFAULT_MICRO_CONFIRM_CONFIG };
+}
 
 // ============================================================
 // RESULTADO

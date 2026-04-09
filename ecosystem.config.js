@@ -76,5 +76,30 @@ module.exports = {
             max_size: '20M',
             retain: 5,
         },
+
+        // ── ChatOps Telegram Bot ──────────────────────────────────
+        {
+            name: 'chatops',
+            script: TS_NODE_BIN,
+            args: 'scripts/telegram-chatops.ts',
+            interpreter: 'node',
+            cwd: PROJECT_DIR,
+            env: {
+                NODE_ENV: 'production',
+            },
+            // Restart policy
+            max_restarts: 10,
+            min_uptime: '5s',
+            restart_delay: 3000,
+            autorestart: true,
+            kill_timeout: 10000,
+            // Logging
+            log_date_format: 'YYYY-MM-DD HH:mm:ss',
+            error_file: `${PROJECT_DIR}/logs/chatops-error.log`,
+            out_file: `${PROJECT_DIR}/logs/chatops-out.log`,
+            merge_logs: true,
+            max_size: '10M',
+            retain: 5,
+        },
     ],
 };

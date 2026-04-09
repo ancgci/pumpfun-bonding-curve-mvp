@@ -11,6 +11,15 @@ import { analyzeToken } from "./riskEngine";
 import { backfillTokenHistory } from "./pumpfunHistory";
 import { getProtocolAdjustedTAConfig, getTAConfig } from "./technicalConfig";
 import { getLatestPrice, getTASnapshotV2, getVolatility, recordPriceSample } from "./volatilityMonitor";
+import {
+  heartbeatAgent,
+  markAgentDisabled,
+  markAgentError,
+  markAgentIdle,
+  markAgentRunning,
+  markAgentSuccess,
+  registerAgentHealth,
+} from "./agentHealth";
 
 export interface WinnerReentryRuntimeConfig {
   enabled: boolean;
@@ -220,9 +229,31 @@ export class WinnerReentryAgentService {
   public initialize(onExecute: ReentryExecutionBridge) {
     this.onExecute = onExecute;
     if (this.interval) clearInterval(this.interval);
-    const scanIntervalMs = getWinnerReentryConfig().scanIntervalMs;
+    const config = getWinnerReentryConfig();
+    const scanIntervalMs = config.scanIntervalMs;
     this.interval = setInterval(() => this.processQueue(), scanIntervalMs);
     logger.info(`🧠 [WinnerReentryAgent] Monitor initialized. Scanning queue every ${scanIntervalMs}ms.`);
+    if (config.enabled) {
+      markAgentIdle("winnerReentry", {
+        enabled: true,
+        queueSize: this.queue.size,
+        details: {
+          scanIntervalMs,
+          discoveryIntervalMs: config.discoveryIntervalMs,
+          lookbackMs: config.lookbackMs,
+          maxTokens: config.maxTokens,
+        },
+      });
+    } else {
+      markAgentDisabled("winnerReentry", "WINNER_REENTRY_AGENT_ENABLED=false", {
+        details: {
+          scanIntervalMs,
+          discoveryIntervalMs: config.discoveryIntervalMs,
+          lookbackMs: config.lookbackMs,
+          maxTokens: config.maxTokens,
+        },
+      });
+    }
   }
 
   public shutdown() {
@@ -230,6 +261,13 @@ export class WinnerReentryAgentService {
       clearInterval(this.interval);
       this.interval = null;
     }
+    markAgentIdle("winnerReentry", {
+      enabled: getWinnerReentryConfig().enabled,
+      queueSize: this.queue.size,
+      details: {
+        stopped: true,
+      },
+    });
   }
 
   public clear() {
@@ -237,6 +275,14 @@ export class WinnerReentryAgentService {
     this.cooldowns.clear();
     this.recentAttempts.clear();
     this.processedTradeKeys.clear();
+    markAgentIdle("winnerReentry", {
+      enabled: getWinnerReentryConfig().enabled,
+      queueSize: 0,
+      details: {
+        cooldowns: 0,
+        pendingAttempts: 0,
+      },
+    });
   }
 
   public getSnapshot(): WinnerReentrySnapshot {
@@ -255,8 +301,26 @@ export class WinnerReentryAgentService {
 
   public async runDiscoveryCycle(): Promise<void> {
     const config = getWinnerReentryConfig();
-    if (!config.enabled || this.isDiscovering) return;
+    if (!config.enabled) {
+      markAgentDisabled("winnerReentry", "WINNER_REENTRY_AGENT_ENABLED=false", {
+        details: {
+          discoveryIntervalMs: config.discoveryIntervalMs,
+          scanIntervalMs: config.scanIntervalMs,
+        },
+      });
+      return;
+    }
+    if (this.isDiscovering) return;
     this.isDiscovering = true;
+    markAgentRunning("winnerReentry", {
+      enabled: true,
+      queueSize: this.queue.size,
+      details: {
+        discoveryIntervalMs: config.discoveryIntervalMs,
+        scanIntervalMs: config.scanIntervalMs,
+        maxTokens: config.maxTokens,
+      },
+    });
 
     try {
       this.pruneState(Date.now(), config);
@@ -275,8 +339,27 @@ export class WinnerReentryAgentService {
       if (added > 0) {
         logger.info(`🧠 [WinnerReentryAgent] Added ${added} winner reentry candidates. Queue=${this.queue.size}.`);
       }
+      markAgentSuccess("winnerReentry", {
+        enabled: true,
+        queueSize: this.queue.size,
+        details: {
+          added,
+          scannedTrades: trades.length,
+          discoveryIntervalMs: config.discoveryIntervalMs,
+          scanIntervalMs: config.scanIntervalMs,
+          cooldowns: this.cooldowns.size,
+        },
+      });
     } catch (error: any) {
       logger.error(`❌ [WinnerReentryAgent] Discovery cycle error: ${error.message}`);
+      markAgentError("winnerReentry", error, {
+        enabled: true,
+        queueSize: this.queue.size,
+        details: {
+          discoveryIntervalMs: config.discoveryIntervalMs,
+          scanIntervalMs: config.scanIntervalMs,
+        },
+      });
     } finally {
       this.isDiscovering = false;
     }
@@ -375,6 +458,15 @@ export class WinnerReentryAgentService {
     const config = getWinnerReentryConfig();
     if (!config.enabled || this.isProcessing || this.queue.size === 0 || !this.onExecute) return;
     this.isProcessing = true;
+    heartbeatAgent("winnerReentry", {
+      enabled: true,
+      queueSize: this.queue.size,
+      details: {
+        cooldowns: this.cooldowns.size,
+        pendingAttempts: this.recentAttempts.size,
+        processing: true,
+      },
+    });
 
     try {
       const now = Date.now();
@@ -401,6 +493,15 @@ export class WinnerReentryAgentService {
       }
     } finally {
       this.isProcessing = false;
+      heartbeatAgent("winnerReentry", {
+        enabled: config.enabled,
+        queueSize: this.queue.size,
+        details: {
+          cooldowns: this.cooldowns.size,
+          pendingAttempts: this.recentAttempts.size,
+          processing: false,
+        },
+      });
     }
   }
 
@@ -485,8 +586,25 @@ export class WinnerReentryAgentService {
         `🧠 [WinnerReentryAgent] ${symbol} result: action=${decision.action} executed=${tradeResult.executed}` +
         ` temporary=${tradeResult.temporary} reason=${tradeResult.reason}`
       );
+      markAgentSuccess("winnerReentry", {
+        enabled: true,
+        queueSize: this.queue.size,
+        details: {
+          lastCandidate: symbol,
+          lastDecisionAction: decision.action,
+          lastExecuted: tradeResult.executed,
+          lastReason: tradeResult.reason,
+        },
+      });
     } catch (error: any) {
       logger.error(`❌ [WinnerReentryAgent] Failed to evaluate ${candidate.symbol}: ${error.message}`);
+      markAgentError("winnerReentry", error, {
+        enabled: true,
+        queueSize: this.queue.size,
+        details: {
+          lastCandidate: candidate.symbol,
+        },
+      });
     }
   }
 
@@ -513,3 +631,16 @@ export class WinnerReentryAgentService {
 }
 
 export const winnerReentryAgent = new WinnerReentryAgentService();
+
+const winnerReentryConfig = getWinnerReentryConfig();
+registerAgentHealth("winnerReentry", {
+  enabled: winnerReentryConfig.enabled,
+  status: winnerReentryConfig.enabled ? "idle" : "disabled",
+  queueSize: 0,
+  details: {
+    discoveryIntervalMs: winnerReentryConfig.discoveryIntervalMs,
+    scanIntervalMs: winnerReentryConfig.scanIntervalMs,
+    maxTokens: winnerReentryConfig.maxTokens,
+    lookbackMs: winnerReentryConfig.lookbackMs,
+  },
+});

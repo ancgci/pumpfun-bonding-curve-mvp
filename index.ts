@@ -182,13 +182,13 @@ setInterval(() => {
 }, 2000); // 2 segundos de delay para resposta rápida do dashboard
 
 const telegramEnabled = Boolean(token && chatId);
-let telegramActive = false;
-let bot: TelegramBot | null = null;
+let telegramAlertsActive = false;
+let alertBot: TelegramBot | null = null;
+let commandBot: TelegramBot | null = null;
+let telegramCommandErrorCount = 0;
 
 if (telegramEnabled) {
-  // Create a bot instance with additional options for better error handling
-  bot = new TelegramBot(token, {
-    polling: true,
+  const telegramRequestOptions = {
     request: {
       proxy: HTTPS_PROXY || HTTP_PROXY,
       url: "",
@@ -198,23 +198,39 @@ if (telegramEnabled) {
         timeout: 30000,
       },
     },
+  };
+
+  // O bot de envio não depende de polling, então os alertas continuam operacionais
+  // mesmo se o listener de comandos do Telegram degradar na VPS.
+  alertBot = new TelegramBot(token, {
+    polling: false,
+    ...telegramRequestOptions,
   });
-  telegramActive = true;
+  telegramAlertsActive = true;
+
+  commandBot = new TelegramBot(token, {
+    polling: true,
+    ...telegramRequestOptions,
+  });
 
   // Configurar callback da fila de alertas
   alertQueue.setSendCallback(async (message: string) => {
-    if (!telegramActive || !bot) {
+    if (!telegramAlertsActive || !alertBot) {
       logger.warn("Telegram desativado, alerta não enviado.");
       return;
     }
-    await bot.sendMessage(chatId, message, {
+    await alertBot.sendMessage(chatId, message, {
       parse_mode: "HTML",
       disable_web_page_preview: true,
     });
   });
 
   // Initialize Telegram Command Listener (/top10, /newlistings)
-  initTelegramCommands(bot);
+  const initializedCommandBot = initTelegramCommands(commandBot);
+  if (!initializedCommandBot) {
+    logger.warn("⚠️ Listener de comandos do Telegram não foi inicializado. Os alertas continuam ativos.");
+    commandBot = null;
+  }
 } else {
   logger.warn("Telegram desabilitado (sem token/chat id); alertas não serão enviados.");
   alertQueue.setSendCallback(async (message: string) => {
@@ -409,7 +425,11 @@ function sendMessage(message: string, options: SendMessageOptions = {}): Promise
     })
     : limiter.schedule(async () => {
       try {
-        await bot.sendMessage(chatId, message, {
+        if (!alertBot) {
+          throw new Error("Telegram alert bot is not initialized.");
+        }
+
+        await alertBot.sendMessage(chatId, message, {
           parse_mode: "HTML",
           disable_web_page_preview: true
         });
@@ -4002,7 +4022,11 @@ setTimeout(async () => {
   try {
     // Verificar se o bot está conectado antes de enviar mensagem
     logger.info("🔍 Verificando conexão com o Telegram...");
-    const botInfo = await bot.getMe();
+    if (!alertBot) {
+      throw new Error("Telegram alert bot is not initialized.");
+    }
+
+    const botInfo = await alertBot.getMe();
     logger.info(`✅ Bot conectado: ${botInfo.username} (ID: ${botInfo.id})`);
 
     await sendMessage(`✅ Bot PumpFun monitor está funcionando! Aguardando tokens chegarem a ${ALERT_THRESHOLD}% da curva...`, { throwOnError: true });
@@ -4032,18 +4056,16 @@ setTimeout(async () => {
 }, 5000); // Aumentar o tempo de espera para 5 segundos
 
 // Adicionar tratamento de erros mais robusto para polling
-bot?.on('polling_error', async (error: any) => {
-  logger.error('❌ Erro de polling:', error.message);
+commandBot?.on('polling_error', async (error: any) => {
+  logger.error('❌ Erro de polling do listener de comandos:', error.message);
 
-  botHealth.errorCount++;
-  botHealth.lastError = error.message;
+  telegramCommandErrorCount++;
 
-  // Se houver muitos erros consecutivos, parar polling para evitar loop
-  if (botHealth.errorCount >= 5) {
-    logger.warn("⚠️ Desabilitando Telegram após falhas consecutivas.");
-    telegramActive = false;
+  // Falhas de polling não podem derrubar o transporte de alertas ao canal.
+  if (telegramCommandErrorCount >= 5) {
+    logger.warn("⚠️ Desabilitando apenas o polling de comandos do Telegram após falhas consecutivas. Alertas seguem ativos.");
     try {
-      await bot?.stopPolling();
+      await commandBot?.stopPolling();
     } catch (e) {
       logger.debug(`Erro ao parar polling: ${(e as any)?.message}`);
     }
@@ -4052,46 +4074,37 @@ bot?.on('polling_error', async (error: any) => {
 
   // Tratamento específico para redirecionamentos 301
   if (error.message && error.message.includes('301')) {
-    logger.warn("⚠️  Redirecionamento 301 detectado. Aguardando antes de tentar...");
+    logger.warn("⚠️  Redirecionamento 301 detectado no listener de comandos. Aguardando antes de tentar...");
     await new Promise(resolve => setTimeout(resolve, 5000));
     return;
   }
 
   if (error.code === 'EFATAL' || error.name === 'AggregateError' ||
     error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
-    logger.error("🚨 Erro de conexão detectado. Tentando reconectar...");
+    logger.error("🚨 Erro de conexão detectado no listener de comandos. Os alertas continuam ativos; tentando recuperar o polling...");
     logger.info("📝 Token do bot:", token ? "✓ Configurado" : "✗ Não configurado");
     logger.info("📝 Chat ID:", chatId);
 
     try {
       await reconnectWithBackoff(3);
-      botHealth.errorCount = 0;
-      botHealth.lastError = null;
+      telegramCommandErrorCount = 0;
     } catch (reconnectError) {
-      logger.error("❌ Falha ao reconectar o bot:", (reconnectError as any).message);
+      logger.error("❌ Falha ao reconectar o listener de comandos do bot:", (reconnectError as any).message);
     }
   }
 });
 
-bot.on('error', async (error) => {
-  logger.error('❌ Erro no bot:', error.message);
+commandBot?.on('error', async (error) => {
+  logger.error('❌ Erro no listener de comandos do Telegram:', error.message);
 
-  // Incrementar contador de erros
-  botHealth.errorCount++;
-  botHealth.lastError = error.message;
-
-  // Tentar reconectar em caso de erros críticos
   if (error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
-    logger.warn("⚠️  Erro de conexão detectado. Tentando reconexão...");
+    logger.warn("⚠️  Erro de conexão detectado no listener de comandos. Tentando reconexão sem afetar os alertas...");
     try {
       await reconnectWithBackoff(3);
-      logger.info("✅ Reconexão bem-sucedida após erro de conexão");
-
-      // Resetar contador de erros após reconexão bem-sucedida
-      botHealth.errorCount = 0;
-      botHealth.lastError = null;
+      logger.info("✅ Reconexão bem-sucedida do listener de comandos");
+      telegramCommandErrorCount = 0;
     } catch (reconnectError) {
-      logger.error("❌ Falha ao reconectar após erro de conexão:", reconnectError.message);
+      logger.error("❌ Falha ao reconectar o listener de comandos após erro de conexão:", reconnectError.message);
     }
   }
 });

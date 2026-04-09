@@ -3,6 +3,15 @@ import logger from "./logger";
 import { getPendingLossTrades, SimulatedTrade, updateTradePostMortem } from "./simulationEngine";
 import { TradePostMortemReport } from "./postMortemTypes";
 import { generateStructuredLlm } from "./llmGateway";
+import {
+  markAgentDisabled,
+  markAgentError,
+  markAgentIdle,
+  markAgentRunning,
+  markAgentSuccess,
+  registerAgentHealth,
+  upsertAgentHealth,
+} from "./agentHealth";
 
 const DEFAULT_LLM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const POSTMORTEM_LLM_API_URL = process.env.POSTMORTEM_LLM_API_URL || DEFAULT_LLM_API_URL;
@@ -42,6 +51,15 @@ const POSTMORTEM_OUTPUT_SCHEMA = {
     llmInsights: { type: ["string", "null"] },
   },
 } as const;
+
+function hasPostMortemLlmConfigured(): boolean {
+  const apiKey = getPostMortemLlmApiKey();
+  const hasGoogleKey =
+    !!process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    !!process.env.GOOGLE_API_KEY ||
+    !!process.env.GEMINI_API_KEY;
+  return !!apiKey || hasGoogleKey;
+}
 
 interface DeterministicAnalysis {
   summary: string;
@@ -441,46 +459,144 @@ function mergeReport(
 
 export async function runPostMortemCycle(): Promise<void> {
   const enabled = postMortemAgentEnabled();
-  if (!enabled) return;
-
-  const batchSize = Math.max(1, Math.min(20, parseInt(process.env.POSTMORTEM_BATCH_SIZE || "5", 10)));
-  const losses = getPendingLossTrades(batchSize);
-
-  if (losses.length === 0) {
-    logger.info("🧠 [PostMortemAgent] No pending losing trades to analyze.");
+  if (!enabled) {
+    markAgentDisabled("postMortem", "POSTMORTEM_AGENT_ENABLED=false", {
+      details: {
+        llmEnrichment: postMortemLlmEnabled(),
+        llmConfigured: hasPostMortemLlmConfigured(),
+        model: POSTMORTEM_LLM_MODEL,
+      },
+    });
     return;
   }
 
-  logger.info(`🧠 [PostMortemAgent] Starting post-mortem cycle for ${losses.length} losing trades...`);
+  const batchSize = Math.max(1, Math.min(20, parseInt(process.env.POSTMORTEM_BATCH_SIZE || "5", 10)));
+  const llmConfigured = hasPostMortemLlmConfigured();
+  markAgentRunning("postMortem", {
+    enabled: true,
+    details: {
+      batchSize,
+      llmEnrichment: postMortemLlmEnabled(),
+      llmConfigured,
+      model: POSTMORTEM_LLM_MODEL,
+    },
+  });
 
-  for (const trade of losses) {
-    try {
-      updateTradePostMortem(trade.tokenMint, trade.entryTime, "PROCESSING");
-      const deterministic = analyzeDeterministically(trade);
-      const llmData = await enrichWithLlm(trade, deterministic);
-      const report = mergeReport(deterministic, llmData);
-      updateTradePostMortem(trade.tokenMint, trade.entryTime, "DONE", report, report.summary);
-      logger.info(
-        `🧠 [PostMortemAgent] ${trade.tokenSymbol} analyzed: ${report.rootCause.label} (${report.rootCause.confidence}%)`
-      );
-    } catch (error: any) {
-      updateTradePostMortem(
-        trade.tokenMint,
-        trade.entryTime,
-        "FAILED",
-        null,
-        `Post-mortem failed: ${error.message}`
-      );
-      logger.error(`🧠 [PostMortemAgent] Failed to analyze ${trade.tokenSymbol}: ${error.message}`);
+  try {
+    const losses = getPendingLossTrades(batchSize);
+
+    if (losses.length === 0) {
+      logger.info("🧠 [PostMortemAgent] No pending losing trades to analyze.");
+      markAgentIdle("postMortem", {
+        enabled: true,
+        details: {
+          pendingLosses: 0,
+          batchSize,
+          llmEnrichment: postMortemLlmEnabled(),
+          llmConfigured,
+          analysisMode: postMortemLlmEnabled() && llmConfigured ? "DETERMINISTIC_PLUS_LLM" : "DETERMINISTIC",
+          model: POSTMORTEM_LLM_MODEL,
+        },
+      });
+      return;
     }
-  }
 
-  logger.info("🧠 [PostMortemAgent] Post-mortem cycle complete.");
+    logger.info(`🧠 [PostMortemAgent] Starting post-mortem cycle for ${losses.length} losing trades...`);
+
+    let processedCount = 0;
+    let failedCount = 0;
+    let lastFailureMessage: string | null = null;
+
+    for (const trade of losses) {
+      try {
+        updateTradePostMortem(trade.tokenMint, trade.entryTime, "PROCESSING");
+        const deterministic = analyzeDeterministically(trade);
+        const llmData = await enrichWithLlm(trade, deterministic);
+        const report = mergeReport(deterministic, llmData);
+        updateTradePostMortem(trade.tokenMint, trade.entryTime, "DONE", report, report.summary);
+        processedCount += 1;
+        logger.info(
+          `🧠 [PostMortemAgent] ${trade.tokenSymbol} analyzed: ${report.rootCause.label} (${report.rootCause.confidence}%)`
+        );
+      } catch (error: any) {
+        failedCount += 1;
+        lastFailureMessage = error.message;
+        updateTradePostMortem(
+          trade.tokenMint,
+          trade.entryTime,
+          "FAILED",
+          null,
+          `Post-mortem failed: ${error.message}`
+        );
+        logger.error(`🧠 [PostMortemAgent] Failed to analyze ${trade.tokenSymbol}: ${error.message}`);
+      }
+    }
+
+    const analysisMode = postMortemLlmEnabled() && llmConfigured ? "DETERMINISTIC_PLUS_LLM" : "DETERMINISTIC";
+    if (failedCount > 0) {
+      upsertAgentHealth("postMortem", {
+        enabled: true,
+        status: "degraded",
+        lastSuccessAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        lastError: lastFailureMessage,
+        lastErrorAt: lastFailureMessage ? new Date().toISOString() : null,
+        details: {
+          pendingLosses: losses.length,
+          processedCount,
+          failedCount,
+          batchSize,
+          llmEnrichment: postMortemLlmEnabled(),
+          llmConfigured,
+          analysisMode,
+          model: POSTMORTEM_LLM_MODEL,
+        },
+      });
+    } else {
+      markAgentSuccess("postMortem", {
+        enabled: true,
+        details: {
+          pendingLosses: losses.length,
+          processedCount,
+          failedCount: 0,
+          batchSize,
+          llmEnrichment: postMortemLlmEnabled(),
+          llmConfigured,
+          analysisMode,
+          model: POSTMORTEM_LLM_MODEL,
+        },
+      });
+    }
+
+    logger.info("🧠 [PostMortemAgent] Post-mortem cycle complete.");
+  } catch (error: any) {
+    markAgentError("postMortem", error, {
+      enabled: true,
+      details: {
+        batchSize,
+        llmEnrichment: postMortemLlmEnabled(),
+        llmConfigured,
+        model: POSTMORTEM_LLM_MODEL,
+      },
+    });
+    throw error;
+  }
 }
 
 export const PostMortemAgent = {
   runPostMortemCycle,
 };
+
+registerAgentHealth("postMortem", {
+  enabled: postMortemAgentEnabled(),
+  status: postMortemAgentEnabled() ? "idle" : "disabled",
+  details: {
+    llmEnrichment: postMortemLlmEnabled(),
+    llmConfigured: hasPostMortemLlmConfigured(),
+    batchSize: parseInt(process.env.POSTMORTEM_BATCH_SIZE || "5", 10) || 5,
+    model: POSTMORTEM_LLM_MODEL,
+  },
+});
 
 logger.info(
   `✅ PostMortem Agent module loaded (enabled=${postMortemAgentEnabled()}, llmEnrichment=${postMortemLlmEnabled()}, batchSize=${process.env.POSTMORTEM_BATCH_SIZE || "5"}, llmModel=${POSTMORTEM_LLM_MODEL})`

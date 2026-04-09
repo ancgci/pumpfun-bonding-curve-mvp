@@ -12,6 +12,7 @@ import {
 } from "./simulationEngine";
 import { rpcPool } from "./rpcPool";
 import { getActiveTradingWalletAddress } from "./walletStore";
+import { readAgentHealthSnapshot, type AgentRuntimeStatus } from "./agentHealth";
 
 const ROOT_DIR = path.join(__dirname, "..");
 const POSITIONS_FILE = path.join(ROOT_DIR, "data/positions.json");
@@ -63,6 +64,32 @@ export interface DashboardLogEntry {
   timestamp: string;
   level: string;
   message: string;
+}
+
+export interface DashboardSubAgent {
+  name: string;
+  label: string;
+  enabled: boolean;
+  status: AgentRuntimeStatus;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastHeartbeatAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  queueSize: number | null;
+  notes: string[];
+  details: Record<string, any>;
+}
+
+export interface DashboardSubAgentSummary {
+  total: number;
+  enabled: number;
+  healthy: number;
+  degraded: number;
+  disabled: number;
+  error: number;
+  running: number;
+  idle: number;
 }
 
 export interface DashboardSnapshot {
@@ -126,6 +153,8 @@ export interface DashboardSnapshot {
         nextOptimization: string | null;
       };
     };
+    subAgents: DashboardSubAgent[];
+    subAgentSummary: DashboardSubAgentSummary;
   };
   tradingConfig: Record<string, any>;
   protocolConfig: Record<string, any>;
@@ -217,6 +246,85 @@ function trimText(value: unknown, maxLength = 140): string {
   const normalized = String(value || "").trim();
   if (!normalized) return "";
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
+function humanizeSubAgentName(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function loadSubAgentHealth(): { subAgents: DashboardSubAgent[]; summary: DashboardSubAgentSummary } {
+  const health = readAgentHealthSnapshot();
+  const subAgents = Object.entries(health.agents)
+    .map(([name, entry]) => ({
+      name,
+      label: humanizeSubAgentName(name),
+      enabled: entry.enabled === true,
+      status: entry.status,
+      lastRunAt: entry.lastRunAt,
+      lastSuccessAt: entry.lastSuccessAt,
+      lastHeartbeatAt: entry.lastHeartbeatAt,
+      lastError: entry.lastError,
+      lastErrorAt: entry.lastErrorAt,
+      queueSize: typeof entry.queueSize === "number" ? entry.queueSize : null,
+      notes: Array.isArray(entry.notes) ? entry.notes : [],
+      details: entry.details || {},
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  return {
+    subAgents,
+    summary: {
+      total: subAgents.length,
+      enabled: subAgents.filter((agent) => agent.enabled).length,
+      healthy: subAgents.filter((agent) => agent.status === "healthy").length,
+      degraded: subAgents.filter((agent) => agent.status === "degraded").length,
+      disabled: subAgents.filter((agent) => agent.status === "disabled").length,
+      error: subAgents.filter((agent) => agent.status === "error").length,
+      running: subAgents.filter((agent) => agent.status === "running").length,
+      idle: subAgents.filter((agent) => agent.status === "idle").length,
+    },
+  };
+}
+
+function getSubAgentStatusEmoji(status: AgentRuntimeStatus): string {
+  switch (status) {
+    case "healthy":
+      return "✅";
+    case "degraded":
+      return "⚠️";
+    case "disabled":
+      return "⏸️";
+    case "error":
+      return "❌";
+    case "running":
+      return "🔄";
+    case "idle":
+    default:
+      return "💤";
+  }
+}
+
+function formatSubAgentSummaryForTelegram(snapshot: DashboardSnapshot): string {
+  const summary = snapshot.agent.subAgentSummary;
+  const lines = snapshot.agent.subAgents
+    .slice(0, 6)
+    .map((agent) => {
+      const queueSuffix =
+        typeof agent.queueSize === "number" && agent.queueSize > 0
+          ? ` · queue ${agent.queueSize}`
+          : "";
+      return `${getSubAgentStatusEmoji(agent.status)} <b>${escapeTelegramHtml(agent.label)}</b>: <code>${escapeTelegramHtml(agent.status.toUpperCase())}</code>${queueSuffix}`;
+    });
+
+  return [
+    `Sub-agents: <b>${summary.total}</b> | Healthy <b>${summary.healthy}</b> | Running <b>${summary.running}</b> | Idle <b>${summary.idle}</b> | Degraded <b>${summary.degraded}</b> | Disabled <b>${summary.disabled}</b> | Error <b>${summary.error}</b>`,
+    ...(lines.length > 0 ? lines : ["Nenhum sub-agente registrado."]),
+  ].join("\n");
 }
 
 function formatSignedNumber(value: number, digits = 4): string {
@@ -542,6 +650,7 @@ export function getDashboardSnapshot(options?: DashboardSnapshotOptions): Dashbo
   const learningMetrics = loadLearningMetrics(LEARNING_METRICS_FILE);
   const mainnetMetrics = loadLearningMetrics(MAINNET_METRICS_FILE);
   const learnedRulesCount = loadLearnedRulesCount();
+  const subAgentHealth = loadSubAgentHealth();
   const funnelMetrics = getFunnelMetrics();
   const stageHighlights = Object.entries(funnelMetrics?.stages || {})
     .map(([stage, stageSummary]: [string, any]) => ({
@@ -621,6 +730,8 @@ export function getDashboardSnapshot(options?: DashboardSnapshotOptions): Dashbo
           nextOptimization: mainnetMetrics.nextOptimization ? String(mainnetMetrics.nextOptimization) : null,
         },
       },
+      subAgents: subAgentHealth.subAgents,
+      subAgentSummary: subAgentHealth.summary,
     },
     tradingConfig: loadTradingConfig(),
     protocolConfig: loadProtocolConfig(),
@@ -694,6 +805,18 @@ export function buildDashboardCopilotContext(snapshot: DashboardSnapshot): strin
       learnedRulesCount: snapshot.agent.learnedRulesCount,
       simulationLearning: snapshot.agent.learning.simulation,
       mainnetLearning: snapshot.agent.learning.mainnet,
+      subAgentSummary: snapshot.agent.subAgentSummary,
+      subAgents: snapshot.agent.subAgents.map((agent) => ({
+        name: agent.name,
+        label: agent.label,
+        enabled: agent.enabled,
+        status: agent.status,
+        queueSize: agent.queueSize,
+        lastRunAt: agent.lastRunAt,
+        lastSuccessAt: agent.lastSuccessAt,
+        lastHeartbeatAt: agent.lastHeartbeatAt,
+        lastError: agent.lastError,
+      })),
     },
     tradingConfig: {
       buyAmountSol: snapshot.tradingConfig.buyAmountSol,
@@ -763,6 +886,7 @@ export function formatDashboardSummaryForTelegram(snapshot: DashboardSnapshot): 
     `📊 <b>Dashboard</b>`,
     `Status: <b>${escapeTelegramHtml(snapshot.health.status)}</b> | Modo: <b>${escapeTelegramHtml(snapshot.health.agentMode)}</b>`,
     `Agent: <b>${snapshot.agent.enabled ? "ON" : "OFF"}</b> | Stream: <b>${snapshot.health.streamConnected ? "OK" : "DOWN"}</b> | RPC: <code>${escapeTelegramHtml(snapshot.health.rpcName || "n/a")}</code>`,
+    `Sub-agents: <b>${snapshot.agent.subAgentSummary.total}</b> | Healthy <b>${snapshot.agent.subAgentSummary.healthy}</b> | Degraded <b>${snapshot.agent.subAgentSummary.degraded}</b> | Error <b>${snapshot.agent.subAgentSummary.error}</b>`,
     `Posições ativas: <b>${snapshot.stats.activePositions}</b> | Sim abertas: <b>${snapshot.simulation.openTrades.length}</b>`,
     `Sim fechadas: <b>${simMetrics?.totalTrades || 0}</b> | WR: <b>${toNumber(simMetrics?.winRate, 0).toFixed(1)}%</b> | PnL: <b>${formatSignedNumber(toNumber(simMetrics?.totalPnL, 0))} SOL</b>`,
     `Última decisão: <code>${escapeTelegramHtml(formatRelativeTime(snapshot.health.lastDecisionAt))}</code>`,
@@ -776,6 +900,8 @@ export function formatAgentSummaryForTelegram(snapshot: DashboardSnapshot): stri
     `Learning: <b>${snapshot.agent.learningEnabled ? "ON" : "OFF"}</b> | Regras: <b>${snapshot.agent.learnedRulesCount}</b> | Provider: <code>${escapeTelegramHtml(snapshot.agent.llmProvider || "n/a")}</code>`,
     `Rate limit: <b>${snapshot.agent.rateLimited ? "SIM" : "NÃO"}</b>${snapshot.agent.rateLimitReason ? ` | Motivo: <code>${escapeTelegramHtml(trimText(snapshot.agent.rateLimitReason, 60))}</code>` : ""}`,
     `Sim: <b>${snapshot.agent.learning.simulation.tradesAnalyzed}/${snapshot.agent.learning.simulation.tradesRequired}</b> | Mainnet: <b>${snapshot.agent.learning.mainnet.tradesAnalyzed}/${snapshot.agent.learning.mainnet.tradesRequired}</b>`,
+    ``,
+    formatSubAgentSummaryForTelegram(snapshot),
   ].join("\n");
 }
 

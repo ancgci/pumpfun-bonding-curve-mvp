@@ -33,6 +33,15 @@ All project documentation is in the `/docs` folder:
 - **[📊 P&L_HISTORY](docs/PNL_HISTORY.md)** - Documentação do SQLite P&L
 - **[CHANGELOG](docs/CHANGELOG.md)** - Histórico de melhorias
 
+## 💾 Disaster Recovery
+
+This repository now supports a two-layer backup strategy:
+
+- local full VPS backup in `backups/vps-runtime/`
+- GitHub-safe runtime snapshot in `recovery/github-state/latest/`
+
+See **[DISASTER_RECOVERY](docs/DISASTER_RECOVERY.md)** for the backup and restore flow.
+
 ## ⚙️ Current VPS Profile
 
 As of **March 20, 2026**, the recommended low-bandwidth production profile is:
@@ -137,6 +146,10 @@ npm start
 npm run start:dashboard-api
 ```
 
+pm2 restart bot --update-env
+pm2 restart dashboard-api --update-env
+pm2 save
+
 
 ### 💎 Premium Financial Dashboard & Crypto Wallet (Mar 16, 2026)
 O dashboard foi elevado a um patamar profissional com uma interface de alto desempenho focada em métricas financeiras e gestão de ativos.
@@ -199,7 +212,15 @@ Após um incidente de segurança, a VPS foi totalmente reinstalada (Ubuntu 24.04
 |-------|------------------|
 | **Documentação** | Toda nova feature exige atualização imediata no `/docs` e no `README.md`. |
 | **Memória do Agente** | Consensos sobre oportunidades ou novas heurísticas devem ser injetados em `data/agent/patterns.json`. |
-| **Workflow** | Consultar `.agent/workflows/standard_procedure.md` para o passo a passo completo. |
+| **Workflow** | Consultar `.agent/workflows/standard_procedure.md` para o SOP local de desenvolvimento. Isso não faz parte do runtime operacional do bot. |
+
+### 🗺️ Mapa de Diretórios dos Agentes
+| Diretório | Papel real hoje |
+|-----------|-----------------|
+| `.agents/` | Código, prompts e orquestração do sistema multi-agente do bot. |
+| `data/agent/` | Estado persistido real do runtime: config, status, `health.json`, regras aprendidas e checkpoints. |
+| `.agents/shared-memory/` | Legado. Está preservado por histórico, mas não é lido pelo runtime atual. |
+| `.agent/` | Tooling externo/local de desenvolvimento (ECC). Útil para engenharia, mas fora do runtime do bot. |
 
 ### 🚀 Descoberta Híbrida e Fila de Estabilização (Trading Stagnation Fix)
 Corrigido o problema onde o robô parava de executar trades devido a limiares de alerta muito altos e falta de dados iniciais em novos tokens.
@@ -285,7 +306,7 @@ npm run skill:import -- --repo user/repo --file skills/Strategy.md
 npm run skill:delete -- SkillName
 ```
 
-**Criar uma skill** — basta criar um `.md` em `.agents/skills/`:
+**Criar uma skill** — para skills locais/importadas, crie um `.md` em `.agents/skills/custom/`:
 ```yaml
 ---
 name: MinhaSkill
@@ -297,6 +318,8 @@ priority: 10
 ---
 # Instruções detalhadas para o agente...
 ```
+
+> Observação: o `SkillLoader` atual escaneia a árvore `.agents/skills/`, incluindo skills avulsas na raiz, diretórios com `SKILL.md` e overrides locais em `.agents/skills/custom/`. Para novas skills do projeto, prefira `custom/`.
 
 **Skills Built-in:**
 
@@ -311,7 +334,9 @@ priority: 10
 - `utils/skillLoader.ts` — Descoberta e parse de skills
 - `utils/skillRegistry.ts` — Seleção e injeção no prompt
 - `tools/import-skill.ts` — CLI de importação
-- `.agents/skills/*.md` — Diretório de skills
+- `.agents/skills/` — Árvore de skills carregada pelo runtime
+- `.agents/skills/custom/*.md` — Diretório recomendado para skills locais/importadas e overrides
+- `data/agent/` — Estado persistido real do agente (`config.json`, `status.json`, `health.json`, `patterns.json`, `learner-state.json`)
 - `docs/SKILLS.md` — Documentação completa
 
 **See:** [SKILLS.md](docs/SKILLS.md) for full documentation.

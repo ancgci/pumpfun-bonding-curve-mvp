@@ -13,6 +13,12 @@ import { answerTelegramCopilotQuestion } from '../utils/telegramCopilot';
 
 const execPromise = util.promisify(exec);
 
+const escapeHtml = (value: unknown): string =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
 // Carregar variáveis de ambiente baseadas na raiz do projeto
 dotenv.config();
 
@@ -76,22 +82,36 @@ bot.onText(/\/status/, async (msg) => {
   try {
     const { stdout: psOut } = await execPromise("pm2 jlist");
     const json = JSON.parse(psOut || "[]");
+    const snapshot = getDashboardSnapshot({ recentTradesLimit: 3, recentPositionsLimit: 3 });
     
-    let report = "📈 *Status do PM2*\n";
+    let report = "📈 <b>Status do PM2</b>\n";
     for (const p of json) {
-       report += `\n📦 *${p.name}* \n├ Status: ${p.pm2_env.status}\n├ CPU: ${p.monit.cpu}%\n└ RAM: ${(p.monit.memory / 1024 / 1024).toFixed(1)}MB\n`;
+       report += `\n📦 <b>${escapeHtml(p.name)}</b>\n├ Status: ${escapeHtml(p.pm2_env.status)}\n├ CPU: ${escapeHtml(p.monit.cpu)}%\n└ RAM: ${escapeHtml((p.monit.memory / 1024 / 1024).toFixed(1))}MB\n`;
     }
     
-    // Tenta puxar o JSON de estatisticas rápidas, se existir!
-    try {
-      const { stdout: catStats } = await execPromise("cat data/agent/status.json 2>/dev/null || echo ''");
-      if (catStats) {
-        const stats = JSON.parse(catStats);
-        report += `\n🤖 *Agent State*\n├ RateLimited: ${stats.rateLimited}\n└ Reason: ${stats.reason || "N/A"}`;
-      }
-    } catch(e) {}
+    report += `\n🤖 <b>Agent Runtime</b>\n`;
+    report += `├ Mode: ${escapeHtml(snapshot.agent.mode)}\n`;
+    report += `├ RateLimited: ${snapshot.agent.rateLimited ? "SIM" : "NÃO"}\n`;
+    report += `└ Learned Rules: ${snapshot.agent.learnedRulesCount}\n`;
+
+    const subSummary = snapshot.agent.subAgentSummary;
+    report += `\n🧠 <b>Sub-agents</b>\n`;
+    report += `├ Total: ${subSummary.total} | Healthy: ${subSummary.healthy} | Running: ${subSummary.running}\n`;
+    report += `├ Idle: ${subSummary.idle} | Degraded: ${subSummary.degraded} | Disabled: ${subSummary.disabled} | Error: ${subSummary.error}\n`;
+
+    const subAgentLines = snapshot.agent.subAgents
+      .map((agent, index) => {
+        const queue = typeof agent.queueSize === "number" && agent.queueSize > 0 ? ` | queue ${agent.queueSize}` : "";
+        const prefix = index === snapshot.agent.subAgents.length - 1 ? "└" : "├";
+        return `${prefix} ${escapeHtml(agent.label)}: ${escapeHtml(agent.status.toUpperCase())}${queue}`;
+      })
+      .join("\n");
+
+    if (subAgentLines) {
+      report += `${subAgentLines ? `${subAgentLines}\n` : ""}`;
+    }
     
-    bot.sendMessage(chatId, report, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, report, { parse_mode: "HTML" });
   } catch (error: any) {
     bot.sendMessage(chatId, `❌ Falha ao buscar status: ${error.message}`);
   }

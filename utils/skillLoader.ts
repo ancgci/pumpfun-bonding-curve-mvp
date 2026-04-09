@@ -16,7 +16,13 @@ import logger from "./logger";
  *   - Just-in-time content loading (only reads full body when needed)
  */
 
-const SKILLS_DIR = path.join(process.cwd(), ".agents/skills/custom");
+const SKILLS_ROOT_DIR = path.join(process.cwd(), ".agents/skills");
+const CUSTOM_SKILLS_DIR = path.join(SKILLS_ROOT_DIR, "custom");
+
+interface SkillCandidate {
+    filePath: string;
+    loadPriority: number;
+}
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -119,22 +125,23 @@ export function discoverSkills(forceRescan = false): SkillMeta[] {
         return Array.from(skillCache.values());
     }
 
-    if (!fs.existsSync(SKILLS_DIR)) {
-        logger.debug(`[SkillLoader] Skills directory not found: ${SKILLS_DIR}`);
+    if (!fs.existsSync(SKILLS_ROOT_DIR)) {
+        logger.debug(`[SkillLoader] Skills directory not found: ${SKILLS_ROOT_DIR}`);
         return [];
     }
 
-    const newCache = new Map<string, SkillMeta>();
-    const files = fs.readdirSync(SKILLS_DIR).filter(f => f.endsWith(".md"));
+    const selectedSkills = new Map<string, { skill: SkillMeta; loadPriority: number }>();
+    const files = discoverSkillFiles();
 
-    for (const file of files) {
+    for (const candidate of files) {
         try {
-            const filePath = path.join(SKILLS_DIR, file);
+            const filePath = candidate.filePath;
             const raw = fs.readFileSync(filePath, "utf-8");
             const { meta } = parseFrontmatter(raw);
+            const skillName = getSkillName(meta, filePath);
 
             const skill: SkillMeta = {
-                name: meta.name || file.replace(".md", ""),
+                name: skillName,
                 description: meta.description || "",
                 version: meta.version || "1.0",
                 tags: Array.isArray(meta.tags) ? meta.tags : [],
@@ -143,23 +150,35 @@ export function discoverSkills(forceRescan = false): SkillMeta[] {
                 filePath,
             };
 
-            newCache.set(skill.name, skill);
+            const existing = selectedSkills.get(skill.name);
+            if (!existing || candidate.loadPriority >= existing.loadPriority) {
+                if (existing) {
+                    logger.info(
+                        `[SkillLoader] Overriding skill '${skill.name}' from ${toSkillRelativePath(existing.skill.filePath)} with ${toSkillRelativePath(filePath)}`
+                    );
+                }
+                selectedSkills.set(skill.name, { skill, loadPriority: candidate.loadPriority });
+            }
         } catch (err: any) {
-            logger.warn(`[SkillLoader] Failed to parse skill ${file}: ${err.message}`);
+            logger.warn(`[SkillLoader] Failed to parse skill ${toSkillRelativePath(candidate.filePath)}: ${err.message}`);
         }
     }
 
-    skillCache = newCache;
+    skillCache = new Map(
+        Array.from(selectedSkills.entries())
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([name, entry]) => [name, entry.skill])
+    );
     lastScanTime = now;
 
-    if (newCache.size > 0) {
-        const names = Array.from(newCache.keys()).join(", ");
-        logger.info(`✅ [SkillLoader] Loaded ${newCache.size} skills: ${names}`);
+    if (skillCache.size > 0) {
+        const names = Array.from(skillCache.keys()).join(", ");
+        logger.info(`✅ [SkillLoader] Loaded ${skillCache.size} skills: ${names}`);
     } else {
-        logger.info(`[SkillLoader] No skills found in ${SKILLS_DIR}`);
+        logger.info(`[SkillLoader] No skills found in ${SKILLS_ROOT_DIR}`);
     }
 
-    return Array.from(newCache.values());
+    return Array.from(skillCache.values());
 }
 
 /**
@@ -211,3 +230,78 @@ export function getSkillsByTag(tag: string): SkillMeta[] {
 
 // Auto-discover on import
 discoverSkills();
+
+function discoverSkillFiles(): SkillCandidate[] {
+    const candidates: SkillCandidate[] = [];
+    walkSkillTree(SKILLS_ROOT_DIR, candidates);
+
+    return candidates.sort((a, b) => {
+        if (a.loadPriority !== b.loadPriority) {
+            return a.loadPriority - b.loadPriority;
+        }
+        return a.filePath.localeCompare(b.filePath);
+    });
+}
+
+function walkSkillTree(dir: string, candidates: SkillCandidate[]): void {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+        if (entry.name.startsWith(".")) continue;
+
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            walkSkillTree(fullPath, candidates);
+            continue;
+        }
+
+        const candidate = toSkillCandidate(fullPath);
+        if (candidate) {
+            candidates.push(candidate);
+        }
+    }
+}
+
+function toSkillCandidate(filePath: string): SkillCandidate | null {
+    const baseName = path.basename(filePath);
+    if (baseName === "SKILL.md") {
+        return { filePath, loadPriority: 20 };
+    }
+
+    if (!filePath.endsWith(".md")) {
+        return null;
+    }
+
+    const parentDir = path.dirname(filePath);
+    if (parentDir === SKILLS_ROOT_DIR) {
+        return { filePath, loadPriority: 10 };
+    }
+
+    if (isPathInside(filePath, CUSTOM_SKILLS_DIR)) {
+        return { filePath, loadPriority: 30 };
+    }
+
+    return null;
+}
+
+function getSkillName(meta: Record<string, any>, filePath: string): string {
+    if (typeof meta.name === "string" && meta.name.trim().length > 0) {
+        return meta.name.trim();
+    }
+
+    const baseName = path.basename(filePath);
+    if (baseName === "SKILL.md") {
+        return path.basename(path.dirname(filePath));
+    }
+
+    return baseName.replace(/\.md$/i, "");
+}
+
+function isPathInside(filePath: string, rootDir: string): boolean {
+    const relative = path.relative(rootDir, filePath);
+    return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function toSkillRelativePath(filePath: string): string {
+    return path.relative(process.cwd(), filePath) || filePath;
+}

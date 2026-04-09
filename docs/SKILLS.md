@@ -8,10 +8,10 @@ O sistema de Skills permite adicionar conhecimento especializado ao agente de IA
 
 ```
 .agents/skills/          ← Diretório de skills
-├── PumpFunScalper.md    ← Estratégia de scalping (core)
-├── RiskAnalyzer.md      ← Análise de risco
-├── VolumeAnalysis.md    ← Detecção de wash trading
-└── WalletTracker.md     ← Análise de whales
+├── custom/              ← Skills locais/importadas e overrides
+├── openai-docs.md       ← Skill avulsa na raiz
+└── PumpFunOrganicityGuard/
+    └── SKILL.md         ← Skill em diretório próprio
 
 utils/
 ├── skillLoader.ts       ← Descobre e parseia skills
@@ -43,7 +43,7 @@ npm run skill:delete -- SkillName
 
 ## Criando uma Skill
 
-Crie um arquivo `.md` em `.agents/skills/` com este formato:
+Crie um arquivo `.md` em `.agents/skills/custom/` com este formato:
 
 ```markdown
 ---
@@ -100,7 +100,7 @@ O orquestrador identifica o tipo de token e solicita ao `skillRegistry` as skill
 
 ## Como Funciona
 
-1. **Boot**: `skillLoader.ts` escaneia `.agents/skills/` e carrega metadados
+1. **Boot**: `skillLoader.ts` escaneia `.agents/skills/` recursivamente
 2. **Análise de Token**: `agentOrchestrator.ts` chama `getActiveSkillsPrompt()`
 3. **Seleção**: `skillRegistry.ts` filtra skills por tags/prioridade
 4. **Injeção**: Conteúdo das skills é injetado no system prompt do LLM
@@ -123,7 +123,7 @@ npm run skill:import -- --repo trading-community/solana-skills --file skills/Dex
 ### Requisitos para skills externas:
 - Deve ser um arquivo `.md` com frontmatter YAML válido
 - Deve ter campo `name` no frontmatter
-- O arquivo é salvo automaticamente em `.agents/skills/`
+- O arquivo é salvo automaticamente em `.agents/skills/custom/`
 
 ---
 

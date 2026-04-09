@@ -6,6 +6,13 @@ Além do pipeline online, o bot agora possui um **ciclo offline de feedback** pa
 
 Em paralelo, o bot também pode ativar um **worker assíncrono de reentrada em winners recentes**. Esse worker não compra direto por memória de sucesso: ele monta uma fila curta de candidatos e reaplica o mesmo pipeline principal antes de qualquer nova entrada.
 
+## 🗺️ Mapa de Diretórios
+
+- `.agents/agents/` e `.agents/orchestrator/`: código-fonte do sistema multi-agente.
+- `data/agent/`: estado persistido real do runtime, incluindo `patterns.json`, `learner-state.json`, `status.json`, `config.json` e `health.json`.
+- `.agents/shared-memory/`: diretório legado mantido apenas por histórico; o runtime atual não lê nem grava estado aqui.
+- `.agent/`: tooling local de desenvolvimento/ECC. Não participa do boot nem da persistência operacional do bot.
+
 ## 🔄 Fluxo de Execução (Pipeline 8/8)
 
 Para cada token detectado via gRPC, o bot percorre as seguintes fases:
@@ -89,6 +96,13 @@ graph TD
 *   **Log**: `🧠 [LearnerAgent]`
 *   **Função**: Consome os post-mortems gerados, sintetiza aprendizados recorrentes e injeta regras no prompt do agente principal.
 *   **Observação**: O `PostMortemAgent` roda primeiro; o `LearnerAgent` usa essa análise enriquecida para produzir regras melhores.
+*   **Persistência real**: regras e checkpoint ficam em `data/agent/patterns.json` e `data/agent/learner-state.json`.
+
+## ❤️ Health Snapshot
+
+- `data/agent/health.json` centraliza a saúde operacional dos subagentes.
+- O snapshot registra `status`, `enabled`, `lastRunAt`, `lastSuccessAt`, `lastHeartbeatAt`, `lastError`, `queueSize` e `details` por agente.
+- Hoje ele cobre pelo menos: `orchestrator`, `learner`, `postMortem`, `winnerReentry` e `dipMonitor`.
 
 ### WinnerReentryAgent
 *   **Log**: `🧠 [WinnerReentryAgent]`
