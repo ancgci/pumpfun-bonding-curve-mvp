@@ -2,6 +2,10 @@
 
 Base URL: `http://localhost:3001/api`
 
+## Auth
+
+Os endpoints operacionais do dashboard exigem autenticação. Em produção, respostas `401 Unauthorized` indicam que a API está online, mas protegida por sessão/auth middleware.
+
 ## Endpoints
 
 ### GET `/api/me/account`
@@ -231,6 +235,51 @@ Retorna estatísticas gerais do bot.
 - `circuitBreaker.tripReason` - Motivo da ativação (se aplicável)
 - `circuitBreaker.dailyLoss` - Perda acumulada hoje (SOL)
 - `circuitBreaker.consecutiveFailures` - Falhas seguidas
+
+---
+
+### GET `/api/agent/postmortems`
+
+Retorna a lista recente de autópsias operacionais.
+
+**Query params:**
+- `limit` (opcional, default backend)
+
+**Uso atual:**
+- abastece o card de pós-mortem no dashboard premium
+- abastece a visualização resumida do dashboard clássico
+
+---
+
+### GET `/api/agent/postmortem-summary`
+
+Retorna um agregado operacional da fila de pós-mortem.
+
+**Campos principais esperados:**
+- backlog pendente
+- concluídos
+- falhas
+- anomalias
+- causas/razões dominantes
+- lista recente resumida
+
+**Uso atual:**
+- card `Post-Mortem Insights`
+- monitoria operacional do dashboard AI
+
+---
+
+### GET `/api/simulation/trades`
+
+Retorna o histórico de trades simulados.
+
+**Mudanças recentes no payload:**
+- `postMortemStatus`
+- `postMortemSummary`
+- `postMortemAnalyzedAt`
+- metadados de auditoria/anomalia de entrada e saída
+
+Esses campos são usados para mostrar o contexto do trade no histórico e para diferenciar trades limpos de trades anômalos.
 
 ---
 

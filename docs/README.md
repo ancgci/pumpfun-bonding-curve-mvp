@@ -18,6 +18,27 @@ Após os ajustes de banda aplicados em **20/03/2026**, o perfil recomendado para
 - `vnstat` instalado na VPS para histórico de tráfego
 - alerta diário em Telegram configurado para `5 GiB/dia`
 - `tools/vnstat_daily_alert.py` executado via `cron` a cada 15 minutos na VPS
+- estratégia de recuperação de ATA habilitada no código com `ENABLE_ATA_EXIT_STRATEGY=true`
+- dashboard premium e clássico já consomem dados agregados de pós-mortem
+- deploy em produção agora deve ser cirúrgico, preservando `.env`, `data/`, banco SQLite e estado aprendido
+
+## 🔄 Mudanças Recentes Relevantes
+
+### ATA-aware exits
+- o valor nominal do trade continua vindo de `BUY_AMOUNT_SOL`
+- o custo/recuperação do ATA é tratado separadamente na saída
+- a decisão de saída compara venda líquida vs. fechamento do ATA
+- referência atual do rent do ATA: `ATA_RENT_SOL=0.00203928`
+
+### Preflight operacional
+- em `LIVE`, o bot exige saldo livre acima da entrada nominal
+- isso acontece por meio do `EXECUTION_PREFLIGHT_SOL_BUFFER`
+- com trade de `0.005 SOL`, o mínimo prático para liberar a entrada é `0.020 SOL`
+
+### Observabilidade de pós-mortem
+- trades simulados agora carregam `postMortemStatus`, `postMortemSummary` e timestamp de análise
+- o dashboard premium mostra um card `Post-Mortem Insights`
+- o dashboard clássico mostra os pós-mortems recentes
 
 ## 🌟 Características Principais
 
@@ -53,6 +74,12 @@ Após os ajustes de banda aplicados em **20/03/2026**, o perfil recomendado para
 - **Sprint 11: Descoberta Híbrida & Estabilização** ✅
 - **Descoberta Antecipada**: Operação a partir de 15% de curva, independente de alertas.
 - **Fila de Compra Imediata**: Compra aprovada por IA assim que dados estabilizam (15s).
+
+### Sprint 12: ATA Exit Recovery & Post-Mortem Dashboard ✅
+- **ATA-aware Exit Strategy** - escolhe entre venda líquida e recuperação por fechamento do ATA.
+- **Live Position Runtime** - sincroniza saldo, estimativa de saída e componentes líquidos com mais precisão.
+- **Post-Mortem Summary API** - agrega fila, falhas, anomalias e causas dominantes.
+- **Dashboard Insights** - card dedicado de pós-mortem no premium e lista recente no clássico.
 
 ## 📊 Impacto Total
 
@@ -159,6 +186,7 @@ npx ts-node tools/backtester.ts --tp=50 --sl=15
 - [Telegram Copilot com Dashboard](TELEGRAM_DASHBOARD_COPILOT_2026-03-30.md) - Snapshot compartilhado do dashboard, novos comandos `/dashboard`, `/agent`, `/positions`, `/sim`, `/ask` e IA com contexto operacional real
 - [Hardening de Segurança](SECURITY_HARDENING.md) - Protocolo de proteção e auditoria da VPS
 - [API do Dashboard](API.md) - Endpoints REST
+- [Loss Post-Mortem Agent](LOSS_POSTMORTEM_AGENT.md) - Fluxo de análise pós-perda e fila de autópsias
 - [Configuração](CONFIGURATION.md) - Todas as variáveis de ambiente
 - [Changelog](CHANGELOG.md) - Histórico de melhorias
 

@@ -138,8 +138,65 @@ Quantidade de SOL para investir por trade.
 
 **Recomendação:** Comece com `0.01` para testes.
 
+**Importante:** este valor é apenas a entrada nominal do trade. Ele **não embute** o rent do ATA nem o buffer operacional usado no preflight.
+
 ```bash
 BUY_AMOUNT_SOL=0.05
+```
+
+---
+
+### `ENABLE_ATA_EXIT_STRATEGY`
+Ativa a estratégia de saída sensível a ATA.
+
+Quando habilitada, o runtime pode preferir `burn + close ATA` em vez de uma venda tradicional, conforme o valor líquido estimado.
+
+**Padrão:** `true` quando configurado explicitamente no ambiente do projeto.
+
+```bash
+ENABLE_ATA_EXIT_STRATEGY=true
+```
+
+---
+
+### `ATA_RENT_SOL`
+Valor de referência do rent recuperável ao fechar o ATA.
+
+Esse valor é usado na avaliação da estratégia de saída, não como parte do `BUY_AMOUNT_SOL`.
+
+**Valor atual recomendado:** `0.00203928`
+
+```bash
+ATA_RENT_SOL=0.00203928
+```
+
+---
+
+### `EXECUTION_PREFLIGHT_SOL_BUFFER`
+Reserva mínima extra de SOL exigida em `LIVE` antes de permitir uma entrada.
+
+Serve para evitar trades com saldo justo demais para taxas, ATA e operação segura.
+
+**Exemplo prático:**
+- `BUY_AMOUNT_SOL=0.005`
+- `EXECUTION_PREFLIGHT_SOL_BUFFER=0.015`
+- saldo mínimo aproximado para liberar entrada: `0.020 SOL`
+
+```bash
+EXECUTION_PREFLIGHT_SOL_BUFFER=0.015
+```
+
+---
+
+### `SELL_PERCENT_ON_TP`
+Percentual do saldo vendido quando o TP dispara.
+
+**Exemplo atual comum:** `95`
+
+Isso permite manter uma pequena sobra residual enquanto a estratégia ATA-aware decide o melhor fechamento operacional.
+
+```bash
+SELL_PERCENT_ON_TP=95
 ```
 
 ---

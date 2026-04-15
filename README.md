@@ -27,6 +27,7 @@ All project documentation is in the `/docs` folder:
 - **[SKILLS](docs/SKILLS.md)** - Pluggable Skills system
 - **[API](docs/API.md)** - Dashboard API documentation
 - **[DASHBOARD](docs/DASHBOARD.md)** - Dashboard V2 (React) guide
+- **[LOSS_POSTMORTEM_AGENT](docs/LOSS_POSTMORTEM_AGENT.md)** - Fluxo de autópsia, fila de pós-mortem e aprendizado operacional
 - **[SCALPER_STRATEGY](docs/SCALPER_STRATEGY_OPTIMIZATION.md)** - Technical Analysis scalping guide
 - **[QA](docs/QA.md)** - QAgent testing infrastructure
 - **[ORGANICITY](docs/ORGANICITY_PROTECTION.md)** - Anti-manipulation detection
@@ -42,6 +43,15 @@ This repository now supports a two-layer backup strategy:
 - raw runtime databases are blocked at commit time; keep only compressed recovery artifacts in git
 
 See **[DISASTER_RECOVERY](docs/DISASTER_RECOVERY.md)** for the backup and restore flow.
+
+## ✅ Current Trading Notes
+
+- `BUY_AMOUNT_SOL` é o valor nominal da entrada por trade
+- o custo do ATA não está embutido no valor do trade; ele é tratado separadamente pela estratégia de saída
+- a recuperação do ATA está ativa via `ENABLE_ATA_EXIT_STRATEGY=true`
+- referência atual de rent do ATA: `ATA_RENT_SOL=0.00203928`
+- o preflight também exige buffer de SOL antes de liberar uma entrada em `LIVE`
+- com trade de `0.005 SOL`, a wallet precisa ter saldo acima de `0.020 SOL` para passar no preflight (`0.005` da entrada + `0.015` de buffer)
 
 ## ⚙️ Current VPS Profile
 
@@ -91,6 +101,8 @@ GOOGLE_LLM_MODEL=gemini-2.5-flash
 FAST_LANE_ENABLED=true
 PORTFOLIO_GOVERNOR_ENABLED=true
 EXECUTION_PREFLIGHT_ENABLED=true
+ENABLE_ATA_EXIT_STRATEGY=true
+ATA_RENT_SOL=0.00203928
 
 # 3. Start bot + dashboard simultaneously
 npm run start:all
@@ -98,6 +110,7 @@ npm run start:all
 
 **Result:** Bot and Dashboard start together.
 - React Dashboard V2: http://localhost:5174 (run `cd dashboard && npm run dev`)
+- Dashboard API / auth / classic static UI: http://localhost:3001
 
 ---
 
@@ -151,6 +164,14 @@ pm2 restart bot --update-env
 pm2 restart dashboard-api --update-env
 pm2 save
 
+### Live Trading Flow
+
+1. Depositar SOL na wallet ativa do bot.
+2. Confirmar no dashboard qual wallet está marcada como ativa.
+3. Ajustar `BUY_AMOUNT_SOL` para o sizing desejado.
+4. Mudar o modo do agente para `LIVE` no dashboard.
+5. Validar que existe saldo suficiente para entrada + buffer operacional.
+
 
 ### 💎 Premium Financial Dashboard & Crypto Wallet (Mar 16, 2026)
 O dashboard foi elevado a um patamar profissional com uma interface de alto desempenho focada em métricas financeiras e gestão de ativos.
@@ -166,6 +187,35 @@ O dashboard foi elevado a um patamar profissional com uma interface de alto dese
 | **Integrated Terminal** | Terminal de logs em tempo real portado diretamente para a aba "Logs". |
 
 **Arquivos:** `dashboard/src/components/premium/*`, `dashboard/src/components/dashboard/AgentStatus.tsx`.
+
+### 🧾 ATA Exit Recovery & Post-Mortem Visibility (Apr 14, 2026)
+
+As mudanças mais recentes adicionaram uma camada prática de recuperação de valor e observabilidade operacional:
+
+| Feature | Description |
+|---------|-------------|
+| **ATA Exit Recovery** | A estratégia de saída agora considera `burn + close ATA` e compara `sell` líquido vs. `close ATA` líquido antes de decidir a execução. |
+| **Execution Preflight Buffer** | O bot exige saldo adicional além do `BUY_AMOUNT_SOL` para evitar entradas sem margem para taxas e operação segura. |
+| **Post-Mortem Summary API** | Novo endpoint `GET /api/agent/postmortem-summary` agrega backlog, concluídos, falhas, anomalias e causas recentes. |
+| **Post-Mortem Insights Card** | O dashboard premium passou a exibir um card dedicado de pós-mortem com fila, status e causas dominantes. |
+| **Trade History Context** | Cada trade agora pode mostrar status e resumo inline da autópsia. |
+| **Classic Dashboard Sync** | O dashboard clássico também passou a exibir a lista simples de post-mortems recentes. |
+
+**Arquivos:** `utils/exitStrategy.ts`, `utils/livePositionRuntime.ts`, `utils/hybridExecutor.ts`, `dashboard-api/server.ts`, `dashboard/src/components/dashboard/PostMortemInsights.tsx`.
+
+### 🚚 Surgical VPS Deploy (Apr 14, 2026)
+
+O deploy passou a seguir um fluxo cirúrgico para preservar aprendizado e estado operacional da VPS:
+
+| Etapa | Objetivo |
+|------|----------|
+| **Two-layer backup** | Snapshot completo local + snapshot GitHub-safe do runtime |
+| **Remote quick rollback** | Backup imediato de `data/` e `pnl_history.db` na própria VPS |
+| **Code-only sync** | `rsync` apenas de código, sem sobrescrever `.env`, `data/`, bancos e runtime |
+| **Remote rebuild** | Reinstalação/build remoto antes do restart |
+| **PM2 controlled restart** | Restart apenas de `bot` e `dashboard-api`, preservando o resto |
+
+**Referências:** `scripts/backup/two-layer-backup.sh`, `docs/DISASTER_RECOVERY.md`, `docs/VPS_DEPLOYMENT.md`.
 
 ### 🛡️ VPS Security Hardening (Mar 16, 2026)
 Após um incidente de segurança, a VPS foi totalmente reinstalada (Ubuntu 24.04) e protegida com um novo protocolo de hardening.

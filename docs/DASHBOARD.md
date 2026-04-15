@@ -53,6 +53,7 @@ A interface padrão agora é modular e organizada em abas, permitindo controle t
 
 4. **AI Agent (Inteligência):**
     - **Agent Intelligence Status:** Métricas de confiança e padrões detectados pela IA em layout horizontal otimizado.
+    - **Post-Mortem Insights:** Resumo operacional com backlog, concluídos, falhas, anomalias e causas dominantes.
 
 5. **Wallet (Gestão de Ativos):**
    - **Saldo Multi-Assets:** Visualização detalhada de SOL e tokens (PUMP, etc.) com conversão para USD.
@@ -66,6 +67,11 @@ A interface padrão agora é modular e organizada em abas, permitindo controle t
 ## 🗂️ Classic Dashboard
 
 Acessível via `/classic`, mantém a interface legada baseada no layout original do bot para usuários que preferem a visualização antiga.
+
+### Mudanças recentes no Classic
+- seção de post-mortems recentes adicionada
+- mesma fonte de dados operacional usada no premium
+- útil para checagem rápida sem abrir a UI premium
 
 ---
 
@@ -82,6 +88,9 @@ O dashboard é alimentado por uma API robusta e eventos em real-time:
 | `/api/agent/stats` | Status da IA e configurações atuais |
 | `/api/agent/logs` | Stream de logs para o terminal |
 | `/api/trading-config` | Persistência de parâmetros de trade |
+| `/api/agent/postmortems` | Lista recente de autópsias |
+| `/api/agent/postmortem-summary` | Resumo agregado da fila de pós-mortem |
+| `/api/simulation/trades` | Histórico com status/resumo de pós-mortem por trade |
 
 ---
 
@@ -91,13 +100,27 @@ O dashboard é alimentado por uma API robusta e eventos em real-time:
 dashboard/src/
 ├── components/
 │   ├── premium/      # Nova interface financeira
-│   └── dashboard/    # Interface clássica (abas)
+│   └── dashboard/    # Interface clássica (abas + cards compartilhados)
 ├── stores/
 │   └── authStore.ts  # Gerenciamento de sessão
 ├── hooks/
-│   └── useDashboardData.tsx # Integração de dados
+│   └── useDashboardData.tsx # Integração de dados, post-mortem e estado global
 └── App.tsx           # Router e Provedores
 ```
+
+## 🔍 O que mudou agora
+
+### Trade History
+- passou a renderizar `postMortemStatus` e `postMortemSummary`
+- datas ausentes agora aparecem como `--` de forma segura no frontend
+
+### AI Tab
+- novo card `Post-Mortem Insights`
+- leitura de resumo agregado via API dedicada
+
+### Operação ao vivo
+- a entrada nominal continua vinda de `BUY_AMOUNT_SOL`
+- a estratégia ATA-aware e o buffer de preflight afetam a segurança operacional, não o layout
 
 ---
 
