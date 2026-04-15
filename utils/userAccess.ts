@@ -1,3 +1,4 @@
+import fs from 'fs';
 import db from './db';
 
 export type UserRole = 'ADMIN' | 'USER' | 'SUPPORT';
@@ -182,7 +183,11 @@ export function ensureBootstrapAdminUser(params: {
         throw new Error(`Failed to bootstrap admin user for ${email}`);
     }
 
-    if (params.walletPublicKey) {
+    const existingWallets = listUserWallets(adminUser.id);
+
+    // Bootstrap should only seed the first managed wallet. Once the user
+    // already has wallet state, that state becomes the source of truth.
+    if (params.walletPublicKey && existingWallets.length === 0) {
         ensureUserWallet({
             userId: adminUser.id,
             publicKey: params.walletPublicKey,
@@ -342,10 +347,14 @@ export function deleteUserWallet(userId: number, walletId: number) {
         throw new Error('Cannot delete the only wallet. You must have at least one wallet.');
     }
 
-    // Delete secret file if it exists
-    if (wallet.secretRef && require('fs').existsSync(wallet.secretRef)) {
+    const secretRefStillReferenced = wallet.secretRef
+        ? allWallets.some((item) => item.id !== wallet.id && item.secretRef === wallet.secretRef)
+        : false;
+
+    // Delete secret file only when no remaining wallet still references it.
+    if (wallet.secretRef && !secretRefStillReferenced && fs.existsSync(wallet.secretRef)) {
         try {
-            require('fs').unlinkSync(wallet.secretRef);
+            fs.unlinkSync(wallet.secretRef);
         } catch (err) {
             console.error(`[Wallet] Failed to delete secret file for wallet ${walletId}:`, err);
         }

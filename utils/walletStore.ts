@@ -31,6 +31,42 @@ function loadEnvKeypair(): Keypair | null {
   }
 }
 
+function keypairMatchesPublicKey(keypair: Keypair | null, expectedPublicKey?: string | null) {
+  if (!keypair || !expectedPublicKey) return false;
+  return keypair.publicKey.toBase58() === expectedPublicKey;
+}
+
+function loadFallbackWalletCandidates() {
+  const envKeypair = loadEnvKeypair();
+  const legacy = loadLegacyBotWallet();
+
+  const candidates = [];
+
+  if (envKeypair) {
+    candidates.push({
+      keypair: envKeypair,
+      publicKey: envKeypair.publicKey.toBase58(),
+      secretRef: "env:SECRET_KEY_JSON",
+      source: "env_secret" as const,
+    });
+  }
+
+  if (legacy) {
+    candidates.push(legacy);
+  }
+
+  if (WALLET_ADDRESS_ENV) {
+    candidates.push({
+      keypair: null,
+      publicKey: WALLET_ADDRESS_ENV,
+      secretRef: null,
+      source: "env_address" as const,
+    });
+  }
+
+  return candidates;
+}
+
 export function loadLegacyBotWallet() {
   try {
     if (!fs.existsSync(LEGACY_BOT_WALLET_FILE)) return null;
@@ -49,26 +85,7 @@ export function loadLegacyBotWallet() {
 }
 
 export function loadConfiguredFallbackWallet() {
-  const legacy = loadLegacyBotWallet();
-  if (legacy) return legacy;
-
-  const envKeypair = loadEnvKeypair();
-  if (envKeypair) {
-    return {
-      keypair: envKeypair,
-      publicKey: envKeypair.publicKey.toBase58(),
-      secretRef: "env:SECRET_KEY_JSON",
-      source: "env_secret" as const,
-    };
-  }
-
-  if (!WALLET_ADDRESS_ENV) return null;
-  return {
-    keypair: null,
-    publicKey: WALLET_ADDRESS_ENV,
-    secretRef: null,
-    source: "env_address" as const,
-  };
+  return loadFallbackWalletCandidates()[0] || null;
 }
 
 export function loadKeypairFromSecretRef(secretRef?: string | null): Keypair | null {
@@ -99,9 +116,12 @@ export function createManagedWalletSecret(keypair: Keypair) {
   };
 }
 
-export function exportWalletSecretBase58(secretRef?: string | null) {
+export function exportWalletSecretBase58(secretRef?: string | null, expectedPublicKey?: string | null) {
   const keypair = loadKeypairFromSecretRef(secretRef);
   if (!keypair) return null;
+  if (expectedPublicKey && !keypairMatchesPublicKey(keypair, expectedPublicKey)) {
+    return null;
+  }
   return bs58.encode(keypair.secretKey);
 }
 
@@ -120,17 +140,17 @@ export function getActiveTradingWallet() {
 
   if (defaultWallet) {
     const dbKeypair = loadKeypairFromSecretRef(defaultWallet.secretRef);
-    if (dbKeypair) {
+    if (keypairMatchesPublicKey(dbKeypair, defaultWallet.publicKey)) {
       return {
         wallet: defaultWallet,
-        keypair: dbKeypair,
+        keypair: dbKeypair!,
         publicKey: defaultWallet.publicKey,
         secretRef: defaultWallet.secretRef,
         source: "db_wallet" as const,
       };
     }
 
-    if (fallback && fallback.publicKey === defaultWallet.publicKey) {
+    if (fallback?.keypair && fallback.publicKey === defaultWallet.publicKey) {
       return {
         wallet: defaultWallet,
         keypair: fallback.keypair,

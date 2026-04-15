@@ -7,9 +7,112 @@ interface TradeHistoryProps {
   expanded?: boolean;
 }
 
+interface FeedAuditShape {
+  pairAddress?: string | null;
+}
+
+interface AnomalyContextShape {
+  coherenceRatio?: number | null;
+}
+
+interface DisplayTrade {
+  symbol: string | null;
+  mint: string | null;
+  isSimulation: boolean;
+  status: string;
+  entryTime: string | number | null;
+  exitTime: string | number | null;
+  exitReason: string | null;
+  pnl: number;
+  buyAmountSol: number;
+  marketCapEntry: string | number | null;
+  marketCapExit: string | number | null;
+  anomalyFlag: boolean;
+  anomalyReason: string | null;
+  anomalyContext: unknown;
+  entryFeedAudit: unknown;
+  exitFeedAudit: unknown;
+  postMortemStatus: string | null;
+  postMortemSummary: string | null;
+}
+
 function getTrojanLink(mint: string): string {
   // Using the web terminal interface as requested
   return `https://trojan.com/terminal?token=${mint}&ref=juniocarlosbr`;
+}
+
+function parseJsonField<T>(value: unknown): T | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") return value as T;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function shortenAddress(value: string): string {
+  if (!value) return value;
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function getAnomalyDetail(trade: {
+  anomalyContext?: unknown;
+  entryFeedAudit?: unknown;
+  exitFeedAudit?: unknown;
+}): string | null {
+  const anomalyContext = parseJsonField<AnomalyContextShape>(trade.anomalyContext);
+  const entryFeedAudit = parseJsonField<FeedAuditShape>(trade.entryFeedAudit);
+  const exitFeedAudit = parseJsonField<FeedAuditShape>(trade.exitFeedAudit);
+  const details: string[] = [];
+
+  const coherenceRatio = Number(anomalyContext?.coherenceRatio);
+  if (Number.isFinite(coherenceRatio) && coherenceRatio > 0) {
+    details.push(`coherence x${coherenceRatio.toFixed(2)}`);
+  }
+
+  const entryPair = entryFeedAudit?.pairAddress;
+  const exitPair = exitFeedAudit?.pairAddress;
+  if (entryPair && exitPair) {
+    details.push(`pair ${shortenAddress(entryPair)} -> ${shortenAddress(exitPair)}`);
+  }
+
+  return details.length > 0 ? details.join(" | ") : null;
+}
+
+function getPostMortemDetail(trade: {
+  postMortemStatus?: string | null;
+  postMortemSummary?: string | null;
+}): { text: string; className: string } | null {
+  const status = String(trade.postMortemStatus || "").toUpperCase();
+  if (!status || status === "SKIPPED") return null;
+
+  if (status === "DONE") {
+    return {
+      text: trade.postMortemSummary || "Post-mortem completed",
+      className: "text-sky-300/80",
+    };
+  }
+
+  if (status === "PROCESSING") {
+    return {
+      text: "Post-mortem processing",
+      className: "text-sky-300/80",
+    };
+  }
+
+  if (status === "FAILED") {
+    return {
+      text: "Post-mortem failed, retry pending",
+      className: "text-rose-300/80",
+    };
+  }
+
+  return {
+    text: "Awaiting post-mortem",
+    className: "text-amber-300/80",
+  };
 }
 
 function getStatusColor(status: string, pnl: number): string {
@@ -19,7 +122,10 @@ function getStatusColor(status: string, pnl: number): string {
   return "";
 }
 
-function getStatusBadge(status: string, pnl: number) {
+function getStatusBadge(status: string, pnl: number, anomalyFlag?: boolean) {
+  if (anomalyFlag) {
+    return <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30">ANOMALY</Badge>;
+  }
   if (status === "OPEN")
     return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">OPEN</Badge>;
   if (status?.includes("TP") || (status !== "OPEN" && pnl > 0))
@@ -27,6 +133,18 @@ function getStatusBadge(status: string, pnl: number) {
   if (status?.includes("SL") || (status !== "OPEN" && pnl < 0))
     return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">{status}</Badge>;
   return <Badge variant="secondary">{status}</Badge>;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asTimestampLike(value: unknown): string | number | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+function asNumberish(value: unknown): string | number | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
 }
 
 export function TradeHistory({ expanded = false }: TradeHistoryProps) {
@@ -54,19 +172,29 @@ export function TradeHistory({ expanded = false }: TradeHistoryProps) {
     );
   }
 
-  const trades = rawTrades.map((t: any) => ({
-    symbol: t.symbol || t.tokenSymbol || null,
-    mint: t.mint || t.tokenMint || null,
-    isSimulation: t.isSimulation !== undefined ? t.isSimulation : true,
-    status: t.status || "OPEN",
-    entryTime: t.entryTime,
-    exitTime: t.exitTime,
-    exitReason: t.exitReason || t.reason || null,
-    pnl: Number(t.pnl || 0),
-    buyAmountSol: Number(t.buyAmountSol || t.entryAmount || t.invested || 0.1),
-    marketCapEntry: t.marketCapEntry || t.mcEntry || null,
-    marketCapExit: t.marketCapExit || t.mcExit || null,
-  }));
+  const trades: DisplayTrade[] = rawTrades.map((t: unknown) => {
+    const trade = (typeof t === "object" && t !== null ? t : {}) as Record<string, unknown>;
+    return {
+      symbol: asString(trade.symbol) || asString(trade.tokenSymbol),
+      mint: asString(trade.mint) || asString(trade.tokenMint),
+      isSimulation: trade.isSimulation !== undefined ? Boolean(trade.isSimulation) : true,
+      status: asString(trade.status) || "OPEN",
+      entryTime: asTimestampLike(trade.entryTime),
+      exitTime: asTimestampLike(trade.exitTime),
+      exitReason: asString(trade.exitReason) || asString(trade.reason),
+      pnl: Number(trade.pnl || 0),
+      buyAmountSol: Number(trade.buyAmountSol || trade.entryAmount || trade.invested || 0.1),
+      marketCapEntry: asNumberish(trade.marketCapEntry) || asNumberish(trade.mcEntry),
+      marketCapExit: asNumberish(trade.marketCapExit) || asNumberish(trade.mcExit),
+      anomalyFlag: trade.anomalyFlag === true || Number(trade.anomalyFlag) === 1,
+      anomalyReason: asString(trade.anomalyReason),
+      anomalyContext: trade.anomalyContext || null,
+      entryFeedAudit: trade.entryFeedAudit || null,
+      exitFeedAudit: trade.exitFeedAudit || null,
+      postMortemStatus: asString(trade.postMortemStatus),
+      postMortemSummary: asString(trade.postMortemSummary),
+    };
+  });
 
   return (
     <Card className="glass mt-4">
@@ -105,8 +233,13 @@ export function TradeHistory({ expanded = false }: TradeHistoryProps) {
                     : trade.pnl < 0
                       ? "text-red-400"
                       : "text-gray-400";
+                  const effectivePnlClass = trade.anomalyFlag ? "text-amber-300" : pnlClass;
+                  const anomalyDetail = trade.anomalyFlag ? getAnomalyDetail(trade) : null;
+                  const postMortemDetail = getPostMortemDetail(trade);
 
-                  const rowColor = getStatusColor(trade.status, trade.pnl);
+                  const rowColor = trade.anomalyFlag
+                    ? "bg-amber-500/5 border-l-4 border-l-amber-500"
+                    : getStatusColor(trade.status, trade.pnl);
 
                   return (
                     <tr
@@ -144,29 +277,33 @@ export function TradeHistory({ expanded = false }: TradeHistoryProps) {
                       </td>
                       {/* Status badge with colors */}
                       <td className="px-4 py-3">
-                        {getStatusBadge(trade.status, trade.pnl)}
+                        {getStatusBadge(trade.status, trade.pnl, trade.anomalyFlag)}
                       </td>
                       {/* Date */}
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                        {(() => {
-                          const d = new Date(trade.entryTime);
-                          return isNaN(d.getTime())
-                            ? "--"
-                            : d.toLocaleDateString();
-                        })()}
+                        {trade.entryTime
+                          ? (() => {
+                            const d = new Date(trade.entryTime);
+                            return isNaN(d.getTime())
+                              ? "--"
+                              : d.toLocaleDateString();
+                          })()
+                          : "--"}
                       </td>
                       {/* Entry Time */}
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                        {(() => {
-                          const d = new Date(trade.entryTime);
-                          return isNaN(d.getTime())
-                            ? "--"
-                            : d.toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            });
-                        })()}
+                        {trade.entryTime
+                          ? (() => {
+                            const d = new Date(trade.entryTime);
+                            return isNaN(d.getTime())
+                              ? "--"
+                              : d.toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              });
+                          })()
+                          : "--"}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {trade.exitTime
@@ -191,31 +328,61 @@ export function TradeHistory({ expanded = false }: TradeHistoryProps) {
                 {trade.marketCapExit ? `${Number(trade.marketCapExit).toLocaleString()} MC` : "--"}
               </td>
               {/* P&L Amount */}
-              <td className={`px-4 py-3 text-right font-medium font-mono whitespace-nowrap ${pnlClass}`}>
-                {trade.pnl > 0 ? "+" : ""}
+              <td className={`px-4 py-3 text-right font-medium font-mono whitespace-nowrap ${effectivePnlClass}`}>
+                {trade.pnl > 0 && !trade.anomalyFlag ? "+" : ""}
                 {trade.pnl.toFixed(4)} SOL
               </td>
               {/* P&L Percentage */}
-              <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${pnlClass}`}>
+              <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${effectivePnlClass}`}>
                 {(() => {
                   const pnl = Number(trade.pnl) || 0;
                   // Use buyAmountSol if available to calculate accurate %, otherwise fallback to a static visual or just show N/A
                   const invest = Number(trade.buyAmountSol || 0.1);
                   if (invest === 0) return "--";
                   const percent = (pnl / invest) * 100;
-                  return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
+                  return `${percent > 0 && !trade.anomalyFlag ? "+" : ""}${percent.toFixed(2)}%`;
                 })()}
-              </td>
+                      </td>
                       {/* Reason (Moved to end) */}
                       <td className="px-4 py-3 text-right text-muted-foreground text-xs whitespace-normal min-w-[120px]">
-                        {trade.exitReason === "TAKE_PROFIT" ? (
-                          <span className="text-green-400">Target Hit</span>
+                        {trade.anomalyFlag ? (
+                          <div className="space-y-1">
+                            <div>{trade.anomalyReason || trade.exitReason || "Anomalous trade"}</div>
+                            {anomalyDetail ? (
+                              <div className="text-[11px] text-amber-300/80">{anomalyDetail}</div>
+                            ) : null}
+                            {postMortemDetail ? (
+                              <div className={`text-[11px] ${postMortemDetail.className}`}>{postMortemDetail.text}</div>
+                            ) : null}
+                          </div>
+                        ) : trade.exitReason === "TAKE_PROFIT" ? (
+                          <div className="space-y-1">
+                            <span className="text-green-400">Target Hit</span>
+                            {postMortemDetail ? (
+                              <div className={`text-[11px] ${postMortemDetail.className}`}>{postMortemDetail.text}</div>
+                            ) : null}
+                          </div>
                         ) : trade.exitReason === "STOP_LOSS" ? (
-                          <span className="text-red-400">Stop Triggered</span>
+                          <div className="space-y-1">
+                            <span className="text-red-400">Stop Triggered</span>
+                            {postMortemDetail ? (
+                              <div className={`text-[11px] ${postMortemDetail.className}`}>{postMortemDetail.text}</div>
+                            ) : null}
+                          </div>
                         ) : trade.exitReason === "EXPIRED" ? (
-                          <span className="text-yellow-400">Timeout</span>
+                          <div className="space-y-1">
+                            <span className="text-yellow-400">Timeout</span>
+                            {postMortemDetail ? (
+                              <div className={`text-[11px] ${postMortemDetail.className}`}>{postMortemDetail.text}</div>
+                            ) : null}
+                          </div>
                         ) : (
-                          trade.exitReason || trade.status
+                          <div className="space-y-1">
+                            <div>{trade.exitReason || trade.status}</div>
+                            {postMortemDetail ? (
+                              <div className={`text-[11px] ${postMortemDetail.className}`}>{postMortemDetail.text}</div>
+                            ) : null}
+                          </div>
                         )}
                       </td>
                     </tr>

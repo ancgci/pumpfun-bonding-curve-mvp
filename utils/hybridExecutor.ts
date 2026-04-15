@@ -13,7 +13,12 @@ import {
 import { BN } from "@project-serum/anchor";
 import { decode } from "bs58";
 import { createJupiterApiClient } from "@jup-ag/api";
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createBurnInstruction,
+  createCloseAccountInstruction,
+} from "@solana/spl-token";
 import logger from "./logger";
 import { recordApiCall, recordError } from "./performanceMonitor";
 import { getATR } from "./volatilityMonitor";
@@ -29,6 +34,17 @@ import type { Position } from "./positionManager";
 import { getRuntimeConfig } from "./config";
 import { notifyDashboardUpdate } from "./broadcastOptimizer";
 import { getActiveTradingWallet } from "./walletStore";
+import { decideExitAction, type ExitStrategyDecision } from "./exitStrategy";
+import {
+  buildPositionBalanceSyncResult,
+  estimateAtaExitFeesSol,
+  estimateSellExitComponents,
+  type ExecutableExitQuote,
+  getExecutableExitQuote,
+  getPositionEntryPrice,
+  getWalletTokenBalanceSnapshot,
+  waitForWalletTokenBalanceChange,
+} from "./livePositionRuntime";
 
 // Função auxiliar para obter o endereço de token associado
 async function getAssociatedTokenAddress(
@@ -109,6 +125,82 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 50
   throw lastError;
 }
 
+function resolveSellAmount(amountToken: number, applyRuntimeSellPercent: boolean): number {
+  const normalizedAmount = Math.max(0, Math.floor(Number(amountToken) || 0));
+  if (!applyRuntimeSellPercent) {
+    return normalizedAmount;
+  }
+
+  const currentConfig = getRuntimeConfig();
+  const sellPercent = currentConfig.SELL_PERCENT_ON_TP || 100;
+  const sellPercentDecimal = sellPercent / 100;
+  const amountToSell = Math.floor(normalizedAmount * sellPercentDecimal);
+  const amountToKeep = normalizedAmount - amountToSell;
+
+  if (sellPercent < 100) {
+    logger.info(`💰 Venda parcial ativa: ${sellPercent}%`);
+    logger.info(`   Total: ${normalizedAmount.toLocaleString()} tokens`);
+    logger.info(`   💸 Vender: ${amountToSell.toLocaleString()} tokens`);
+    logger.info(`   📦 Manter: ${amountToKeep.toLocaleString()} tokens para moon shot`);
+  }
+
+  return amountToSell;
+}
+
+interface AtaExitTokenAccount {
+  address: PublicKey;
+  rawAmount: bigint;
+}
+
+export interface AtaExitPlan {
+  instructions: TransactionInstruction[];
+  instructionKinds: Array<"burn" | "close">;
+  burnInstructionCount: number;
+  closeInstructionCount: number;
+  tokenAccountCount: number;
+  totalBurnAmountRaw: string;
+  alreadyClosed: boolean;
+}
+
+export interface AtaExitExecutionResult {
+  signature: string | null;
+  burnedAccounts: number;
+  closedAccounts: number;
+  alreadyClosed: boolean;
+  burnSignature: string | null;
+  closeSignature: string | null;
+  closeRetryAttemptsUsed: number;
+  deferredCloseRecoveryNeeded: boolean;
+  recoveryReason: string | null;
+}
+
+export function evaluateAtaAwareExit(params: {
+  quote: ExecutableExitQuote | null;
+  walletBalance: { rawAmount: number; uiAmount: number; decimals: number };
+  currentPrice?: number | null;
+  slippageBps?: number | null;
+  ataRentSol: number;
+}): ExitStrategyDecision {
+  const sellAssessment = estimateSellExitComponents({
+    quote: params.quote,
+    rawAmount: params.walletBalance.rawAmount,
+    decimals: params.walletBalance.decimals,
+    slippageBps: params.slippageBps,
+    fallbackPricePerTokenSol: params.currentPrice,
+  });
+  const ataFees = estimateAtaExitFeesSol();
+
+  return decideExitAction({
+    tokenMarketValueSol: sellAssessment.tokenMarketValueSol,
+    estimatedSellFeesSol: sellAssessment.estimatedSellFeesSol,
+    estimatedSellSlippageSol: sellAssessment.estimatedSellSlippageSol,
+    sellRouteAvailable: sellAssessment.sellRouteAvailable,
+    ataRentSol: params.ataRentSol,
+    burnFeeSol: ataFees.burnFeeSol,
+    closeAtaFeeSol: ataFees.closeAtaFeeSol,
+  });
+}
+
 interface PriceInfo {
   pricePerToken: number;
   pricePerTokenExceeds: number;
@@ -116,29 +208,23 @@ interface PriceInfo {
 
 async function getTokenPrice(tokenMint: string): Promise<PriceInfo | null> {
   try {
-    const connection = await getConnection();
-    const mintPublicKey = new PublicKey(tokenMint);
-    const signer = getTradingKeypair();
-    const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, signer.publicKey);
-
-    const accountInfo = await connection.getParsedAccountInfo(userTokenAccount);
-    if (!accountInfo.value || !accountInfo.value.data) {
+    const balance = await getWalletTokenBalanceSnapshot(tokenMint);
+    if (balance.rawAmount <= 0) {
       return null;
     }
-
-    const data = accountInfo.value.data as any;
-    const tokenAmount = data.parsed?.info?.tokenAmount?.amount;
-    if (!tokenAmount || tokenAmount === "0") {
+    const quote = await getExecutableExitQuote({
+      mint: tokenMint,
+      amountRaw: balance.rawAmount,
+      decimalsHint: balance.decimals,
+      preferVenue: "auto",
+    });
+    if (!quote) {
       return null;
     }
-
-    const balance = await connection.getBalance(mintPublicKey);
-    const solBalance = balance / 1e9;
-    const pricePerToken = solBalance / (parseInt(tokenAmount) / 1e9);
 
     return {
-      pricePerToken,
-      pricePerTokenExceeds: parseInt(tokenAmount)
+      pricePerToken: quote.pricePerTokenSol,
+      pricePerTokenExceeds: balance.rawAmount,
     };
   } catch (error) {
     logger.debug(`Erro ao buscar preco para ${tokenMint}:`, error);
@@ -210,8 +296,6 @@ export function checkExitConditions(
   }
 
   // 4. Stop Loss (Traditional, Trailing, or Volatility-Adjusted)
-  // [DISABLING STOP LOSS FOR TODAY'S TEST]
-  /*
   let finalSlPrice = status.newStopLossPrice;
   if (atr && atrMultiplierSl > 0) {
     const atrSlPrice = entryPrice - (atr * atrMultiplierSl);
@@ -228,7 +312,6 @@ export function checkExitConditions(
     }
     return { ...status, shouldExit: true, reason: slReason };
   }
-  */
 
   return status;
 }
@@ -260,6 +343,404 @@ if (initialActiveWallet?.publicKey) {
 
 // Variável para controlar se há um trade ativo
 let activeTrade: boolean = false;
+
+function normalizeAtaTokenAccounts(accountsResponse: any): AtaExitTokenAccount[] {
+  return (accountsResponse?.value || [])
+    .map((account: any) => {
+      const parsedInfo = (account?.account?.data as any)?.parsed?.info;
+      const amountString = String(parsedInfo?.tokenAmount?.amount ?? "0");
+      const rawAmount = BigInt(amountString);
+      const address = account?.pubkey instanceof PublicKey
+        ? account.pubkey
+        : new PublicKey(String(account?.pubkey));
+
+      return {
+        address,
+        rawAmount,
+      };
+    })
+    .filter((account: AtaExitTokenAccount) => account.address && account.rawAmount >= 0n);
+}
+
+function buildAtaExitPlanForAccounts(params: {
+  tokenMint: string;
+  owner: PublicKey;
+  tokenAccounts: AtaExitTokenAccount[];
+  includeBurn: boolean;
+  includeClose: boolean;
+}): AtaExitPlan {
+  const mintPublicKey = new PublicKey(params.tokenMint);
+  const burnInstructions: TransactionInstruction[] = [];
+  const closeInstructions: TransactionInstruction[] = [];
+  const instructionKinds: Array<"burn" | "close"> = [];
+  let totalBurnAmountRaw = 0n;
+
+  if (params.tokenAccounts.length === 0) {
+    return {
+      instructions: [],
+      instructionKinds: [],
+      burnInstructionCount: 0,
+      closeInstructionCount: 0,
+      tokenAccountCount: 0,
+      totalBurnAmountRaw: "0",
+      alreadyClosed: true,
+    };
+  }
+
+  if (params.includeBurn) {
+    for (const tokenAccount of params.tokenAccounts) {
+      if (tokenAccount.rawAmount > 0n) {
+        burnInstructions.push(
+          createBurnInstruction(
+            tokenAccount.address,
+            mintPublicKey,
+            params.owner,
+            tokenAccount.rawAmount,
+            [],
+            TOKEN_PROGRAM_ID
+          )
+        );
+        instructionKinds.push("burn");
+        totalBurnAmountRaw += tokenAccount.rawAmount;
+      }
+    }
+  }
+
+  if (params.includeClose) {
+    for (const tokenAccount of params.tokenAccounts) {
+      closeInstructions.push(
+        createCloseAccountInstruction(
+          tokenAccount.address,
+          params.owner,
+          params.owner,
+          [],
+          TOKEN_PROGRAM_ID
+        )
+      );
+      instructionKinds.push("close");
+    }
+  }
+
+  return {
+    instructions: [...burnInstructions, ...closeInstructions],
+    instructionKinds,
+    burnInstructionCount: burnInstructions.length,
+    closeInstructionCount: closeInstructions.length,
+    tokenAccountCount: params.tokenAccounts.length,
+    totalBurnAmountRaw: totalBurnAmountRaw.toString(),
+    alreadyClosed: burnInstructions.length === 0 && closeInstructions.length === 0,
+  };
+}
+
+async function getAtaExitTokenAccounts(params: {
+  tokenMint: string;
+  connection: Connection;
+  owner: PublicKey;
+}): Promise<AtaExitTokenAccount[]> {
+  const mintPublicKey = new PublicKey(params.tokenMint);
+  return normalizeAtaTokenAccounts(
+    await params.connection.getParsedTokenAccountsByOwner(params.owner, { mint: mintPublicKey })
+  );
+}
+
+async function sendAtaExitInstructions(params: {
+  connection: Connection;
+  signer: Keypair;
+  instructions: TransactionInstruction[];
+  computeUnitLimit?: number;
+}): Promise<string> {
+  const latestBlockhash = await params.connection.getLatestBlockhash();
+  const gasPrice = await getCachedDynamicGasPrice(params.connection).catch(() => 10_000);
+  const transaction = new Transaction().add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: params.computeUnitLimit || 140_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+    ...params.instructions
+  );
+  transaction.feePayer = params.signer.publicKey;
+  transaction.recentBlockhash = latestBlockhash.blockhash;
+
+  return await sendAndConfirmTransaction(params.connection, transaction, [params.signer], {
+    commitment: "confirmed",
+    skipPreflight: false,
+  });
+}
+
+function countZeroBalanceAtaAccounts(tokenAccounts: AtaExitTokenAccount[]): number {
+  return tokenAccounts.filter((account) => account.rawAmount === 0n).length;
+}
+
+export async function buildBurnAndCloseAtaPlan(params: {
+  tokenMint: string;
+  connection?: Connection;
+  owner?: PublicKey;
+}): Promise<AtaExitPlan> {
+  const connection = params.connection || await getConnection();
+  const signer = getTradingKeypair();
+  const owner = params.owner || signer.publicKey;
+  const tokenAccounts = await getAtaExitTokenAccounts({
+    tokenMint: params.tokenMint,
+    connection,
+    owner,
+  });
+
+  return buildAtaExitPlanForAccounts({
+    tokenMint: params.tokenMint,
+    owner,
+    tokenAccounts,
+    includeBurn: true,
+    includeClose: true,
+  });
+}
+
+export async function executeBurnAndCloseAta(
+  tokenMint: string,
+  options?: { retryAttempts?: number; connection?: Connection }
+): Promise<AtaExitExecutionResult> {
+  const signer = getTradingKeypair();
+  const connection = options?.connection || await getConnection();
+  const closeRetryLimit = Math.max(1, Number(options?.retryAttempts ?? 1));
+  const owner = signer.publicKey;
+  const initialAccounts = await getAtaExitTokenAccounts({
+    tokenMint,
+    connection,
+    owner,
+  });
+
+  if (initialAccounts.length === 0) {
+    return {
+      signature: null,
+      burnedAccounts: 0,
+      closedAccounts: 0,
+      alreadyClosed: true,
+      burnSignature: null,
+      closeSignature: null,
+      closeRetryAttemptsUsed: 0,
+      deferredCloseRecoveryNeeded: false,
+      recoveryReason: null,
+    };
+  }
+
+  const burnTargetCount = initialAccounts.filter((account) => account.rawAmount > 0n).length;
+  let burnSignature: string | null = null;
+
+  if (burnTargetCount > 0) {
+    const burnPlan = buildAtaExitPlanForAccounts({
+      tokenMint,
+      owner,
+      tokenAccounts: initialAccounts,
+      includeBurn: true,
+      includeClose: false,
+    });
+
+    try {
+      burnSignature = await sendAtaExitInstructions({
+        connection,
+        signer,
+        instructions: burnPlan.instructions,
+        computeUnitLimit: 120_000,
+      });
+      logger.info(
+        `🔥 [ATA EXIT] Burn success for ${tokenMint}: ${burnTargetCount} conta(s), signature=${burnSignature}`
+      );
+    } catch (error: any) {
+      const refreshedAfterBurnFailure = await getAtaExitTokenAccounts({
+        tokenMint,
+        connection,
+        owner,
+      });
+      const remainingBurnTargets = refreshedAfterBurnFailure.filter((account) => account.rawAmount > 0n).length;
+      if (remainingBurnTargets > 0) {
+        throw error;
+      }
+
+      logger.warn(
+        `ℹ️ [ATA EXIT] Burn de ${tokenMint} não confirmou localmente, mas não há saldo residual; tratando como idempotente.`
+      );
+    }
+  }
+
+  let remainingAccounts = await getAtaExitTokenAccounts({
+    tokenMint,
+    connection,
+    owner,
+  });
+  let remainingCloseTargets = countZeroBalanceAtaAccounts(remainingAccounts);
+
+  if (remainingCloseTargets === 0) {
+    return {
+      signature: burnSignature,
+      burnedAccounts: burnTargetCount,
+      closedAccounts: 0,
+      alreadyClosed: false,
+      burnSignature,
+      closeSignature: null,
+      closeRetryAttemptsUsed: 0,
+      deferredCloseRecoveryNeeded: false,
+      recoveryReason: null,
+    };
+  }
+
+  const totalCloseTargets = remainingCloseTargets;
+  let closeSignature: string | null = null;
+  let closeRetryAttemptsUsed = 0;
+
+  const attemptClose = async (tokenAccounts: AtaExitTokenAccount[]): Promise<string | null> => {
+    const closePlan = buildAtaExitPlanForAccounts({
+      tokenMint,
+      owner,
+      tokenAccounts: tokenAccounts.filter((account) => account.rawAmount === 0n),
+      includeBurn: false,
+      includeClose: true,
+    });
+
+    if (closePlan.instructions.length === 0) {
+      return null;
+    }
+
+    return await sendAtaExitInstructions({
+      connection,
+      signer,
+      instructions: closePlan.instructions,
+      computeUnitLimit: 100_000,
+    });
+  };
+
+  try {
+    closeSignature = await attemptClose(remainingAccounts);
+    if (closeSignature) {
+      logger.info(
+        `🧹 [ATA EXIT] Close success for ${tokenMint}: ${remainingCloseTargets} ATA(s), signature=${closeSignature}`
+      );
+    }
+  } catch (error: any) {
+    remainingAccounts = await getAtaExitTokenAccounts({
+      tokenMint,
+      connection,
+      owner,
+    });
+    remainingCloseTargets = countZeroBalanceAtaAccounts(remainingAccounts);
+
+    if (remainingCloseTargets === 0) {
+      logger.info(`ℹ️ [ATA EXIT] Close de ${tokenMint} já resolvido externamente; tratando como idempotente.`);
+    } else {
+      logger.warn(
+        `🔁 [ATA EXIT] Close retry required for ${tokenMint}: ${remainingCloseTargets} ATA(s) zero-balance ainda abertas.`
+      );
+
+      for (let retryAttempt = 1; retryAttempt <= closeRetryLimit && remainingCloseTargets > 0; retryAttempt++) {
+        closeRetryAttemptsUsed = retryAttempt;
+        const delayMs = 400 * retryAttempt;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+        try {
+          closeSignature = await attemptClose(remainingAccounts);
+        } catch (retryError: any) {
+          logger.warn(
+            `🔁 [ATA EXIT] Close retry ${retryAttempt}/${closeRetryLimit} falhou para ${tokenMint}: ${retryError?.message || retryError}`
+          );
+        }
+
+        remainingAccounts = await getAtaExitTokenAccounts({
+          tokenMint,
+          connection,
+          owner,
+        });
+        remainingCloseTargets = countZeroBalanceAtaAccounts(remainingAccounts);
+
+        if (remainingCloseTargets === 0) {
+          logger.info(
+            `✅ [ATA EXIT] Close retry ${retryAttempt}/${closeRetryLimit} resolveu ${tokenMint}.`
+          );
+          break;
+        }
+
+        if (retryAttempt < closeRetryLimit) {
+          logger.warn(
+            `🔁 [ATA EXIT] Close retry ${retryAttempt}/${closeRetryLimit} deixou ${remainingCloseTargets} ATA(s) pendentes para ${tokenMint}.`
+          );
+        }
+      }
+    }
+  }
+
+  remainingAccounts = await getAtaExitTokenAccounts({
+    tokenMint,
+    connection,
+    owner,
+  });
+  remainingCloseTargets = countZeroBalanceAtaAccounts(remainingAccounts);
+
+  if (remainingCloseTargets > 0) {
+    const recoveryReason =
+      `ATA close recovery pending for ${tokenMint}: ${remainingCloseTargets} zero-balance ATA(s) still open after ${Math.max(closeRetryAttemptsUsed, 1)} close attempt(s).`;
+    logger.error(`⚠️ [ATA EXIT] ${recoveryReason}`);
+
+    return {
+      signature: closeSignature || burnSignature,
+      burnedAccounts: burnTargetCount,
+      closedAccounts: Math.max(0, totalCloseTargets - remainingCloseTargets),
+      alreadyClosed: false,
+      burnSignature,
+      closeSignature,
+      closeRetryAttemptsUsed,
+      deferredCloseRecoveryNeeded: true,
+      recoveryReason,
+    };
+  }
+
+  return {
+    signature: closeSignature || burnSignature,
+    burnedAccounts: burnTargetCount,
+    closedAccounts: totalCloseTargets,
+    alreadyClosed: false,
+    burnSignature,
+    closeSignature,
+    closeRetryAttemptsUsed,
+    deferredCloseRecoveryNeeded: false,
+    recoveryReason: null,
+  };
+}
+
+async function syncPositionAfterExit(
+  position: Position,
+  beforeBalanceRaw: number,
+  reason: string,
+  signature: string | null,
+  venue: string,
+  currentPrice?: number | null,
+  exitDecision?: ExitStrategyDecision | null,
+  recoveryState?: { needed: boolean; reason?: string | null } | null
+): Promise<void> {
+  const afterBalance = await waitForWalletTokenBalanceChange(position.mint, beforeBalanceRaw, {
+    direction: "decrease",
+    timeoutMs: 20_000,
+    pollIntervalMs: 800,
+  });
+  const sync = buildPositionBalanceSyncResult(position, {
+    baselineRawAmount: beforeBalanceRaw,
+    balance: afterBalance,
+    reason,
+    signature: signature || "ATA_ALREADY_CLOSED",
+    venue,
+    currentPrice,
+    exitType: exitDecision?.action,
+    netSellValue: exitDecision?.netSellValue,
+    netAtaCloseValue: exitDecision?.netAtaCloseValue,
+    decisionReason: exitDecision?.reason,
+    recoveryNeeded: recoveryState?.needed === true,
+    recoveryReason: recoveryState?.reason || null,
+  });
+
+  if (sync.isClosed) {
+    await positionManager.closePosition(position.mint, sync.updates);
+    logger.info(`✅ Posição fechada: ${position.mint} via ${venue} (${signature})`);
+  } else {
+    await positionManager.updatePosition(position.mint, sync.updates);
+    logger.info(
+      `♻️ Posição parcialmente vendida: ${position.mint} saldo restante=${afterBalance.uiAmount.toFixed(6)} tokens`
+    );
+  }
+}
 
 /**
  * Verificar se há trades ativos
@@ -424,31 +905,23 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
  * @param amountToken Quantidade de tokens para vender
  * @returns Assinatura da transação
  */
-export async function sellOnPumpFun(tokenMint: string, amountToken: number): Promise<string> {
+export async function sellOnPumpFun(
+  tokenMint: string,
+  amountToken: number,
+  options?: { applyRuntimeSellPercent?: boolean }
+): Promise<string> {
   logger.info(`📉 Iniciando venda do token ${tokenMint} na PumpFun`);
 
   try {
     const signer = getTradingKeypair();
     // OTIMIZAÇÃO: Obter conexão do pool de RPCs
     const connection = await getConnection();
-
     const currentConfig = getRuntimeConfig();
-    const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
+    const amount = resolveSellAmount(amountToken, options?.applyRuntimeSellPercent !== false);
 
-    // Calcular quantidade parcial baseado no SELL_PERCENT_ON_TP
-    const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
-    const amountToSell = Math.floor(amountToken * sellPercentDecimal);
-    const amountToKeep = amountToken - amountToSell;
-
-    if (SELL_PERCENT_ON_TP < 100) {
-      logger.info(`💰 Venda parcial ativa: ${SELL_PERCENT_ON_TP}%`);
-      logger.info(`   Total: ${amountToken.toLocaleString()} tokens`);
-      logger.info(`   💸 Vender: ${amountToSell.toLocaleString()} tokens`);
-      logger.info(`   📦 Manter: ${amountToKeep.toLocaleString()} tokens para moon shot`);
+    if (amount <= 0) {
+      throw new Error(`Quantidade insuficiente para venda de ${tokenMint}`);
     }
-
-    // Converter amountToSell para integer
-    const amount = amountToSell;
 
     // Obter endereços necessários
     const mintPublicKey = new PublicKey(tokenMint);
@@ -563,28 +1036,21 @@ export async function sellOnPumpFun(tokenMint: string, amountToken: number): Pro
  * @param amountToken Quantidade de tokens para vender
  * @returns Assinatura da transação
  */
-export async function sellViaJupiter(tokenMint: string, amountToken: number): Promise<string> {
+export async function sellViaJupiter(
+  tokenMint: string,
+  amountToken: number,
+  options?: { applyRuntimeSellPercent?: boolean }
+): Promise<string> {
   logger.info(`🔁 Iniciando venda do token ${tokenMint} via Jupiter`);
 
   try {
     const signer = getTradingKeypair();
     const currentConfig = getRuntimeConfig();
-    const SELL_PERCENT_ON_TP = currentConfig.SELL_PERCENT_ON_TP || 100;
+    const amount = resolveSellAmount(amountToken, options?.applyRuntimeSellPercent !== false);
 
-    // Calcular quantidade parcial baseado no SELL_PERCENT_ON_TP
-    const sellPercentDecimal = SELL_PERCENT_ON_TP / 100;
-    const amountToSell = Math.floor(amountToken * sellPercentDecimal);
-    const amountToKeep = amountToken - amountToSell;
-
-    if (SELL_PERCENT_ON_TP < 100) {
-      logger.info(`💰 Venda parcial ativa: ${SELL_PERCENT_ON_TP}%`);
-      logger.info(`   Total: ${amountToken.toLocaleString()} tokens`);
-      logger.info(`   💸 Vender: ${amountToSell.toLocaleString()} tokens`);
-      logger.info(`   📦 Manter: ${amountToKeep.toLocaleString()} tokens para moon shot`);
+    if (amount <= 0) {
+      throw new Error(`Quantidade insuficiente para venda de ${tokenMint}`);
     }
-
-    // Converter amountToSell para integer
-    const amount = amountToSell;
 
     // Obter endereço da token account do usuário
     const mintPublicKey = new PublicKey(tokenMint);
@@ -759,7 +1225,35 @@ export async function executeHybridTrade(
         }
 
         logger.info(`💰 Comprando token ${tokenData.mint} (Amount: ${tradeSolAmount} SOL, Force: ${force})`);
+        const balanceBefore = await getWalletTokenBalanceSnapshot(tokenData.mint).catch(() => ({
+          address: getTradingKeypair().publicKey.toBase58(),
+          mint: tokenData.mint,
+          rawAmount: 0,
+          decimals: 0,
+          uiAmount: 0,
+          accountCount: 0,
+          fetchedAt: Date.now(),
+        }));
         const signature = await buyOnPumpFun(tokenData.mint, tradeSolAmount);
+        const balanceAfter = await waitForWalletTokenBalanceChange(tokenData.mint, balanceBefore.rawAmount, {
+          direction: "increase",
+          timeoutMs: 20_000,
+          pollIntervalMs: 800,
+        });
+        let boughtTokenAmount = Math.max(0, balanceAfter.rawAmount - balanceBefore.rawAmount);
+        if (boughtTokenAmount <= 0 && balanceBefore.rawAmount <= 0 && balanceAfter.rawAmount > 0) {
+          boughtTokenAmount = balanceAfter.rawAmount;
+        }
+        if (boughtTokenAmount <= 0) {
+          throw new Error(`BUY_FILLED_BUT_TOKEN_BALANCE_NOT_DETECTED:${tokenData.mint}`);
+        }
+
+        const tokenUiAmount = balanceAfter.decimals > 0
+          ? boughtTokenAmount / Math.pow(10, balanceAfter.decimals)
+          : boughtTokenAmount;
+        const entryPricePerToken = tokenUiAmount > 0
+          ? Number((tradeSolAmount / tokenUiAmount).toFixed(12))
+          : null;
 
         // Registrar posição aberta
         const position: Position = {
@@ -768,11 +1262,17 @@ export async function executeHybridTrade(
           creatorWallet: tokenData.creatorWallet,
           buySignature: signature,
           buySolAmount: tradeSolAmount,
-          buyTokenAmount: 0,
+          buyTokenAmount: boughtTokenAmount,
           buyTimestamp: Date.now(),
           takeProfit: TAKE_PROFIT_PERCENT,
           stopLoss: STOP_LOSS_PERCENT,
-          isActive: true
+          isActive: true,
+          tokenDecimals: balanceAfter.decimals,
+          entryPricePerToken,
+          lastKnownTokenBalanceRaw: balanceAfter.rawAmount,
+          lastKnownTokenBalanceUi: balanceAfter.uiAmount,
+          lastBalanceSyncedAt: balanceAfter.fetchedAt,
+          entryVenue: tokenData.mode === "CURVE" ? "pumpfun" : "jupiter",
         };
 
         await positionManager.savePosition(position);
@@ -785,28 +1285,59 @@ export async function executeHybridTrade(
     if (tradeType === "SELL") {
       const position = positionManager.getPosition(tokenData.mint);
       if (position && position.isActive) {
+        const walletBalance = await getWalletTokenBalanceSnapshot(tokenData.mint).catch(() => null);
+        if (!walletBalance || walletBalance.rawAmount <= 0) {
+          logger.warn(`⚠️  Nenhum saldo encontrado na wallet para ${tokenData.mint}. Fechando posição local.`);
+          await positionManager.closePosition(tokenData.mint, {
+            buyTokenAmount: 0,
+            lastKnownTokenBalanceRaw: 0,
+            lastKnownTokenBalanceUi: 0,
+            lastBalanceSyncedAt: Date.now(),
+            lastExitReason: "EXTERNAL_SELL_DETECTED",
+          });
+          notifyDashboardUpdate();
+          return;
+        }
+
         const autoSellTakeProfit = currentConfig.AUTO_SELL_TAKE_PROFIT !== false;
         const autoSellStopLoss = currentConfig.AUTO_SELL_STOP_LOSS !== false;
         const stopLossEnabled = (currentConfig as any).STOP_LOSS_ENABLED !== false;
+        const ataExitEnabled = currentConfig.ENABLE_ATA_EXIT_STRATEGY === true;
 
         if (!force && !autoSellTakeProfit && (!autoSellStopLoss || !stopLossEnabled)) {
           logger.info(`ℹ️  Auto sell desativado para ${tokenData.mint}.`);
           return;
         }
 
-        const priceInfo = await getTokenPrice(tokenData.mint);
-        if (!priceInfo && !force) {
-          logger.debug(`Não foi possível obter preço para ${tokenData.mint}, pulando verificação`);
+        const quote = await getExecutableExitQuote({
+          mint: tokenData.mint,
+          amountRaw: walletBalance.rawAmount,
+          decimalsHint: position.tokenDecimals ?? walletBalance.decimals,
+          slippageBps: currentConfig.SLIPPAGE_BPS || 100,
+          preferVenue: tokenData.mode === "CURVE" ? "pumpfun" : "jupiter",
+        });
+        if (!quote && !force && !ataExitEnabled) {
+          logger.debug(`Não foi possível obter quote de saída para ${tokenData.mint}, pulando verificação`);
           return;
         }
 
-        const currentPrice = priceInfo?.pricePerToken || 0;
-        const buyPrice = position.buySolAmount / ((position.buyTokenAmount || 1) / 1e9);
+        const currentPrice = quote?.pricePerTokenSol || 0;
+        const buyPrice = getPositionEntryPrice(position)
+          || (walletBalance.uiAmount > 0 ? position.buySolAmount / walletBalance.uiAmount : 0);
+        if (!(buyPrice > 0) && !force) {
+          logger.warn(`⚠️  Não foi possível determinar preço de entrada para ${tokenData.mint}.`);
+          return;
+        }
+        const highWaterMark = Math.max(
+          Number(position.lastHighPrice || 0),
+          currentPrice || 0,
+          buyPrice || 0
+        );
 
         const atr = getATR(tokenData.mint);
         const exitResult = checkExitConditions(
           currentPrice || buyPrice,
-          (position as any).highWaterMark || buyPrice,
+          highWaterMark || buyPrice,
           buyPrice,
           autoSellTakeProfit ? (position.takeProfit || TAKE_PROFIT_PERCENT) : Number.POSITIVE_INFINITY,
           (autoSellStopLoss && stopLossEnabled) ? (position.stopLoss || STOP_LOSS_PERCENT) : 100,
@@ -819,23 +1350,74 @@ export async function executeHybridTrade(
 
         if (exitResult.shouldExit || force) {
           const sellReason = force ? "Forced (Mirror Sell)" : exitResult.reason;
-          logger.info(`🚨 [EXECUTOR] Executing SELL for ${tokenData.mint}. Reason: ${sellReason}`);
+          const exitDecision = !force && ataExitEnabled
+            ? evaluateAtaAwareExit({
+              quote,
+              walletBalance,
+              currentPrice,
+              slippageBps: currentConfig.SLIPPAGE_BPS || 100,
+              ataRentSol: currentConfig.ATA_RENT_SOL,
+            })
+            : {
+              action: "SELL",
+              netSellValue: 0,
+              netAtaCloseValue: 0,
+              reason: force ? "Forced sell bypassed ATA strategy" : "ATA exit strategy disabled",
+            } as ExitStrategyDecision;
 
-          let signature: string;
-          if (tokenData.mode === "CURVE") {
-            signature = await sellOnPumpFun(tokenData.mint, position.buyTokenAmount);
+          logger.info(
+            `🚨 [EXECUTOR] Executing ${exitDecision.action} for ${tokenData.mint}. Reason: ${sellReason} | Decision: ${exitDecision.reason}`
+          );
+
+          if (exitDecision.action === "BURN_AND_CLOSE_ATA") {
+            const ataExit = await executeBurnAndCloseAta(tokenData.mint, { retryAttempts: 2 });
+            await syncPositionAfterExit(
+              position,
+              walletBalance.rawAmount,
+              sellReason,
+              ataExit.signature,
+              "ata-close",
+              currentPrice,
+              exitDecision,
+              {
+                needed: ataExit.deferredCloseRecoveryNeeded,
+                reason: ataExit.recoveryReason,
+              }
+            );
           } else {
-            signature = await sellViaJupiter(tokenData.mint, position.buyTokenAmount);
-          }
+            let signature: string;
+            let venue: "pumpfun" | "jupiter" = tokenData.mode === "CURVE" ? "pumpfun" : "jupiter";
+            if (quote?.route === "jupiter") {
+              venue = "jupiter";
+            }
 
-          logger.info(`✅ Posição fechada: ${signature}`);
-          await positionManager.closePosition(tokenData.mint);
+            if (venue === "pumpfun") {
+              signature = await sellOnPumpFun(tokenData.mint, walletBalance.rawAmount);
+            } else {
+              signature = await sellViaJupiter(tokenData.mint, walletBalance.rawAmount);
+            }
+
+            await syncPositionAfterExit(
+              position,
+              walletBalance.rawAmount,
+              sellReason,
+              signature,
+              venue,
+              currentPrice,
+              exitDecision
+            );
+          }
           notifyDashboardUpdate();
         } else {
           // Update High Water Mark
-          if (exitResult.newHighWaterMark > ((position as any).highWaterMark || 0)) {
-            (position as any).highWaterMark = exitResult.newHighWaterMark;
-            await positionManager.updatePosition(tokenData.mint, position);
+          if (exitResult.newHighWaterMark > Number(position.lastHighPrice || 0)) {
+            await positionManager.updatePosition(tokenData.mint, {
+              lastHighPrice: exitResult.newHighWaterMark,
+              lastCheckedAt: Date.now(),
+              lastKnownTokenBalanceRaw: walletBalance.rawAmount,
+              lastKnownTokenBalanceUi: walletBalance.uiAmount,
+              lastBalanceSyncedAt: walletBalance.fetchedAt,
+            });
           }
         }
       }

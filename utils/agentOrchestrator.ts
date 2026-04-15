@@ -7,6 +7,7 @@ import { CONFIG, getRuntimeConfig } from "./config";
 import { generateStructuredLlm } from "./llmGateway";
 import { getActiveSkillsPrompt } from "./skillRegistry";
 import {
+  detectTradePriceAnomaly,
   recordSimulatedTrade,
   updateSimulatedTradeExit,
   updateSimulatedTradePrice,
@@ -14,6 +15,7 @@ import {
   getOpenTradeForToken,
   getOpenTradesFromDb,
 } from "./simulationEngine";
+import { decideExitAction } from "./exitStrategy";
 import { recordPriceSample, getVolatility, getTASnapshotV2, TASnapshotV2 } from "./volatilityMonitor";
 import { getProtocolAdjustedTAConfig, getTAConfig } from "./technicalConfig";
 const C_BLUE = "\x1b[36m";
@@ -49,6 +51,7 @@ import {
   buildTradeExitSnapshot,
   buildTradeMonitoringPoint,
 } from "./postMortemContext";
+import { TradeFeedAudit } from "./postMortemTypes";
 import { recordFunnelEvent } from "./decisionFunnelMetrics";
 import { assessAdaptiveEntryProfile, AdaptiveEntryProfile } from "./adaptiveEntryGovernance";
 import { getOrderPressureSnapshot, getTransferParticipationSnapshot } from "./bitqueryRealtimeState";
@@ -1495,6 +1498,13 @@ export async function executeAgentTrade(
       }
 
       logger.info(`📊 [SIMULATION] Recording simulated trade...`);
+      const entrySnapshotPrice = decision.entryPrice || tokenAnalysis.price;
+      const entrySnapshotCapturedAt = Date.now();
+      recordPriceSample(tokenAnalysis.mint, entrySnapshotPrice, 0, entrySnapshotCapturedAt);
+      const entryTaConfig = getProtocolAdjustedTAConfig(protocol, getTAConfig());
+      const entryTaSnapshot = getTASnapshotV2(tokenAnalysis.mint, entryTaConfig);
+      const entryFeedQuote = await getCurrentTokenPrice(tokenAnalysis.mint);
+      const entryFeedAudit = buildTradeFeedAudit(entryFeedQuote);
       const decisionContext = buildTradeDecisionContext(
         { ...decision, confidence: executionConfidence },
         agentMode,
@@ -1511,24 +1521,23 @@ export async function executeAgentTrade(
       );
       const entrySnapshot = buildTradeEntrySnapshot({
         mint: tokenAnalysis.mint,
-        price: decision.entryPrice || tokenAnalysis.price,
-        marketCap: tokenAnalysis.marketCap ?? null,
+        price: entrySnapshotPrice,
+        marketCap: tokenAnalysis.marketCap ?? entryFeedQuote.marketCap ?? null,
         holders: tokenAnalysis.holders,
         liquiditySol: tokenAnalysis.liquiditySol,
         bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
         tokenAgeSec: tokenAnalysis.tokenAgeSec,
         buyCount: tokenAnalysis.buyCount,
         sellCount: tokenAnalysis.sellCount,
-        taSnapshot: tokenAnalysis.taSnapshot,
-        taScore: tokenAnalysis.taScore,
-        taScoreBreakdown: tokenAnalysis.taScoreBreakdown,
+        taSnapshot: entryTaSnapshot,
         volatilityWindows: tokenAnalysis.volWindows,
+        capturedAt: entrySnapshotCapturedAt,
       });
 
       await recordSimulatedTrade(
         tokenAnalysis.mint,
         tokenAnalysis.symbol,
-        decision.entryPrice || tokenAnalysis.price,
+        entrySnapshotPrice,
         executionConfidence,
         {
           reasoning: decision.reasoning,
@@ -1536,9 +1545,10 @@ export async function executeAgentTrade(
           stopLoss: decision.stopLoss,
         },
         tokenAnalysis.holders,
-        tokenAnalysis.marketCap,
+        tokenAnalysis.marketCap ?? entryFeedQuote.marketCap ?? null,
         decisionContext,
         entrySnapshot,
+        entryFeedAudit,
         adjustedBuyAmount
       );
 
@@ -1636,26 +1646,35 @@ export function scheduleSimulationExit(
 
   // Trailing stop state
   let highWaterMark = entryPrice;
+  const requiredExitConfirmations = 2;
 
   logger.info(
-    `📈 [SIMULATION] Monitoring ${symbol}: TP=${tp.toFixed(8)} SL=DISABLED (fixed TP +${fixedSimulationTpPct}%)${elapsedMs > 0 ? ` (Resumed: ${Math.round(elapsedMs / 60000)}m elapsed)` : ""}`
+    `📈 [SIMULATION] Monitoring ${symbol}: TP=${tp.toFixed(8)} SL=DISABLED (fixed TP +${fixedSimulationTpPct}%, ${requiredExitConfirmations} confirmations)${elapsedMs > 0 ? ` (Resumed: ${Math.round(elapsedMs / 60000)}m elapsed)` : ""}`
   );
 
   // Check every 10 seconds to reduce API load but keep it updated
   const intervalMs = 10000;
   let elapsedCount = 0;
+  let tpConfirmationCount = 0;
+  let slConfirmationCount = 0;
   const maxElapsed = remainingMs / intervalMs;
 
   const exitCheckInterval = setInterval(async () => {
     elapsedCount++;
 
     try {
-      const { price: currentPrice, marketCap: currentMarketCap } = await getCurrentTokenPrice(mint);
+      const openTrade = getOpenTradeForToken(mint);
+      const preferredPairAddress = openTrade?.entryFeedAudit?.pairAddress || null;
+      const marketQuote = await getCurrentTokenPrice(mint, { preferredPairAddress });
+      const { price: currentPrice, marketCap: currentMarketCap } = marketQuote;
 
       if (currentPrice === null) {
         logger.debug(`⚠️  Could not get price for ${symbol}`);
         return;
       }
+
+      const pollCapturedAt = Date.now();
+      recordPriceSample(mint, currentPrice, 0, pollCapturedAt);
 
       if (currentPrice > highWaterMark) {
         highWaterMark = currentPrice;
@@ -1681,6 +1700,19 @@ export function scheduleSimulationExit(
           tp = entryPrice * (1 + fixedSimulationTpPct / 100);
           highWaterMark = Math.max(currentPrice, entryPrice);
         }
+      }
+
+      const hitTakeProfit = currentPrice >= tp;
+      tpConfirmationCount = hitTakeProfit ? tpConfirmationCount + 1 : 0;
+
+      const hitStopLoss = sl > 0 && currentPrice <= sl;
+      slConfirmationCount = hitStopLoss ? slConfirmationCount + 1 : 0;
+      if (hitStopLoss && slConfirmationCount < requiredExitConfirmations) {
+        logger.debug(
+          `📉 [SIMULATION] ${symbol} SL candidate ${slConfirmationCount}/${requiredExitConfirmations} ` +
+          `at ${currentPrice.toFixed(8)}`
+        );
+        return;
       }
 
       // ══════════════════════════════════════════════════
@@ -1718,16 +1750,61 @@ export function scheduleSimulationExit(
       */
 
       // Check fixed TP
-      if (currentPrice >= tp) {
+      if (hitTakeProfit && tpConfirmationCount < requiredExitConfirmations) {
+        logger.debug(
+          `📈 [SIMULATION] ${symbol} TP candidate ${tpConfirmationCount}/${requiredExitConfirmations} ` +
+          `at ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
+        );
+        return;
+      }
+
+      if (hitTakeProfit) {
         clearInterval(exitCheckInterval);
         logger.info(
           `📈 [SIMULATION] ${symbol} HIT TAKE PROFIT: ${currentPrice.toFixed(8)} (Entry: ${entryPrice.toFixed(8)})`
         );
+        const runtimeConfig = getRuntimeConfig();
+        const simulatedEntryAmount = Number(openTrade?.entryAmount || CONFIG.BUY_AMOUNT_SOL || 0);
+        const simulatedTokenAmount = entryPrice > 0 ? simulatedEntryAmount / entryPrice : 0;
+        const grossMarketValueSol = Number((Math.max(0, currentPrice) * Math.max(0, simulatedTokenAmount)).toFixed(9));
+        const estimatedSellSlippageSol = Number((grossMarketValueSol * ((runtimeConfig.SLIPPAGE_BPS || 100) / 10_000)).toFixed(9));
+        const exitDecision = runtimeConfig.ENABLE_ATA_EXIT_STRATEGY
+          ? decideExitAction({
+            tokenMarketValueSol: grossMarketValueSol,
+            estimatedSellFeesSol: 0.00001,
+            estimatedSellSlippageSol,
+            ataRentSol: runtimeConfig.ATA_RENT_SOL,
+            burnFeeSol: 0.000005,
+            closeAtaFeeSol: 0.000005,
+            sellRouteAvailable: grossMarketValueSol > 0,
+          })
+          : {
+            action: "SELL" as const,
+            netSellValue: grossMarketValueSol - 0.00001 - estimatedSellSlippageSol,
+            netAtaCloseValue: 0,
+            reason: "ATA exit strategy disabled",
+          };
+        const exitCapturedAt = Date.now();
+        recordPriceSample(mint, currentPrice, 0, exitCapturedAt);
+        const exitTaSnapshot = getTASnapshotV2(mint, getTAConfig());
+        const exitFeedAudit = buildTradeFeedAudit(marketQuote);
+        const anomaly = detectTradePriceAnomaly({
+          entryPrice,
+          exitPrice: currentPrice,
+          entryMarketCap: openTrade?.marketCapEntry ?? null,
+          exitMarketCap: currentMarketCap,
+          entryFeedAudit: openTrade?.entryFeedAudit ?? null,
+          exitFeedAudit,
+          snapshotPrice: exitTaSnapshot.currentPrice,
+        });
+        if (anomaly) {
+          logger.warn(`🚨 [SIMULATION] ${symbol} TP marked as anomaly: ${anomaly.reasons.join(" | ")}`);
+        }
         await updateSimulatedTradeExit(
           mint,
           currentPrice,
           "CLOSED_TP",
-          "Take Profit hit",
+          anomaly ? "Take Profit hit [ANOMALY]" : "Take Profit hit",
           currentMarketCap,
           buildTradeExitSnapshot({
             mint,
@@ -1739,7 +1816,23 @@ export function scheduleSimulationExit(
             tokenAgeSec: tokenAnalysis.tokenAgeSec,
             buyCount: tokenAnalysis.buyCount,
             sellCount: tokenAnalysis.sellCount,
-          })
+            taSnapshot: exitTaSnapshot,
+            capturedAt: exitCapturedAt,
+          }),
+          {
+            exitType: exitDecision.action,
+            netSellValue: exitDecision.netSellValue,
+            netAtaCloseValue: exitDecision.netAtaCloseValue,
+            decisionReason: exitDecision.reason,
+            realizedExitValueSol: Math.max(
+              0,
+              exitDecision.action === "BURN_AND_CLOSE_ATA"
+                ? exitDecision.netAtaCloseValue
+                : exitDecision.netSellValue
+            ),
+            exitFeedAudit,
+            anomaly,
+          }
         );
         return;
       }
@@ -1748,11 +1841,48 @@ export function scheduleSimulationExit(
       if (elapsedCount >= maxElapsed) {
         clearInterval(exitCheckInterval);
         logger.info(`⏱️  [SIMULATION] ${symbol} EXPIRED: exit at ${currentPrice.toFixed(8)}`);
+        const runtimeConfig = getRuntimeConfig();
+        const simulatedEntryAmount = Number(openTrade?.entryAmount || CONFIG.BUY_AMOUNT_SOL || 0);
+        const simulatedTokenAmount = entryPrice > 0 ? simulatedEntryAmount / entryPrice : 0;
+        const grossMarketValueSol = Number((Math.max(0, currentPrice) * Math.max(0, simulatedTokenAmount)).toFixed(9));
+        const estimatedSellSlippageSol = Number((grossMarketValueSol * ((runtimeConfig.SLIPPAGE_BPS || 100) / 10_000)).toFixed(9));
+        const exitDecision = runtimeConfig.ENABLE_ATA_EXIT_STRATEGY
+          ? decideExitAction({
+            tokenMarketValueSol: grossMarketValueSol,
+            estimatedSellFeesSol: 0.00001,
+            estimatedSellSlippageSol,
+            ataRentSol: runtimeConfig.ATA_RENT_SOL,
+            burnFeeSol: 0.000005,
+            closeAtaFeeSol: 0.000005,
+            sellRouteAvailable: grossMarketValueSol > 0,
+          })
+          : {
+            action: "SELL" as const,
+            netSellValue: grossMarketValueSol - 0.00001 - estimatedSellSlippageSol,
+            netAtaCloseValue: 0,
+            reason: "ATA exit strategy disabled",
+          };
+        const exitCapturedAt = Date.now();
+        recordPriceSample(mint, currentPrice, 0, exitCapturedAt);
+        const exitTaSnapshot = getTASnapshotV2(mint, getTAConfig());
+        const exitFeedAudit = buildTradeFeedAudit(marketQuote);
+        const anomaly = detectTradePriceAnomaly({
+          entryPrice,
+          exitPrice: currentPrice,
+          entryMarketCap: openTrade?.marketCapEntry ?? null,
+          exitMarketCap: currentMarketCap,
+          entryFeedAudit: openTrade?.entryFeedAudit ?? null,
+          exitFeedAudit,
+          snapshotPrice: exitTaSnapshot.currentPrice,
+        });
+        if (anomaly) {
+          logger.warn(`🚨 [SIMULATION] ${symbol} timeout marked as anomaly: ${anomaly.reasons.join(" | ")}`);
+        }
         await updateSimulatedTradeExit(
           mint,
           currentPrice,
           "EXPIRED",
-          "Timeout reached",
+          anomaly ? "Timeout reached [ANOMALY]" : "Timeout reached",
           currentMarketCap,
           buildTradeExitSnapshot({
             mint,
@@ -1764,7 +1894,23 @@ export function scheduleSimulationExit(
             tokenAgeSec: tokenAnalysis.tokenAgeSec,
             buyCount: tokenAnalysis.buyCount,
             sellCount: tokenAnalysis.sellCount,
-          })
+            taSnapshot: exitTaSnapshot,
+            capturedAt: exitCapturedAt,
+          }),
+          {
+            exitType: exitDecision.action,
+            netSellValue: exitDecision.netSellValue,
+            netAtaCloseValue: exitDecision.netAtaCloseValue,
+            decisionReason: exitDecision.reason,
+            realizedExitValueSol: Math.max(
+              0,
+              exitDecision.action === "BURN_AND_CLOSE_ATA"
+                ? exitDecision.netAtaCloseValue
+                : exitDecision.netSellValue
+            ),
+            exitFeedAudit,
+            anomaly,
+          }
         );
         return;
       }
@@ -1804,35 +1950,122 @@ export async function resumeSimulationMonitoring(): Promise<void> {
   }
 }
 
+export interface TokenPriceFeedQuote {
+  price: number | null;
+  marketCap: number | null;
+  pairAddress: string | null;
+  pairIndex: number | null;
+  pairCount: number;
+  selectedBy: "FIRST_AVAILABLE" | "PREFERRED_PAIR";
+  dexId: string | null;
+  url: string | null;
+  liquidityUsd: number | null;
+  fdv: number | null;
+  rawPair: Record<string, unknown> | null;
+  fetchedAt: number;
+}
+
+function emptyTokenPriceFeedQuote(): TokenPriceFeedQuote {
+  return {
+    price: null,
+    marketCap: null,
+    pairAddress: null,
+    pairIndex: null,
+    pairCount: 0,
+    selectedBy: "FIRST_AVAILABLE",
+    dexId: null,
+    url: null,
+    liquidityUsd: null,
+    fdv: null,
+    rawPair: null,
+    fetchedAt: Date.now(),
+  };
+}
+
+function buildTradeFeedAudit(quote: TokenPriceFeedQuote): TradeFeedAudit | null {
+  if (!quote.pairAddress && quote.price === null && quote.marketCap === null) {
+    return null;
+  }
+
+  return {
+    source: "DEXSCREENER_LATEST_TOKEN",
+    capturedAt: quote.fetchedAt,
+    pairAddress: quote.pairAddress,
+    pairIndex: quote.pairIndex,
+    pairCount: quote.pairCount,
+    selectedBy: quote.selectedBy,
+    dexId: quote.dexId,
+    url: quote.url,
+    priceNative: quote.price,
+    marketCap: quote.marketCap,
+    liquidityUsd: quote.liquidityUsd,
+    fdv: quote.fdv,
+    rawPair: quote.rawPair,
+  };
+}
+
 /**
  * Get current token price + market cap from DexScreener
  * Used for real-time simulation exit monitoring
  */
-export async function getCurrentTokenPrice(mint: string): Promise<{ price: number | null; marketCap: number | null }> {
+export async function getCurrentTokenPrice(
+  mint: string,
+  options?: { preferredPairAddress?: string | null }
+): Promise<TokenPriceFeedQuote> {
+  const emptyQuote = emptyTokenPriceFeedQuote();
   try {
     const response = await fetch(
       `https://api.dexscreener.com/latest/dex/tokens/${mint}`
     );
 
     if (!response.ok) {
-      return null;
+      return emptyQuote;
     }
 
     const data = await response.json();
 
     if (data.pairs && data.pairs.length > 0) {
-      // Get price from first DEX (usually highest liquidity)
-      // Extract priceNative (SOL) instead of priceUsd for accurate PnL vs entryPrice
-      const pair = data.pairs[0];
-      const price = parseFloat(pair.priceNative);
-      const marketCap = pair.marketCap ? Number(pair.marketCap) : null;
-      return { price: isNaN(price) ? null : price, marketCap };
+      const pairs = Array.isArray(data.pairs) ? data.pairs : [];
+      const preferredPairAddress = String(options?.preferredPairAddress || "").trim().toLowerCase();
+      let pairIndex = preferredPairAddress
+        ? pairs.findIndex((pair: any) => String(pair?.pairAddress || "").trim().toLowerCase() === preferredPairAddress)
+        : 0;
+      let selectedBy: TokenPriceFeedQuote["selectedBy"] = "FIRST_AVAILABLE";
+
+      if (pairIndex >= 0 && preferredPairAddress) {
+        selectedBy = "PREFERRED_PAIR";
+      }
+
+      if (pairIndex < 0) {
+        pairIndex = 0;
+      }
+
+      const pair = pairs[pairIndex];
+      const price = parseFloat(pair?.priceNative);
+      const marketCap = pair?.marketCap ? Number(pair.marketCap) : null;
+      const liquidityUsd = pair?.liquidity?.usd ? Number(pair.liquidity.usd) : null;
+      const fdv = pair?.fdv ? Number(pair.fdv) : null;
+
+      return {
+        price: isNaN(price) ? null : price,
+        marketCap,
+        pairAddress: pair?.pairAddress || null,
+        pairIndex,
+        pairCount: pairs.length,
+        selectedBy,
+        dexId: pair?.dexId || null,
+        url: pair?.url || null,
+        liquidityUsd,
+        fdv,
+        rawPair: pair && typeof pair === "object" ? pair as Record<string, unknown> : null,
+        fetchedAt: Date.now(),
+      };
     }
 
-    return { price: null, marketCap: null };
+    return emptyQuote;
   } catch (error: any) {
     logger.debug(`Error fetching price for ${mint}: ${error.message}`);
-    return { price: null, marketCap: null };
+    return emptyQuote;
   }
 }
 

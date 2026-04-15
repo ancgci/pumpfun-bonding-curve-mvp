@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { CONFIG } from "./config";
 import db from "./db";
+import { clampExitValueForDisplay } from "./exitStrategy";
 import { evaluateBotRuntimeHealth, readBotRuntimeHealth } from "./botRuntimeHealth";
 import { getFunnelMetrics } from "./decisionFunnelMetrics";
 import {
@@ -176,6 +177,15 @@ export interface DashboardSnapshot {
   };
   simulation: {
     metrics: ReturnType<typeof getSimulationMetrics>;
+    ataRecovery: {
+      exitsCount: number;
+      totalRecoveredSol: number;
+      totalHypotheticalSellValueSol: number;
+      recoveryDeltaSol: number;
+      displayRecoveredSol: number;
+      displayHypotheticalSellValueSol: number;
+      displayRecoveryDeltaSol: number;
+    };
     readyForLive: boolean;
     readinessScore: number;
     reasons: string[];
@@ -520,6 +530,47 @@ function loadRecentSimulationTrades(limit: number): DashboardTradeSummary[] {
   }
 }
 
+export function getSimulationAtaRecoveryMetrics(): DashboardSnapshot["simulation"]["ataRecovery"] {
+  try {
+    const row = db.prepare(`
+      SELECT
+        COUNT(*) as exitsCount,
+        COALESCE(SUM(COALESCE(realized_exit_value_sol, 0)), 0) as totalRecoveredSol,
+        COALESCE(SUM(COALESCE(net_sell_value, 0)), 0) as totalHypotheticalSellValueSol
+      FROM simulated_trades
+      WHERE exit_type = 'BURN_AND_CLOSE_ATA'
+    `).get() as {
+      exitsCount?: number;
+      totalRecoveredSol?: number;
+      totalHypotheticalSellValueSol?: number;
+    } | undefined;
+
+    const totalRecoveredSol = toNumber(row?.totalRecoveredSol, 0);
+    const totalHypotheticalSellValueSol = toNumber(row?.totalHypotheticalSellValueSol, 0);
+    const recoveryDeltaSol = Number((totalRecoveredSol - totalHypotheticalSellValueSol).toFixed(9));
+
+    return {
+      exitsCount: Math.max(0, toNumber(row?.exitsCount, 0)),
+      totalRecoveredSol,
+      totalHypotheticalSellValueSol,
+      recoveryDeltaSol,
+      displayRecoveredSol: clampExitValueForDisplay(totalRecoveredSol),
+      displayHypotheticalSellValueSol: clampExitValueForDisplay(totalHypotheticalSellValueSol),
+      displayRecoveryDeltaSol: clampExitValueForDisplay(recoveryDeltaSol),
+    };
+  } catch {
+    return {
+      exitsCount: 0,
+      totalRecoveredSol: 0,
+      totalHypotheticalSellValueSol: 0,
+      recoveryDeltaSol: 0,
+      displayRecoveredSol: 0,
+      displayHypotheticalSellValueSol: 0,
+      displayRecoveryDeltaSol: 0,
+    };
+  }
+}
+
 function selectTopReasons(reasons: Record<string, number> | undefined): string | null {
   if (!reasons || typeof reasons !== "object") return null;
 
@@ -646,6 +697,7 @@ export function getDashboardSnapshot(options?: DashboardSnapshotOptions): Dashbo
   const openTradesFresh = getOpenTradesFromDb().map(normalizeTrade);
   const recentTrades = loadRecentSimulationTrades(recentTradesLimit);
   const simMetrics = getSimulationMetrics();
+  const ataRecovery = getSimulationAtaRecoveryMetrics();
   const simReadiness = isSimulationReadyForLive();
   const learningMetrics = loadLearningMetrics(LEARNING_METRICS_FILE);
   const mainnetMetrics = loadLearningMetrics(MAINNET_METRICS_FILE);
@@ -753,6 +805,7 @@ export function getDashboardSnapshot(options?: DashboardSnapshotOptions): Dashbo
     },
     simulation: {
       metrics: simMetrics,
+      ataRecovery,
       readyForLive: simReadiness.ready,
       readinessScore: simReadiness.score,
       reasons: simReadiness.reasons.slice(0, 6).map((reason) => trimText(reason, 140)),
@@ -844,6 +897,7 @@ export function buildDashboardCopilotContext(snapshot: DashboardSnapshot): strin
       readinessScore: snapshot.simulation.readinessScore,
       reasons: snapshot.simulation.reasons,
       metrics: snapshot.simulation.metrics,
+      ataRecovery: snapshot.simulation.ataRecovery,
       staleOpenTrades: snapshot.simulation.staleOpenTrades,
       openTrades: snapshot.simulation.openTrades.map((trade) => ({
         symbol: trade.symbol,
@@ -927,6 +981,7 @@ export function formatPositionsSummaryForTelegram(snapshot: DashboardSnapshot): 
 
 export function formatSimulationSummaryForTelegram(snapshot: DashboardSnapshot): string {
   const simMetrics = snapshot.simulation.metrics;
+  const ataRecovery = snapshot.simulation.ataRecovery;
   const recentLines = snapshot.simulation.recentTrades.slice(0, 5).map((trade, index) => {
     const pnl = `${trade.pnlSol >= 0 ? "+" : ""}${trade.pnlSol.toFixed(4)} SOL`;
     return `${index + 1}. <b>${escapeTelegramHtml(trade.symbol)}</b> · ${escapeTelegramHtml(trade.status)} · ${escapeTelegramHtml(pnl)} · ${trade.pnlPercent >= 0 ? "+" : ""}${trade.pnlPercent.toFixed(2)}%`;
@@ -937,6 +992,9 @@ export function formatSimulationSummaryForTelegram(snapshot: DashboardSnapshot):
     `Ready: <b>${snapshot.simulation.readyForLive ? "SIM" : "NÃO"}</b> | Score: <b>${snapshot.simulation.readinessScore}</b>`,
     `Fechados: <b>${simMetrics?.totalTrades || 0}</b> | WR: <b>${toNumber(simMetrics?.winRate, 0).toFixed(1)}%</b> | EV: <b>${formatSignedNumber(toNumber(simMetrics?.expectedValue, 0))} SOL</b>`,
     `PnL total: <b>${formatSignedNumber(toNumber(simMetrics?.totalPnL, 0))} SOL</b> | Abertos: <b>${snapshot.simulation.openTrades.length}</b> | Stale: <b>${snapshot.simulation.staleOpenTrades}</b>`,
+    ataRecovery.exitsCount > 0
+      ? `ATA recovery: <b>${ataRecovery.displayRecoveredSol.toFixed(4)} SOL</b> | Hyp sell: <b>${ataRecovery.displayHypotheticalSellValueSol.toFixed(4)} SOL</b> | ATA exits: <b>${ataRecovery.exitsCount}</b>`
+      : `ATA recovery: <b>0.0000 SOL</b> | ATA exits: <b>0</b>`,
     snapshot.simulation.reasons.length > 0
       ? `Motivos: <code>${escapeTelegramHtml(snapshot.simulation.reasons.join(" | "))}</code>`
       : `Motivos: <code>nenhum bloqueio de prontidão</code>`,

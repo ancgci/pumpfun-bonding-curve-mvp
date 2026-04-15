@@ -9,6 +9,7 @@ export function SimulationStatus() {
   if (!simStatus) return null;
 
   const metrics = simStatus.metrics || {};
+  const ataRecovery = simStatus.ataRecovery || {};
   const readinessScore = Number(simStatus.readinessScore || 0);
   const isReady = simStatus.readyForLive || false;
 
@@ -41,7 +42,7 @@ export function SimulationStatus() {
         </div>
 
         {/* Metrics Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">Win Rate</div>
             <div className="font-mono font-bold text-lg text-green-400">
@@ -64,6 +65,33 @@ export function SimulationStatus() {
             <div className="text-xs text-muted-foreground">Max Drawdown</div>
             <div className="font-mono font-bold text-lg text-red-400">
               {Number(metrics.maxDrawdownPercentage || 0).toFixed(2)}%
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">Anomalies Excluded</div>
+            <div className="font-mono font-bold text-lg text-amber-300">
+              {Number(metrics.anomalousTrades || 0)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">SOL Recovered via ATA</div>
+            <div className="font-mono font-bold text-lg text-emerald-400">
+              {Number(ataRecovery.displayRecoveredSol || 0).toFixed(4)}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">Hypothetical Sell</div>
+            <div className="font-mono font-bold text-lg text-sky-400">
+              {Number(ataRecovery.displayHypotheticalSellValueSol || 0).toFixed(4)}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">ATA Exit Count</div>
+            <div className="font-mono font-bold text-lg">
+              {Number(ataRecovery.exitsCount || 0)}
             </div>
           </div>
         </div>

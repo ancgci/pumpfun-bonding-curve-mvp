@@ -9,6 +9,7 @@ const TRADING_CONFIG_FILE = path.join(__dirname, "../data/trading-config.json");
 const PROTOCOL_CONFIG_FILE = path.join(__dirname, "../data/protocol-config.json");
 const EMERGENCY_STOP_FILE = path.join(__dirname, "../data/emergency-stop.json");
 const AGENT_CONFIG_FILE = path.join(__dirname, "../data/agent/config.json");
+const RAW_ATA_RENT_SOL = process.env.ATA_RENT_SOL;
 
 type AgentMode = "SIMULATION" | "LIVE";
 
@@ -22,6 +23,36 @@ function safeReadJson<T>(filePath: string, fallback: T): T {
     return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
   } catch {
     return fallback;
+  }
+}
+
+function getAtaExitStrategyConfigError(configLike: {
+  ENABLE_ATA_EXIT_STRATEGY?: boolean;
+  ATA_RENT_SOL?: number;
+}): string | null {
+  if (configLike.ENABLE_ATA_EXIT_STRATEGY !== true) {
+    return null;
+  }
+
+  if (typeof RAW_ATA_RENT_SOL !== "string" || RAW_ATA_RENT_SOL.trim().length === 0) {
+    return "ATA exit strategy is enabled but ATA_RENT_SOL is missing. Set ATA_RENT_SOL explicitly when ENABLE_ATA_EXIT_STRATEGY=true.";
+  }
+
+  const ataRentSol = Number(configLike.ATA_RENT_SOL);
+  if (!Number.isFinite(ataRentSol) || ataRentSol <= 0) {
+    return "ATA exit strategy is enabled but ATA_RENT_SOL must be a positive number greater than 0.";
+  }
+
+  return null;
+}
+
+function assertAtaExitStrategyConfig(configLike: {
+  ENABLE_ATA_EXIT_STRATEGY?: boolean;
+  ATA_RENT_SOL?: number;
+}): void {
+  const error = getAtaExitStrategyConfigError(configLike);
+  if (error) {
+    throw new Error(error);
   }
 }
 
@@ -96,6 +127,8 @@ export const CONFIG = {
   PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT: parseFloat(process.env.PORTFOLIO_SOFT_EXPOSURE_THRESHOLD_PCT || "0.8"),
   EXECUTION_PREFLIGHT_ENABLED: process.env.EXECUTION_PREFLIGHT_ENABLED !== "false",
   EXECUTION_PREFLIGHT_SOL_BUFFER: parseFloat(process.env.EXECUTION_PREFLIGHT_SOL_BUFFER || "0.015"),
+  ENABLE_ATA_EXIT_STRATEGY: process.env.ENABLE_ATA_EXIT_STRATEGY === "true",
+  ATA_RENT_SOL: parseFloat(process.env.ATA_RENT_SOL || "0.00203928"),
 
   // Auto Trading
   AGENT_ENABLED: process.env.AGENT_ENABLED === "true",
@@ -312,6 +345,7 @@ export function getRuntimeConfig() {
     console.error("Erro ao carregar agent-config runtime:", e);
   }
 
+  assertAtaExitStrategyConfig(runtimeConfig);
   return runtimeConfig;
 }
 
@@ -386,6 +420,11 @@ export function validateConfig(): { valid: boolean; errors: string[]; warnings: 
 
   if (CONFIG.PUBLICNODE_GRPC_URL && !CONFIG.PUBLICNODE_GRPC_TOKEN) {
     warnings.push("PUBLICNODE_GRPC_URL configured without PUBLICNODE_GRPC_TOKEN");
+  }
+
+  const ataExitConfigError = getAtaExitStrategyConfigError(CONFIG);
+  if (ataExitConfigError) {
+    errors.push(ataExitConfigError);
   }
 
   return {

@@ -122,6 +122,13 @@ async function fetchLearnedRules() {
   } catch (e) { console.error('Error fetching learned rules:', e); }
 }
 
+async function fetchPostMortems() {
+  try {
+    const data = await apiFetch(`${API_BASE}/agent/postmortems?limit=8`);
+    updatePostMortems(data);
+  } catch (e) { console.error('Error fetching post-mortems:', e); }
+}
+
 // ════════════════════════════════════════════════════════
 // CONTROL ACTIONS
 // ════════════════════════════════════════════════════════
@@ -668,10 +675,57 @@ function updatePatterns(patterns) {
   `).join('');
 }
 
+function updatePostMortems(postMortems) {
+  const list = document.getElementById('postMortemList');
+  if (!list) return;
+
+  if (!postMortems || postMortems.length === 0) {
+    list.innerHTML = '<p class="empty">No autopsies completed yet.</p>';
+    return;
+  }
+
+  list.innerHTML = postMortems.map((trade) => {
+    const report = trade.postMortemReport || {};
+    const rootCause = report.rootCause?.label || report.rootCause?.code || 'Unknown';
+    const confidence = Number(report.rootCause?.confidence || 0);
+    const summary = trade.postMortemSummary || report.summary || 'No summary available';
+    const recommendation = Array.isArray(report.recommendations) && report.recommendations.length > 0
+      ? report.recommendations[0]
+      : '';
+    const analyzedAt = trade.postMortemAnalyzedAt
+      ? new Date(trade.postMortemAnalyzedAt).toLocaleString('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : '--';
+    const anomalyBadge = trade.anomalyFlag === true || Number(trade.anomalyFlag) === 1
+      ? '<span class="confidence-badge medium">ANOMALY</span>'
+      : '';
+
+    return `
+      <div class="rule-item">
+        <div class="rule-header">
+          <span class="rule-source">${escHtml(trade.tokenSymbol || truncateAddress(trade.tokenMint || 'unknown'))}</span>
+          <span class="rule-time">${analyzedAt}</span>
+        </div>
+        <div class="rule-text">
+          <strong>${escHtml(rootCause)}</strong> ${confidence > 0 ? `· ${confidence.toFixed(0)}%` : ''}
+          ${anomalyBadge}
+        </div>
+        <div class="rule-text">${escHtml(summary)}</div>
+        ${recommendation ? `<div class="rule-text"><small>Next action: ${escHtml(recommendation)}</small></div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
 function updateSimulationStatus(data) {
   if (!data || !data.metrics) {
     document.getElementById('simMode').textContent = 'SIMULATION';
     document.getElementById('simReadiness').textContent = '--/100';
+    document.getElementById('simAnomalies').textContent = '--';
     return;
   }
   document.getElementById('simMode').textContent = data.mode || 'SIMULATION';
@@ -679,6 +733,7 @@ function updateSimulationStatus(data) {
   const m = data.metrics;
   document.getElementById('simWinRate').textContent = m.winRate ? `${m.winRate.toFixed(1)}%` : '--%';
   document.getElementById('simTotalTrades').textContent = m.totalTrades ?? '--';
+  document.getElementById('simAnomalies').textContent = m.anomalousTrades ?? '--';
   document.getElementById('simTotalPnl').textContent = m.totalPnL !== undefined ? `${m.totalPnL.toFixed(4)} SOL` : '--';
   document.getElementById('simDrawdown').textContent = m.maxDrawdown !== undefined ? `${m.maxDrawdown.toFixed(4)} SOL` : '--';
 
@@ -709,16 +764,21 @@ function updateSimulationTrades(trades) {
   list.innerHTML = trades.map(t => {
     const isWin = t.pnl > 0;
     const isOpen = t.status === 'OPEN';
-    const rowClass = isOpen ? 'open' : (isWin ? 'profit' : 'loss');
+    const isAnomaly = t.anomalyFlag === true || Number(t.anomalyFlag) === 1;
+    const rowClass = isOpen ? 'open' : (isAnomaly ? 'loss' : (isWin ? 'profit' : 'loss'));
     const timeStr = t.entryTime ? new Date(t.entryTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '---';
-    const statusClass = isOpen ? 'status-open' : (isWin ? 'status-win' : 'status-loss');
+    const statusClass = isOpen ? 'status-open' : (isAnomaly ? 'status-anomaly' : (isWin ? 'status-win' : 'status-loss'));
+    const statusLabel = isAnomaly ? 'ANOMALY' : t.status;
 
     // Formatting values safely
     const entryAmt = t.entryAmount || 0.01; // Fallback to 0.01 if old DB row
     const finalAmtStr = isOpen ? '---' : (entryAmt + (t.pnl || 0)).toFixed(4);
     const pnlSol = t.pnl?.toFixed ? t.pnl.toFixed(4) : (t.pnl || 0);
     const pnlPct = t.pnlPercent?.toFixed ? t.pnlPercent.toFixed(2) : (t.pnlPercent || 0);
-    const pnlClass = isOpen ? '' : (isWin ? 'profit' : 'loss');
+    const pnlClass = isOpen ? '' : (isAnomaly ? 'loss' : (isWin ? 'profit' : 'loss'));
+    const reasonText = isAnomaly ? (t.anomalyReason || t.reason || '') : (t.reason || '');
+    const pnlSolLabel = isOpen ? pnlSol : (isWin && !isAnomaly ? '+' + pnlSol : pnlSol);
+    const pnlPctLabel = isOpen ? pnlPct + '%' : (isWin && !isAnomaly ? '+' + pnlPct + '%' : pnlPct + '%');
 
     return `
       <tr class="${rowClass}">
@@ -729,16 +789,16 @@ function updateSimulationTrades(trades) {
             <span class="mint-mini">${truncateAddress(t.tokenMint)}</span>
           </a>
         </td>
-        <td><span class="status-badge ${statusClass}">${t.status}</span></td>
+        <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
         <td class="mono">${t.entryPrice?.toFixed ? t.entryPrice.toFixed(8) : (t.entryPrice || '---')}</td>
         <td class="mono">${entryAmt.toFixed(4)}</td>
         <td class="mono">${t.tokenHolders || '---'}</td>
         <td class="mono">${t.exitPrice?.toFixed ? t.exitPrice.toFixed(8) : (t.exitPrice || '---')}</td>
         <td class="mono ${pnlClass}">${finalAmtStr}</td>
-        <td class="pnl-cell ${pnlClass}">${isOpen ? pnlSol : (isWin ? '+' + pnlSol : pnlSol)}</td>
-        <td class="pnl-cell ${pnlClass}">${isOpen ? pnlPct + '%' : (isWin ? '+' + pnlPct + '%' : pnlPct + '%')}</td>
+        <td class="pnl-cell ${pnlClass}">${pnlSolLabel}</td>
+        <td class="pnl-cell ${pnlClass}">${pnlPctLabel}</td>
         <td class="mono">${t.confidence}%</td>
-        <td class="reason-cell"><small title="${t.reason || ''}">${t.reason || ''}</small></td>
+        <td class="reason-cell"><small title="${reasonText}">${reasonText}</small></td>
       </tr>
     `;
   }).join('');
@@ -793,7 +853,10 @@ async function fetchAgentLogs() {
 }
 
 function escHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // ════════════════════════════════════════════════════════
@@ -816,6 +879,7 @@ function refreshAll() {
   fetchAgentStats();
   fetchTradeHistory();
   fetchPatterns();
+  fetchPostMortems();
   fetchSimulationStatus();
   fetchSimulationTrades();
   fetchBotHealth();
@@ -879,6 +943,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchTradingConfig();
   fetchProtocolConfig();
   fetchLearnedRules();
+  fetchPostMortems();
 
   // Initial refresh
   initPLChart();

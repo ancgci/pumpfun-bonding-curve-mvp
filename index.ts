@@ -45,6 +45,7 @@ import { postCurveMonitor } from "./utils/riskEngine/postCurveMonitor";
 import { dipMonitor } from "./utils/dipMonitor";
 import { winnerReentryAgent } from "./utils/winnerReentryAgent";
 import { circuitBreaker } from "./utils/circuitBreaker";
+import { startLivePositionMonitor } from "./utils/livePositionMonitor";
 import {
   BOT_HEARTBEAT_INTERVAL_MS,
   STREAM_STALL_THRESHOLD_MS,
@@ -3959,11 +3960,17 @@ const WINNER_REENTRY_DISCOVERY_INTERVAL_MS = getWorkerIntervalMs(
   "WINNER_REENTRY_DISCOVERY_INTERVAL_MS",
   CONFIG.WINNER_REENTRY_DISCOVERY_INTERVAL_MS || 2 * 60 * 1000
 );
+const LIVE_POSITION_MONITOR_INTERVAL_MS = getWorkerIntervalMs(
+  "LIVE_POSITION_MONITOR_INTERVAL_MS",
+  8_000
+);
 
 logger.info(
   `🧠 [LearningWorkers] Configured post-mortem interval=${POSTMORTEM_INTERVAL_MS}ms ` +
   `learner interval=${LEARNER_INTERVAL_MS}ms winner-reentry interval=${WINNER_REENTRY_DISCOVERY_INTERVAL_MS}ms`
 );
+logger.info(`🛰️ [LiveMonitor] Configured interval=${LIVE_POSITION_MONITOR_INTERVAL_MS}ms`);
+startLivePositionMonitor(LIVE_POSITION_MONITOR_INTERVAL_MS);
 
 // Post-mortem worker: runs frequently to drain losing-trade backlog.
 setInterval(async () => {

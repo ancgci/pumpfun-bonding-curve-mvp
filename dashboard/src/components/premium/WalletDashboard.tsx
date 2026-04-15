@@ -25,14 +25,29 @@ type ManagedWallet = {
     isDefault: boolean;
 };
 
+function formatTokenBalance(uiAmount: number, decimals: number = 0) {
+    const value = Number(uiAmount || 0);
+    if (!Number.isFinite(value)) return "--";
+
+    const maxDecimals = value >= 1
+        ? Math.min(Math.max(decimals, 2), 6)
+        : Math.min(Math.max(decimals, 4), 9);
+
+    return value.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: maxDecimals,
+    });
+}
+
 export const WalletDashboard = () => {
     const [activeTab, setActiveTab] = useState<WalletTab>('saldo');
-    const { stats, tradeHistory, walletBalances, refreshData } = useDashboardData();
+    const { stats, tradeHistory, walletBalances, refreshData, sellWalletToken } = useDashboardData();
     const [copied, setCopied] = useState(false);
     const [exportedSecret, setExportedSecret] = useState<string>('');
     const [walletAddressState, setWalletAddressState] = useState<string>((stats as any)?.walletAddress || "");
     const [loadingWallet, setLoadingWallet] = useState(false);
     const [managedWallets, setManagedWallets] = useState<ManagedWallet[]>([]);
+    const [sellingTokenKey, setSellingTokenKey] = useState<string | null>(null);
 
     const solBalance = Number(walletBalances?.solBalance ?? (stats as any)?.walletSol ?? stats?.totalPnL ?? 0);
     const activeWallet = managedWallets.find((wallet) => wallet.isDefault) || null;
@@ -44,12 +59,6 @@ export const WalletDashboard = () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
-
-    useEffect(() => {
-        if (walletBalances?.address) {
-            setWalletAddressState(walletBalances.address);
-        }
-    }, [walletBalances]);
 
     const loadAccountWallets = async () => {
         try {
@@ -113,7 +122,10 @@ export const WalletDashboard = () => {
     const handleActivateWallet = async (walletId: number) => {
         try {
             setLoadingWallet(true);
-            await api.post(`${API_BASE}/wallet/select/${walletId}`);
+            const { data } = await api.post(`${API_BASE}/wallet/select/${walletId}`);
+            if (data?.wallet?.publicKey) {
+                setWalletAddressState(data.wallet.publicKey);
+            }
             await loadAccountWallets();
             await refreshData();
             setExportedSecret('');
@@ -140,6 +152,46 @@ export const WalletDashboard = () => {
             alert(`Erro ao excluir carteira: ${err.response?.data?.error || err.message}`);
         } finally {
             setLoadingWallet(false);
+        }
+    };
+
+    const handleSellToken = async (token: any, percent: number) => {
+        const tokenLabel = token.symbol || token.mint?.slice(0, 6) || 'token';
+        const uiAmount = Number(token.uiAmount || 0);
+        const estimatedSellAmount = uiAmount * (percent / 100);
+
+        if (!(uiAmount > 0)) {
+            alert(`Nao ha saldo disponivel de ${tokenLabel} para vender.`);
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Confirmar venda manual de ${percent}% de ${tokenLabel}?\n\n` +
+            `Saldo atual: ${formatTokenBalance(uiAmount, token.decimals)} ${tokenLabel}\n` +
+            `Estimativa de venda: ${formatTokenBalance(estimatedSellAmount, token.decimals)} ${tokenLabel}\n\n` +
+            `Esta acao envia uma transacao real on-chain usando a wallet ativa do bot.`
+        );
+
+        if (!confirmed) return;
+
+        const opKey = `${token.mint}:${percent}`;
+
+        try {
+            setSellingTokenKey(opKey);
+            const result = await sellWalletToken(token.mint, percent);
+            const venue = result?.venue || 'rota automatica';
+            const signature = result?.signature ? `\nTx: ${String(result.signature).slice(0, 16)}...` : '';
+            const remaining = Number(result?.walletBalanceAfter?.uiAmount ?? 0);
+
+            alert(
+                `Venda enviada com sucesso via ${venue}.\n` +
+                `Saldo restante: ${formatTokenBalance(remaining, token.decimals)} ${tokenLabel}` +
+                signature
+            );
+        } catch (err: any) {
+            alert(`Erro ao vender ${tokenLabel}: ${err.response?.data?.error || err.message}`);
+        } finally {
+            setSellingTokenKey(null);
         }
     };
 
@@ -251,7 +303,7 @@ export const WalletDashboard = () => {
                                     </div>
                                 </div>
                                 {(walletBalances?.tokens || []).map((tok: any, idx: number) => (
-                                    <div key={idx} className="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5">
+                                    <div key={tok.mint || idx} className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 p-4 bg-white/5 rounded-2xl border border-white/5">
                                         <div className="flex items-center gap-4">
                                             <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
                                                 {tok.symbol?.[0] || 'T'}
@@ -261,9 +313,31 @@ export const WalletDashboard = () => {
                                                 <p className="text-xs text-muted-foreground break-all">{tok.mint}</p>
                                             </div>
                                         </div>
-                                        <div className="text-right">
-                                            <p className="font-bold text-foreground">{Number(tok.uiAmount || 0).toFixed(tok.decimals || 2)}</p>
-                                            <p className="text-xs text-muted-foreground font-medium">decimals: {tok.decimals}</p>
+                                        <div className="flex flex-col md:items-end gap-3">
+                                            <div className="text-right">
+                                                <p className="font-bold text-foreground">{formatTokenBalance(Number(tok.uiAmount || 0), tok.decimals)}</p>
+                                                <p className="text-xs text-muted-foreground font-medium">decimals: {tok.decimals}</p>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2 md:justify-end">
+                                                {[25, 50, 100].map((percent) => {
+                                                    const opKey = `${tok.mint}:${percent}`;
+                                                    const isSelling = sellingTokenKey === opKey;
+                                                    return (
+                                                        <button
+                                                            key={percent}
+                                                            onClick={() => { void handleSellToken(tok, percent); }}
+                                                            disabled={Boolean(sellingTokenKey)}
+                                                            className={`px-3 py-2 rounded-xl text-[11px] font-bold border transition-colors disabled:opacity-50 ${
+                                                                percent === 100
+                                                                    ? 'bg-red-500/10 text-red-300 border-red-500/20 hover:bg-red-500/20'
+                                                                    : 'bg-white/10 text-foreground border-white/10 hover:bg-white/15'
+                                                            }`}
+                                                        >
+                                                            {isSelling ? 'Enviando...' : `Sell ${percent}%`}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
                                     </div>
                                 ))}

@@ -3,9 +3,12 @@ import { CONFIG, getRuntimeConfig } from "./config";
 import * as fs from "fs";
 import * as path from "path";
 import db from "./db";
+import type { ExitAction } from "./exitStrategy";
 import {
   PostMortemStatus,
+  TradeAnomalyContext,
   TradeDecisionContext,
+  TradeFeedAudit,
   TradeMarketSnapshot,
   TradeMonitoringPoint,
   TradePostMortemReport,
@@ -42,10 +45,20 @@ export interface SimulatedTrade {
   tokenHolders?: number;
   marketCapEntry?: number | null;
   marketCapExit?: number | null;
+  exitType?: ExitAction | null;
+  netSellValue?: number | null;
+  netAtaCloseValue?: number | null;
+  decisionReason?: string | null;
+  realizedExitValueSol?: number | null;
   decisionContext?: TradeDecisionContext | null;
   entrySnapshot?: TradeMarketSnapshot | null;
   exitSnapshot?: TradeMarketSnapshot | null;
   monitoringTrace?: TradeMonitoringPoint[];
+  entryFeedAudit?: TradeFeedAudit | null;
+  exitFeedAudit?: TradeFeedAudit | null;
+  anomalyFlag?: boolean;
+  anomalyReason?: string | null;
+  anomalyContext?: TradeAnomalyContext | null;
   postMortemStatus?: PostMortemStatus;
   postMortemSummary?: string | null;
   postMortemReport?: TradePostMortemReport | null;
@@ -63,13 +76,16 @@ interface SimulationMetrics {
   sharpRatio: number;
   expectedValue: number;
   riskRewardRatio: number;
+  anomalousTrades: number;
   lastUpdate: number;
 }
 
 const SIMULATION_DATA_DIR = path.join(__dirname, "../data/simulation");
 const SIMULATION_TRADES_FILE = path.join(SIMULATION_DATA_DIR, "trades.json");
 const SIMULATION_METRICS_FILE = path.join(SIMULATION_DATA_DIR, "metrics.json");
-const SIMULATION_ENTRY_PRICE_REPAIR_RATIO = 1000;
+const SIMULATION_ENTRY_PRICE_REPAIR_RATIO = 3;
+const SIMULATION_PRICE_MARKET_CAP_COHERENCE_RATIO = 2.5;
+const SIMULATION_MARKET_CAP_DIRECTION_TOLERANCE = 0.98;
 
 export function getSimulationTimeoutMs(): number {
   const cfg = getRuntimeConfig();
@@ -82,6 +98,16 @@ export function isSimulationTradeStale(
   now: number = Date.now()
 ): boolean {
   return trade.status === "OPEN" && now - Number(trade.entryTime || 0) >= getSimulationTimeoutMs();
+}
+
+export interface SimulationExitDetails {
+  exitType?: ExitAction | null;
+  netSellValue?: number | null;
+  netAtaCloseValue?: number | null;
+  decisionReason?: string | null;
+  realizedExitValueSol?: number | null;
+  exitFeedAudit?: TradeFeedAudit | null;
+  anomaly?: TradeAnomalyContext | null;
 }
 
 function serializeJson(value: unknown): string | null {
@@ -97,6 +123,22 @@ function parseJsonField<T>(value: unknown): T | null {
   } catch {
     return null;
   }
+}
+
+function toNullableNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function computeRatio(numerator: number, denominator: number): number | null {
+  if (!(numerator > 0) || !(denominator > 0)) return null;
+  const ratio = numerator / denominator;
+  return Number.isFinite(ratio) ? ratio : null;
+}
+
+function computeCoherenceRatio(a: number | null, b: number | null): number | null {
+  if (!(a && a > 0) || !(b && b > 0)) return null;
+  return Math.max(a, b) / Math.min(a, b);
 }
 
 function loadSimulationTrades(): SimulatedTrade[] {
@@ -124,10 +166,22 @@ function normalizeTradeRow(row: any): SimulatedTrade {
     exitTime: row.exitTime ? Number(row.exitTime) : null,
     marketCapEntry: row.marketCapEntry ?? null,
     marketCapExit: row.marketCapExit ?? null,
+    exitType: row.exitType ?? null,
+    netSellValue: row.netSellValue !== undefined && row.netSellValue !== null ? Number(row.netSellValue) : null,
+    netAtaCloseValue: row.netAtaCloseValue !== undefined && row.netAtaCloseValue !== null ? Number(row.netAtaCloseValue) : null,
+    decisionReason: row.decisionReason ?? null,
+    realizedExitValueSol: row.realizedExitValueSol !== undefined && row.realizedExitValueSol !== null
+      ? Number(row.realizedExitValueSol)
+      : null,
     decisionContext: parseJsonField<TradeDecisionContext>(row.decisionContext),
     entrySnapshot: parseJsonField<TradeMarketSnapshot>(row.entrySnapshot),
     exitSnapshot: parseJsonField<TradeMarketSnapshot>(row.exitSnapshot),
     monitoringTrace: parseJsonField<TradeMonitoringPoint[]>(row.monitoringTrace) || [],
+    entryFeedAudit: parseJsonField<TradeFeedAudit>(row.entryFeedAudit),
+    exitFeedAudit: parseJsonField<TradeFeedAudit>(row.exitFeedAudit),
+    anomalyFlag: row.anomalyFlag === true || Number(row.anomalyFlag) === 1,
+    anomalyReason: row.anomalyReason ?? null,
+    anomalyContext: parseJsonField<TradeAnomalyContext>(row.anomalyContext),
     postMortemStatus: (row.postMortemStatus || "PENDING") as PostMortemStatus,
     postMortemSummary: row.postMortemSummary ?? null,
     postMortemReport: parseJsonField<TradePostMortemReport>(row.postMortemReport),
@@ -140,6 +194,80 @@ function applyEntryPriceCorrection(trade: SimulatedTrade, correctedEntryPrice: n
   if (trade.entrySnapshot) {
     trade.entrySnapshot.price = correctedEntryPrice;
   }
+}
+
+function computeFallbackRealizedExitValueSol(trade: Pick<SimulatedTrade, "entryAmount" | "entryPrice">, exitPrice: number): number {
+  const entryAmount = Number(trade.entryAmount || 0);
+  const entryPrice = Number(trade.entryPrice || 0);
+  if (!(entryAmount > 0) || !(entryPrice > 0) || !(exitPrice > 0)) {
+    return 0;
+  }
+
+  return Number((entryAmount * (exitPrice / entryPrice)).toFixed(9));
+}
+
+export function detectTradePriceAnomaly(params: {
+  entryPrice: number;
+  exitPrice: number;
+  entryMarketCap?: number | null;
+  exitMarketCap?: number | null;
+  entryFeedAudit?: TradeFeedAudit | null;
+  exitFeedAudit?: TradeFeedAudit | null;
+  snapshotPrice?: number | null;
+}): TradeAnomalyContext | null {
+  const reasons: string[] = [];
+  const priceRatio = computeRatio(Number(params.exitPrice), Number(params.entryPrice));
+  const marketCapRatio = computeRatio(
+    Number(params.exitMarketCap || 0),
+    Number(params.entryMarketCap || 0)
+  );
+  const coherenceRatio = computeCoherenceRatio(priceRatio, marketCapRatio);
+
+  if (
+    priceRatio &&
+    marketCapRatio &&
+    (
+      coherenceRatio !== null && coherenceRatio >= SIMULATION_PRICE_MARKET_CAP_COHERENCE_RATIO ||
+      (priceRatio > 1 && marketCapRatio < SIMULATION_MARKET_CAP_DIRECTION_TOLERANCE) ||
+      (priceRatio < SIMULATION_MARKET_CAP_DIRECTION_TOLERANCE && marketCapRatio > 1)
+    )
+  ) {
+    reasons.push(
+      `PRICE_MARKET_CAP_DIVERGENCE: price x${priceRatio.toFixed(2)} vs MC x${marketCapRatio.toFixed(2)}`
+    );
+  }
+
+  const entryPairAddress = params.entryFeedAudit?.pairAddress || null;
+  const exitPairAddress = params.exitFeedAudit?.pairAddress || null;
+  if (entryPairAddress && exitPairAddress && entryPairAddress !== exitPairAddress) {
+    reasons.push(`PAIR_MISMATCH: ${entryPairAddress} -> ${exitPairAddress}`);
+  }
+
+  const snapshotPrice = toNullableNumber(params.snapshotPrice);
+  const exitPrice = Number(params.exitPrice) || 0;
+  const snapshotPriceDeltaPct =
+    snapshotPrice && exitPrice > 0
+      ? Math.abs(snapshotPrice - exitPrice) / exitPrice * 100
+      : null;
+
+  if (snapshotPriceDeltaPct !== null && snapshotPriceDeltaPct > 5) {
+    reasons.push(`SNAPSHOT_PRICE_MISMATCH: ${snapshotPriceDeltaPct.toFixed(2)}%`);
+  }
+
+  if (reasons.length === 0) {
+    return null;
+  }
+
+  return {
+    flaggedAt: Date.now(),
+    reasons,
+    priceRatio,
+    marketCapRatio,
+    coherenceRatio,
+    entryPairAddress,
+    exitPairAddress,
+    snapshotPriceDeltaPct,
+  };
 }
 
 export function inferCorrectedEntryPrice(params: {
@@ -225,6 +353,7 @@ export async function recordSimulatedTrade(
   marketCap?: number,
   decisionContext?: TradeDecisionContext | null,
   entrySnapshot?: TradeMarketSnapshot | null,
+  entryFeedAudit?: TradeFeedAudit | null,
   entryAmountOverride?: number | null
 ): Promise<void> {
   ensureSimulationDir();
@@ -249,6 +378,11 @@ export async function recordSimulatedTrade(
     tokenHolders: holders,
     marketCapEntry: marketCap ?? null,
     marketCapExit: null,
+    exitType: null,
+    netSellValue: null,
+    netAtaCloseValue: null,
+    decisionReason: null,
+    realizedExitValueSol: null,
     decisionContext: decisionContext || {
       action: "BUY",
       confidence,
@@ -259,6 +393,11 @@ export async function recordSimulatedTrade(
     entrySnapshot: entrySnapshot ?? null,
     exitSnapshot: null,
     monitoringTrace: [],
+    entryFeedAudit: entryFeedAudit ?? null,
+    exitFeedAudit: null,
+    anomalyFlag: false,
+    anomalyReason: null,
+    anomalyContext: null,
     postMortemStatus: "PENDING",
     postMortemSummary: null,
     postMortemReport: null,
@@ -276,8 +415,10 @@ export async function recordSimulatedTrade(
     db.prepare(`
       INSERT INTO simulated_trades (
         token_mint, token_symbol, entry_time, entry_price, entry_amount, confidence, status, reason, token_holders, market_cap_entry, market_cap_exit,
-        decision_context, entry_snapshot, exit_snapshot, monitoring_trace, postmortem_status, postmortem_summary, postmortem_report, postmortem_analyzed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        decision_context, entry_snapshot, exit_snapshot, monitoring_trace, entry_feed_audit, exit_feed_audit, anomaly_flag, anomaly_reason, anomaly_context,
+        exit_type, net_sell_value, net_ata_close_value, decision_reason, realized_exit_value_sol,
+        postmortem_status, postmortem_summary, postmortem_report, postmortem_analyzed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       trade.tokenMint,
       trade.tokenSymbol,
@@ -294,6 +435,16 @@ export async function recordSimulatedTrade(
       serializeJson(trade.entrySnapshot),
       serializeJson(trade.exitSnapshot),
       serializeJson(trade.monitoringTrace),
+      serializeJson(trade.entryFeedAudit),
+      serializeJson(trade.exitFeedAudit),
+      trade.anomalyFlag ? 1 : 0,
+      trade.anomalyReason,
+      serializeJson(trade.anomalyContext),
+      trade.exitType,
+      trade.netSellValue,
+      trade.netAtaCloseValue,
+      trade.decisionReason,
+      trade.realizedExitValueSol,
       trade.postMortemStatus,
       trade.postMortemSummary,
       serializeJson(trade.postMortemReport),
@@ -319,7 +470,8 @@ export async function updateSimulatedTradeExit(
   status: "CLOSED_TP" | "CLOSED_SL" | "EXPIRED",
   reason?: string,
   marketCap?: number | null,
-  exitSnapshot?: TradeMarketSnapshot | null
+  exitSnapshot?: TradeMarketSnapshot | null,
+  exitDetails?: SimulationExitDetails | null
 ): Promise<SimulatedTrade | null> {
   ensureSimulationDir();
 
@@ -349,12 +501,26 @@ export async function updateSimulatedTradeExit(
   trade.exitTime = Date.now();
   trade.exitPrice = exitPrice;
   trade.status = status;
-  trade.pnlPercent = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
-  trade.pnl = trade.entryAmount * (trade.pnlPercent / 100);
+  trade.exitType = exitDetails?.exitType ?? "SELL";
+  trade.netSellValue = exitDetails?.netSellValue ?? null;
+  trade.netAtaCloseValue = exitDetails?.netAtaCloseValue ?? null;
+  trade.decisionReason = exitDetails?.decisionReason ?? null;
+  const providedRealizedExitValueSol = Number(exitDetails?.realizedExitValueSol);
+  trade.realizedExitValueSol = Number.isFinite(providedRealizedExitValueSol)
+    ? Math.max(0, providedRealizedExitValueSol)
+    : computeFallbackRealizedExitValueSol(trade, exitPrice);
+  trade.pnl = Number((trade.realizedExitValueSol - trade.entryAmount).toFixed(9));
+  trade.pnlPercent = trade.entryAmount > 0
+    ? Number(((trade.pnl / trade.entryAmount) * 100).toFixed(6))
+    : 0;
   trade.reason = reason || `Exited with status: ${status}`;
   trade.marketCapExit = marketCap ?? null;
   trade.exitSnapshot = exitSnapshot ?? null;
-  trade.postMortemStatus = getPostMortemStatusForClosedTrade(trade.pnl, status);
+  trade.exitFeedAudit = exitDetails?.exitFeedAudit ?? null;
+  trade.anomalyContext = exitDetails?.anomaly ?? null;
+  trade.anomalyFlag = Boolean(trade.anomalyContext);
+  trade.anomalyReason = trade.anomalyContext?.reasons?.join(" | ") ?? null;
+  trade.postMortemStatus = getPostMortemStatusForClosedTrade(trade.pnl, status, trade.anomalyFlag);
 
   saveSimulationTrades(trades);
 
@@ -362,7 +528,7 @@ export async function updateSimulatedTradeExit(
   try {
     db.prepare(`
       UPDATE simulated_trades 
-      SET entry_price = ?, entry_snapshot = ?, exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?, exit_snapshot = ?, postmortem_status = ?
+      SET entry_price = ?, entry_snapshot = ?, exit_time = ?, exit_price = ?, status = ?, pnl_sol = ?, pnl_percent = ?, reason = ?, market_cap_exit = ?, exit_snapshot = ?, exit_feed_audit = ?, anomaly_flag = ?, anomaly_reason = ?, anomaly_context = ?, exit_type = ?, net_sell_value = ?, net_ata_close_value = ?, decision_reason = ?, realized_exit_value_sol = ?, postmortem_status = ?
       WHERE token_mint = ? AND status = 'OPEN'
     `).run(
       trade.entryPrice,
@@ -375,6 +541,15 @@ export async function updateSimulatedTradeExit(
       trade.reason,
       trade.marketCapExit,
       serializeJson(trade.exitSnapshot),
+      serializeJson(trade.exitFeedAudit),
+      trade.anomalyFlag ? 1 : 0,
+      trade.anomalyReason,
+      serializeJson(trade.anomalyContext),
+      trade.exitType,
+      trade.netSellValue,
+      trade.netAtaCloseValue,
+      trade.decisionReason,
+      trade.realizedExitValueSol,
       trade.postMortemStatus,
       tokenMint
     );
@@ -387,7 +562,7 @@ export async function updateSimulatedTradeExit(
 
   const emoji = trade.pnl > 0 ? "✅" : "❌";
   logger.info(
-    `📊 [SIMULATION] Trade closed: ${trade.tokenSymbol} ${emoji} ${trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(4)} SOL (${trade.pnlPercent.toFixed(2)}%)`
+    `📊 [SIMULATION] Trade closed: ${trade.tokenSymbol} ${emoji} ${trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(4)} SOL (${trade.pnlPercent.toFixed(2)}%)${trade.anomalyFlag ? " [ANOMALY]" : ""}`
   );
 
   return trade;
@@ -519,7 +694,7 @@ export function updateTradePostMortem(
   }
 }
 
-export function getPendingLossTrades(limit: number = 10): SimulatedTrade[] {
+export function getPendingPostMortemTrades(limit: number = 10): SimulatedTrade[] {
   try {
     const rows = db.prepare(`
       SELECT
@@ -538,19 +713,33 @@ export function getPendingLossTrades(limit: number = 10): SimulatedTrade[] {
         token_holders as tokenHolders,
         market_cap_entry as marketCapEntry,
         market_cap_exit as marketCapExit,
+        exit_type as exitType,
+        net_sell_value as netSellValue,
+        net_ata_close_value as netAtaCloseValue,
+        decision_reason as decisionReason,
+        realized_exit_value_sol as realizedExitValueSol,
         decision_context as decisionContext,
         entry_snapshot as entrySnapshot,
         exit_snapshot as exitSnapshot,
         monitoring_trace as monitoringTrace,
+        entry_feed_audit as entryFeedAudit,
+        exit_feed_audit as exitFeedAudit,
+        anomaly_flag as anomalyFlag,
+        anomaly_reason as anomalyReason,
+        anomaly_context as anomalyContext,
         postmortem_status as postMortemStatus,
         postmortem_summary as postMortemSummary,
         postmortem_report as postMortemReport,
         postmortem_analyzed_at as postMortemAnalyzedAt
       FROM simulated_trades
       WHERE status != 'OPEN'
-        AND (pnl_sol < 0 OR status = 'CLOSED_SL')
         AND COALESCE(postmortem_status, 'PENDING') IN ('PENDING', 'FAILED')
-      ORDER BY exit_time ASC
+        AND (
+          pnl_sol < 0
+          OR status = 'CLOSED_SL'
+          OR COALESCE(anomaly_flag, 0) = 1
+        )
+      ORDER BY COALESCE(exit_time, entry_time) ASC
       LIMIT ?
     `).all(limit) as any[];
 
@@ -564,11 +753,17 @@ export function getPendingLossTrades(limit: number = 10): SimulatedTrade[] {
   return loadSimulationTrades()
     .filter((trade) =>
       trade.status !== "OPEN" &&
-      (trade.pnl < 0 || trade.status === "CLOSED_SL") &&
-      (!trade.postMortemStatus || trade.postMortemStatus === "PENDING" || trade.postMortemStatus === "FAILED")
+      (!trade.postMortemStatus || trade.postMortemStatus === "PENDING" || trade.postMortemStatus === "FAILED") &&
+      (
+        trade.pnl < 0 ||
+        trade.status === "CLOSED_SL" ||
+        Boolean(trade.anomalyFlag)
+      )
     )
     .slice(0, limit);
 }
+
+export const getPendingLossTrades = getPendingPostMortemTrades;
 
 export function getRecentPostMortemTrades(limit: number = 20): SimulatedTrade[] {
   try {
@@ -589,10 +784,20 @@ export function getRecentPostMortemTrades(limit: number = 20): SimulatedTrade[] 
         token_holders as tokenHolders,
         market_cap_entry as marketCapEntry,
         market_cap_exit as marketCapExit,
+        exit_type as exitType,
+        net_sell_value as netSellValue,
+        net_ata_close_value as netAtaCloseValue,
+        decision_reason as decisionReason,
+        realized_exit_value_sol as realizedExitValueSol,
         decision_context as decisionContext,
         entry_snapshot as entrySnapshot,
         exit_snapshot as exitSnapshot,
         monitoring_trace as monitoringTrace,
+        entry_feed_audit as entryFeedAudit,
+        exit_feed_audit as exitFeedAudit,
+        anomaly_flag as anomalyFlag,
+        anomaly_reason as anomalyReason,
+        anomaly_context as anomalyContext,
         postmortem_status as postMortemStatus,
         postmortem_summary as postMortemSummary,
         postmortem_report as postMortemReport,
@@ -632,10 +837,20 @@ export function getOpenTradesFromDb(options?: { includeStale?: boolean }): Simul
         token_holders as tokenHolders,
         market_cap_entry as marketCapEntry,
         market_cap_exit as marketCapExit,
+        exit_type as exitType,
+        net_sell_value as netSellValue,
+        net_ata_close_value as netAtaCloseValue,
+        decision_reason as decisionReason,
+        realized_exit_value_sol as realizedExitValueSol,
         decision_context as decisionContext,
         entry_snapshot as entrySnapshot,
         exit_snapshot as exitSnapshot,
         monitoring_trace as monitoringTrace,
+        entry_feed_audit as entryFeedAudit,
+        exit_feed_audit as exitFeedAudit,
+        anomaly_flag as anomalyFlag,
+        anomaly_reason as anomalyReason,
+        anomaly_context as anomalyContext,
         postmortem_status as postMortemStatus,
         postmortem_summary as postMortemSummary,
         postmortem_report as postMortemReport,
@@ -658,9 +873,26 @@ export function getOpenTradesFromDb(options?: { includeStale?: boolean }): Simul
  * Recalculate simulation metrics
  */
 async function recalculateSimulationMetrics(trades: SimulatedTrade[]): Promise<void> {
-  const closedTrades = trades.filter((t) => t.status !== "OPEN");
+  const closedTrades = trades.filter((t) => t.status !== "OPEN" && !t.anomalyFlag);
+  const anomalousTrades = trades.filter((t) => t.status !== "OPEN" && t.anomalyFlag).length;
 
   if (closedTrades.length === 0) {
+    const metrics: SimulationMetrics = {
+      totalTrades: 0,
+      winTrades: 0,
+      lossTrades: 0,
+      winRate: 0,
+      totalPnL: 0,
+      avgPnL: 0,
+      maxDrawdown: 0,
+      sharpRatio: 0,
+      expectedValue: 0,
+      riskRewardRatio: 0,
+      anomalousTrades,
+      lastUpdate: Date.now(),
+    };
+    ensureSimulationDir();
+    fs.writeFileSync(SIMULATION_METRICS_FILE, JSON.stringify(metrics, null, 2));
     return;
   }
 
@@ -713,6 +945,7 @@ async function recalculateSimulationMetrics(trades: SimulatedTrade[]): Promise<v
     sharpRatio: sharpeRatio,
     expectedValue,
     riskRewardRatio,
+    anomalousTrades,
     lastUpdate: Date.now(),
   };
 
@@ -722,6 +955,9 @@ async function recalculateSimulationMetrics(trades: SimulatedTrade[]): Promise<v
 
   logger.info(`📈 [SIMULATION] Metrics updated:`);
   logger.info(`   Trades: ${metrics.totalTrades} (W: ${metrics.winTrades} | L: ${metrics.lossTrades})`);
+  if (metrics.anomalousTrades > 0) {
+    logger.info(`   Anomalous Trades Excluded: ${metrics.anomalousTrades}`);
+  }
   logger.info(`   Win Rate: ${metrics.winRate.toFixed(1)}%`);
   logger.info(`   Total P&L: ${metrics.totalPnL > 0 ? '+' : ''}${metrics.totalPnL.toFixed(4)} SOL`);
   logger.info(`   Avg P&L: ${metrics.avgPnL > 0 ? '+' : ''}${metrics.avgPnL.toFixed(4)} SOL`);
@@ -840,10 +1076,20 @@ export function getRecentWinningTrades(options?: { limit?: number; lookbackMs?: 
         token_holders as tokenHolders,
         market_cap_entry as marketCapEntry,
         market_cap_exit as marketCapExit,
+        exit_type as exitType,
+        net_sell_value as netSellValue,
+        net_ata_close_value as netAtaCloseValue,
+        decision_reason as decisionReason,
+        realized_exit_value_sol as realizedExitValueSol,
         decision_context as decisionContext,
         entry_snapshot as entrySnapshot,
         exit_snapshot as exitSnapshot,
         monitoring_trace as monitoringTrace,
+        entry_feed_audit as entryFeedAudit,
+        exit_feed_audit as exitFeedAudit,
+        anomaly_flag as anomalyFlag,
+        anomaly_reason as anomalyReason,
+        anomaly_context as anomalyContext,
         postmortem_status as postMortemStatus,
         postmortem_summary as postMortemSummary,
         postmortem_report as postMortemReport,
@@ -851,6 +1097,7 @@ export function getRecentWinningTrades(options?: { limit?: number; lookbackMs?: 
       FROM simulated_trades
       WHERE status = 'CLOSED_TP'
         AND pnl_sol > 0
+        AND COALESCE(anomaly_flag, 0) = 0
         AND (? = 0 OR COALESCE(exit_time, entry_time) >= ?)
       ORDER BY COALESCE(exit_time, entry_time) DESC
       LIMIT ?
@@ -866,6 +1113,7 @@ export function getRecentWinningTrades(options?: { limit?: number; lookbackMs?: 
   return loadSimulationTrades()
     .filter((trade) =>
       trade.status === "CLOSED_TP" &&
+      !trade.anomalyFlag &&
       trade.pnl > 0 &&
       (minExitTime <= 0 || Number(trade.exitTime || trade.entryTime || 0) >= minExitTime)
     )
@@ -932,6 +1180,10 @@ export function isSimulationReadyForLive(): {
     score += 20;
   } else {
     reasons.push(`Sharpe Ratio ${metrics.sharpRatio.toFixed(2)} < 1`);
+  }
+
+  if (metrics.anomalousTrades > 0) {
+    reasons.push(`${metrics.anomalousTrades} anomalous trade(s) excluded from readiness metrics`);
   }
 
   return {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { PremiumLayout } from './PremiumLayout';
 import { PremiumCard } from './PremiumCard';
 import { PaymentOnTimeChart } from './PaymentOnTimeChart';
@@ -24,6 +24,7 @@ import { ControlPanel } from '../dashboard/ControlPanel';
 import { ActiveProtocols } from '../dashboard/ActiveProtocols';
 import { AgentStatus } from '../dashboard/AgentStatus';
 import { LearnedRules } from '../dashboard/LearnedRules';
+import { PostMortemInsights } from '../dashboard/PostMortemInsights';
 import { TradeHistory } from '../dashboard/TradeHistory';
 import { AgentLiveTerminal } from '../dashboard/AgentLiveTerminal';
 import { PositionsList } from '../dashboard/PositionsList';
@@ -48,6 +49,71 @@ function formatActivityTime(time: unknown): string {
     return "--:--:--";
 }
 
+function LoadingPulse({ className }: { className: string }) {
+    return <div className={`animate-pulse rounded-2xl bg-white/6 ${className}`}></div>;
+}
+
+function PremiumDashboardLoadingState({
+    activeTab,
+    onTabChange,
+}: {
+    activeTab: PremiumTab;
+    onTabChange: (tab: PremiumTab) => void;
+}) {
+    return (
+        <PremiumLayout activeTab={activeTab} onTabChange={onTabChange}>
+            <div className="space-y-6 lg:space-y-10">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 lg:gap-6">
+                    <div className="space-y-3">
+                        <LoadingPulse className="h-4 w-40" />
+                        <LoadingPulse className="h-10 w-[min(24rem,80vw)]" />
+                        <LoadingPulse className="h-4 w-[min(28rem,88vw)]" />
+                    </div>
+                    <div className="rounded-2xl border border-primary/15 bg-primary/10 px-4 py-3">
+                        <p className="text-xs uppercase tracking-[0.22em] text-primary/80">Bootstrapping</p>
+                        <p className="mt-1 text-sm text-foreground">Sincronizando bot, trades e agentes antes de abrir a tela.</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 lg:gap-10">
+                    <PremiumCard className="xl:col-span-2" title="Performance">
+                        <div className="space-y-4">
+                            <LoadingPulse className="h-64 w-full" />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                                {Array.from({ length: 6 }).map((_, index) => (
+                                    <LoadingPulse key={index} className="h-24 w-full" />
+                                ))}
+                            </div>
+                        </div>
+                    </PremiumCard>
+
+                    <div className="space-y-6 lg:space-y-10">
+                        <PremiumCard title="Bot Health">
+                            <div className="space-y-4">
+                                <LoadingPulse className="h-5 w-32" />
+                                <LoadingPulse className="h-12 w-full" />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <LoadingPulse className="h-20 w-full" />
+                                    <LoadingPulse className="h-20 w-full" />
+                                </div>
+                                <LoadingPulse className="h-28 w-full" />
+                            </div>
+                        </PremiumCard>
+
+                        <PremiumCard title="Quick Positions View">
+                            <div className="space-y-3">
+                                {Array.from({ length: 3 }).map((_, index) => (
+                                    <LoadingPulse key={index} className="h-24 w-full" />
+                                ))}
+                            </div>
+                        </PremiumCard>
+                    </div>
+                </div>
+            </div>
+        </PremiumLayout>
+    );
+}
+
 export const PremiumDashboardPage = () => {
     const [activeTab, setActiveTab] = useState<PremiumTab>('overview');
     const {
@@ -57,10 +123,13 @@ export const PremiumDashboardPage = () => {
         botHealth,
         agentStatus,
         tradingConfig,
+        isInitialLoading,
         isAgentActive,
         isBotOnline,
         tradeHistory,
+        refreshData,
     } = useDashboardData();
+    const previousModeRef = useRef<string | null>(null);
 
     const { user } = useAuthStore();
 
@@ -77,15 +146,20 @@ export const PremiumDashboardPage = () => {
         overview: ['performance', 'accuracy', 'activity', 'health', 'positions'],
         trading: ['settings', 'automation', 'protocols', 'positions'],
         logs: ['terminal', 'history'],
-        ai: ['rules', 'status'],
+        ai: ['postmortems', 'rules', 'status'],
     });
     const [draggedCard, setDraggedCard] = useState<{ tab: string | null; id: string | null }>({ tab: null, id: null });
-    const { refreshData } = useDashboardData();
 
-    // Re-fetch data when mode or tab changes
+    // Re-fetch only when the bot mode actually changes. Tab changes should feel instant.
     useEffect(() => {
-        refreshData();
-    }, [agentStatus?.mode, activeTab, refreshData]);
+        if (!agentStatus?.mode) return;
+
+        if (previousModeRef.current && previousModeRef.current !== agentStatus.mode) {
+            void refreshData();
+        }
+
+        previousModeRef.current = agentStatus.mode;
+    }, [agentStatus?.mode, refreshData]);
 
     const performanceTrades = simTrades && simTrades.length > 0 ? simTrades : tradeHistory || [];
 
@@ -130,6 +204,15 @@ export const PremiumDashboardPage = () => {
                             : isBotOnline
                                 ? "Bot Live"
                                 : "Bot Stalled";
+
+    const hasBootstrappedSnapshot = Boolean(
+        agentStatus ||
+        botHealth ||
+        tradingConfig ||
+        positions.length > 0 ||
+        tradeHistory.length > 0 ||
+        simTrades.length > 0
+    );
 
     const getSubAgentTone = (status: string) => {
         switch (status) {
@@ -488,6 +571,20 @@ export const PremiumDashboardPage = () => {
                         <LearnedRules />
                     </PremiumCard>
                 );
+            case 'postmortems':
+                return (
+                    <PremiumCard
+                        key="postmortems"
+                        id="postmortems"
+                        draggable
+                        onDragStart={() => handleDragStart('ai', 'postmortems')}
+                        onDragOver={handleDragOver}
+                        onDrop={() => handleDrop('ai', 'postmortems')}
+                        title="Post-Mortem Insights"
+                    >
+                        <PostMortemInsights />
+                    </PremiumCard>
+                );
             case 'status':
                 return (
                     <PremiumCard
@@ -550,6 +647,10 @@ export const PremiumDashboardPage = () => {
                 );
         }
     };
+
+    if (isInitialLoading && !hasBootstrappedSnapshot) {
+        return <PremiumDashboardLoadingState activeTab={activeTab} onTabChange={setActiveTab} />;
+    }
 
     return (
         <PremiumLayout activeTab={activeTab} onTabChange={setActiveTab}>

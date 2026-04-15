@@ -437,6 +437,50 @@ priority: 10
 - `dashboard-api/server.ts` — Adds `GET /api/agent/postmortems`
 - `index.ts` — Runs `PostMortemAgent` before `LearnerAgent`
 
+### ATA-Aware Exit Strategy
+
+The bot now decides exits using **net SOL recovery**, not percentage loss.
+
+Rule:
+
+```ts
+netSellValue =
+  tokenMarketValueSOL
+  - estimatedSellFeesSOL
+  - estimatedSellSlippageSOL;
+
+netAtaCloseValue =
+  ataRentSOL
+  - burnFeeSOL
+  - closeAtaFeeSOL;
+
+action = netSellValue <= netAtaCloseValue
+  ? "BURN_AND_CLOSE_ATA"
+  : "SELL";
+```
+
+Example:
+
+```txt
+tokenMarketValueSOL = 0.0018
+estimatedSellFeesSOL = 0.00001
+estimatedSellSlippageSOL = 0.00020
+netSellValue = 0.00159
+
+ataRentSOL = 0.00203928
+burnFeeSOL = 0.000005
+closeAtaFeeSOL = 0.000005
+netAtaCloseValue = 0.00202928
+
+Result: BURN_AND_CLOSE_ATA
+```
+
+Operational notes:
+- `SELL` keeps the normal swap path.
+- `BURN_AND_CLOSE_ATA` burns remaining tokens first, then closes token accounts to recover rent.
+- The same deterministic rule runs in both `SIMULATION` and `LIVE`.
+- Set `ENABLE_ATA_EXIT_STRATEGY=true` and tune `ATA_RENT_SOL=0.00203928` in `.env`.
+
 **Validation already done:**
 - `npm run typecheck`
 - `npx jest --config jest.config.js test/ai-agent/advanced/full-learning-cycle.test.ts --runInBand`

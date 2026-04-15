@@ -17,6 +17,22 @@ export interface Position {
     lastHighPrice?: number;
     lastCheckedAt?: number;
     creatorWallet?: string;
+    tokenDecimals?: number;
+    entryPricePerToken?: number | null;
+    lastKnownTokenBalanceRaw?: number;
+    lastKnownTokenBalanceUi?: number;
+    lastBalanceSyncedAt?: number;
+    entryVenue?: "pumpfun" | "jupiter" | "unknown";
+    lastExitReason?: string;
+    lastExitSignature?: string;
+    lastExitVenue?: string;
+    lastExitType?: "SELL" | "BURN_AND_CLOSE_ATA";
+    lastExitNetSellValue?: number;
+    lastExitNetAtaCloseValue?: number;
+    lastExitDecisionReason?: string;
+    lastExitRecoveryNeeded?: boolean;
+    lastExitRecoveryReason?: string;
+    symbol?: string;
 }
 
 const POSITIONS_FILE = path.join(__dirname, "../data/positions.json");
@@ -24,9 +40,37 @@ const DATA_DIR = path.join(__dirname, "../data");
 
 class PositionManager {
     private positions: Map<string, Position> = new Map();
+    private lastKnownPositionsMtimeMs = 0;
+    private syncInFlight = false;
 
     constructor() {
         this.ensureDataDirectory();
+        this.startExternalSyncMonitor();
+    }
+
+    private startExternalSyncMonitor(): void {
+        const interval = setInterval(() => {
+            void this.refreshFromDiskIfChanged();
+        }, 3000);
+        interval.unref?.();
+    }
+
+    private async refreshFromDiskIfChanged(): Promise<void> {
+        if (this.syncInFlight) return;
+
+        try {
+            const stat = await fs.stat(POSITIONS_FILE).catch(() => null);
+            if (!stat) return;
+            if (stat.mtimeMs <= this.lastKnownPositionsMtimeMs) return;
+
+            this.syncInFlight = true;
+            await this.loadFromDisk();
+            logger.info("🔄 PositionManager sincronizado com alterações externas em positions.json");
+        } catch (error: any) {
+            logger.debug(`Falha ao sincronizar positions.json externamente: ${error.message}`);
+        } finally {
+            this.syncInFlight = false;
+        }
     }
 
     /**
@@ -79,12 +123,17 @@ class PositionManager {
     /**
      * Marcar posição como inativa (vendida)
      */
-    async closePosition(mint: string): Promise<void> {
+    async closePosition(mint: string, updates: Partial<Position> = {}): Promise<void> {
         try {
             const position = this.positions.get(mint);
             if (position) {
-                position.isActive = false;
-                position.lastCheckedAt = Date.now();
+                const closed = {
+                    ...position,
+                    ...updates,
+                    isActive: false,
+                    lastCheckedAt: Date.now(),
+                };
+                this.positions.set(mint, closed);
                 await this.persistToDisk();
                 logger.info(`✅ Posição fechada: ${mint}`);
             }
@@ -121,6 +170,8 @@ class PositionManager {
         try {
             const data = JSON.stringify(Array.from(this.positions.values()), null, 2);
             await fs.writeFile(POSITIONS_FILE, data, "utf-8");
+            const stat = await fs.stat(POSITIONS_FILE).catch(() => null);
+            this.lastKnownPositionsMtimeMs = stat?.mtimeMs || Date.now();
             // Notificar dashboard via WebSocket
             notifyDashboardUpdate();
         } catch (error: any) {
@@ -142,6 +193,7 @@ class PositionManager {
 
             const data = await fs.readFile(POSITIONS_FILE, "utf-8");
             const positions: Position[] = JSON.parse(data);
+            this.lastKnownPositionsMtimeMs = exists.mtimeMs || Date.now();
 
             this.positions.clear();
             positions.forEach(p => this.positions.set(p.mint, p));

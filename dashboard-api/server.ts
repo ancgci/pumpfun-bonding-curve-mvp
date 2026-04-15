@@ -8,6 +8,8 @@ import path from "path";
 import { exec } from "child_process";
 import { getRecentPostMortemTrades, getSimulationMetrics, isSimulationReadyForLive } from "../utils/simulationEngine";
 import { CONFIG } from "../utils/config";
+import { getSimulationAtaRecoveryMetrics } from "../utils/dashboardSnapshot";
+import { sellOnPumpFun, sellViaJupiter } from "../utils/hybridExecutor";
 import http from "http";
 import { Server } from "socket.io";
 import db from "../utils/db";
@@ -54,6 +56,11 @@ import { evaluateBotRuntimeHealth, readBotRuntimeHealth } from "../utils/botRunt
 import { rpcPool } from "../utils/rpcPool";
 import { getFunnelMetrics } from "../utils/decisionFunnelMetrics";
 import { readAgentHealthSnapshot } from "../utils/agentHealth";
+import {
+    buildPositionBalanceSyncResult,
+    getWalletTokenBalanceSnapshot,
+    waitForWalletTokenBalanceChange,
+} from "../utils/livePositionRuntime";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -83,6 +90,342 @@ function loadSimTradesFallback(limit: number) {
         console.error("Erro ao carregar trades de simulação (fallback JSON)", e);
         return [];
     }
+}
+
+function isAnomalousSimulationTrade(trade: any): boolean {
+    return trade?.anomalyFlag === true || Number(trade?.anomalyFlag) === 1;
+}
+
+function parseJsonField<T>(value: unknown): T | null {
+    if (value === undefined || value === null || value === "") return null;
+    if (typeof value !== "string") return value as T;
+    try {
+        return JSON.parse(value) as T;
+    } catch {
+        return null;
+    }
+}
+
+function normalizeSimulationTradeRow(row: any) {
+    return {
+        ...row,
+        anomalyFlag: row?.anomalyFlag === true || Number(row?.anomalyFlag) === 1,
+        entryFeedAudit: parseJsonField(row?.entryFeedAudit),
+        exitFeedAudit: parseJsonField(row?.exitFeedAudit),
+        anomalyContext: parseJsonField(row?.anomalyContext),
+        postMortemStatus: row?.postMortemStatus ?? null,
+        postMortemSummary: row?.postMortemSummary ?? null,
+        postMortemAnalyzedAt: row?.postMortemAnalyzedAt ? Number(row.postMortemAnalyzedAt) : null,
+    };
+}
+
+function isPostMortemEligibleTrade(trade: any): boolean {
+    const status = String(trade?.status || "");
+    const pnl = Number(trade?.pnl ?? trade?.pnl_sol ?? 0);
+    return status !== "OPEN" && (isAnomalousSimulationTrade(trade) || pnl < 0 || status === "CLOSED_SL");
+}
+
+function normalizePostMortemStatus(status: unknown): "PENDING" | "PROCESSING" | "DONE" | "FAILED" | "SKIPPED" {
+    const normalized = String(status || "").toUpperCase();
+    switch (normalized) {
+        case "PROCESSING":
+        case "DONE":
+        case "FAILED":
+        case "SKIPPED":
+            return normalized;
+        case "PENDING":
+        default:
+            return "PENDING";
+    }
+}
+
+function buildPostMortemSummary(trades: any[]) {
+    const summary = {
+        eligibleTrades: 0,
+        pending: 0,
+        processing: 0,
+        done: 0,
+        failed: 0,
+        anomalousEligible: 0,
+        lastAnalyzedAt: null as number | null,
+        rootCauses: [] as Array<{ code: string; label: string; count: number }>,
+    };
+
+    const rootCauseCounts = new Map<string, { code: string; label: string; count: number }>();
+
+    for (const trade of trades) {
+        if (!isPostMortemEligibleTrade(trade)) continue;
+
+        summary.eligibleTrades += 1;
+        if (isAnomalousSimulationTrade(trade)) {
+            summary.anomalousEligible += 1;
+        }
+
+        const postMortemStatus = normalizePostMortemStatus(trade?.postMortemStatus);
+        if (postMortemStatus === "PENDING") summary.pending += 1;
+        if (postMortemStatus === "PROCESSING") summary.processing += 1;
+        if (postMortemStatus === "DONE") summary.done += 1;
+        if (postMortemStatus === "FAILED") summary.failed += 1;
+
+        const analyzedAt = Number(trade?.postMortemAnalyzedAt ?? 0);
+        if (Number.isFinite(analyzedAt) && analyzedAt > 0) {
+            summary.lastAnalyzedAt = Math.max(summary.lastAnalyzedAt || 0, analyzedAt);
+        }
+
+        const postMortemReport = parseJsonField<any>(trade?.postMortemReport);
+        const code = typeof postMortemReport?.rootCause?.code === "string"
+            ? String(postMortemReport.rootCause.code).toUpperCase()
+            : null;
+        if (!code) continue;
+
+        const label = typeof postMortemReport?.rootCause?.label === "string" && postMortemReport.rootCause.label.length > 0
+            ? postMortemReport.rootCause.label
+            : code;
+
+        const current = rootCauseCounts.get(code);
+        if (current) {
+            current.count += 1;
+        } else {
+            rootCauseCounts.set(code, { code, label, count: 1 });
+        }
+    }
+
+    summary.rootCauses = Array.from(rootCauseCounts.values()).sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return a.code.localeCompare(b.code);
+    });
+
+    if (!(summary.lastAnalyzedAt && summary.lastAnalyzedAt > 0)) {
+        summary.lastAnalyzedAt = null;
+    }
+
+    return summary;
+}
+
+function loadPostMortemSummary() {
+    try {
+        const rows = db.prepare(`
+            SELECT
+                status,
+                pnl_sol as pnl,
+                anomaly_flag as anomalyFlag,
+                postmortem_status as postMortemStatus,
+                postmortem_report as postMortemReport,
+                postmortem_analyzed_at as postMortemAnalyzedAt
+            FROM simulated_trades
+            WHERE status != 'OPEN'
+        `).all() as any[];
+
+        if (rows.length > 0) {
+            return buildPostMortemSummary(rows);
+        }
+    } catch (error) {
+        console.error("Erro ao carregar resumo do post-mortem (SQLite)", error);
+    }
+
+    return buildPostMortemSummary(loadSimTradesFallback(10000));
+}
+
+function loadSimulationTradesFromDb(limit: number = EXPANDED_HISTORY_LIMIT) {
+    try {
+        const rows = db.prepare(`
+            SELECT
+                token_mint as tokenMint,
+                token_symbol as tokenSymbol,
+                entry_time as entryTime,
+                entry_price as entryPrice,
+                entry_amount as entryAmount,
+                exit_time as exitTime,
+                exit_price as exitPrice,
+                pnl_sol as pnl,
+                pnl_percent as pnlPercent,
+                confidence,
+                status,
+                reason,
+                token_holders as tokenHolders,
+                market_cap_entry as marketCapEntry,
+                market_cap_exit as marketCapExit,
+                entry_feed_audit as entryFeedAudit,
+                exit_feed_audit as exitFeedAudit,
+                anomaly_flag as anomalyFlag,
+                anomaly_reason as anomalyReason,
+                anomaly_context as anomalyContext,
+                postmortem_status as postMortemStatus,
+                postmortem_summary as postMortemSummary,
+                postmortem_analyzed_at as postMortemAnalyzedAt
+            FROM simulated_trades
+            ORDER BY entry_time DESC
+            LIMIT ?
+        `).all(limit) as any[];
+
+        return rows.map(normalizeSimulationTradeRow);
+    } catch (error) {
+        console.error("Erro ao carregar trades de simulação (SQLite)", error);
+        return [];
+    }
+}
+
+function loadClosedPnlTrades() {
+    try {
+        const rows = db.prepare(`
+            SELECT
+                COALESCE(exit_time, entry_time) as ts,
+                pnl_sol as pnl
+            FROM simulated_trades
+            WHERE status != 'OPEN'
+              AND COALESCE(anomaly_flag, 0) = 0
+              AND COALESCE(exit_time, entry_time) IS NOT NULL
+            ORDER BY COALESCE(exit_time, entry_time) ASC
+        `).all() as any[];
+
+        if (rows.length > 0) {
+            return rows
+                .map((row) => ({
+                    ts: Number(row.ts),
+                    pnl: Number(row.pnl ?? 0),
+                }))
+                .filter((row) => Number.isFinite(row.ts) && row.ts > 0 && Number.isFinite(row.pnl));
+        }
+    } catch (error) {
+        console.error("Erro ao carregar série P&L da simulação (SQLite)", error);
+    }
+
+    const simTrades = loadSimTradesFallback(10000)
+        .filter((trade: any) =>
+            trade.status !== "OPEN" &&
+            !isAnomalousSimulationTrade(trade) &&
+            trade.pnl !== undefined &&
+            (trade.exitTime || trade.entryTime)
+        )
+        .map((trade: any) => ({
+            ts: Number(trade.exitTime || trade.entryTime || 0),
+            pnl: Number(trade.pnl || 0),
+        }))
+        .filter((trade: any) => Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl))
+        .sort((a: any, b: any) => a.ts - b.ts);
+
+    if (simTrades.length > 0) {
+        return simTrades;
+    }
+
+    return loadAgentTrades()
+        .filter((trade: any) => trade.status !== "OPEN" && (trade.exitTime || trade.entryTime))
+        .map((trade: any) => ({
+            ts: Number(trade.exitTime || trade.entryTime || 0),
+            pnl: Number(trade.pnl || trade.pnl_sol || 0),
+        }))
+        .filter((trade: any) => Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl))
+        .sort((a: any, b: any) => a.ts - b.ts);
+}
+
+function buildTradeDerivedPnLSeries(days?: number) {
+  const closedTrades = loadClosedPnlTrades();
+  if (closedTrades.length === 0) return [];
+
+  let cumulative = 0;
+    const series = closedTrades.map((trade) => {
+        cumulative += Number(trade.pnl || 0);
+        return {
+            ts: trade.ts,
+            pnl: parseFloat(cumulative.toFixed(4)),
+        };
+    });
+
+  return slicePnLSeriesByDays(series, days);
+}
+
+function slicePnLSeriesByDays(series: Array<{ ts: number; pnl: number }>, days?: number) {
+  if (!days || days <= 0) {
+    return series;
+  }
+
+  const since = Date.now() - (days * 24 * 60 * 60 * 1000);
+  const filtered = series.filter((point) => point.ts >= since);
+  if (filtered.length === 0) {
+    return series.length > 0 ? [series[series.length - 1]] : [];
+  }
+
+    let previousPoint: { ts: number; pnl: number } | null = null;
+    for (const point of series) {
+        if (point.ts < since) {
+            previousPoint = point;
+            continue;
+        }
+        break;
+    }
+
+    if (previousPoint && previousPoint.ts !== filtered[0].ts) {
+        return [previousPoint, ...filtered];
+    }
+
+  return filtered;
+}
+
+function buildSimulationFileDerivedPnLSeries(days?: number) {
+  const closedTrades = loadSimTradesFallback(10000)
+    .filter((trade: any) =>
+      trade.status !== "OPEN" &&
+      !isAnomalousSimulationTrade(trade) &&
+      trade.pnl !== undefined &&
+      (trade.exitTime || trade.entryTime)
+    )
+    .map((trade: any) => ({
+      ts: Number(trade.exitTime || trade.entryTime || 0),
+      pnl: Number(trade.pnl || 0),
+    }))
+    .filter((trade: any) => Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl))
+    .sort((a: any, b: any) => a.ts - b.ts);
+
+  if (closedTrades.length === 0) return [];
+
+  let cumulative = 0;
+  const series = closedTrades.map((trade) => {
+    cumulative += Number(trade.pnl || 0);
+    return {
+      ts: trade.ts,
+      pnl: parseFloat(cumulative.toFixed(4)),
+    };
+  });
+
+  return slicePnLSeriesByDays(series, days);
+}
+
+function formatPnLSeriesPayload(series: Array<{ ts: number; pnl: number }>) {
+  if (series.length === 0) {
+    return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
+  }
+
+  return {
+    timestamps: series.map((point) => formatTimestamp(point.ts)),
+    rawTimestamps: series.map((point) => point.ts),
+    plValues: series.map((point) => point.pnl),
+    positions: series.map(() => 0),
+  };
+}
+
+function getTrackedPnlTotal() {
+    const agentConfig = loadAgentConfig();
+    if ((agentConfig.mode || "SIMULATION") !== "LIVE") {
+        const simMetrics = getSimulationMetrics();
+        const metricsTotal = Number(simMetrics?.totalPnL ?? NaN);
+        if (Number.isFinite(metricsTotal)) {
+            return Number(metricsTotal.toFixed(4));
+        }
+
+        const fileSeries = buildSimulationFileDerivedPnLSeries();
+        if (fileSeries.length > 0) {
+            return Number(fileSeries[fileSeries.length - 1].pnl || 0);
+        }
+    }
+
+    const series = buildTradeDerivedPnLSeries();
+    if (series.length > 0) {
+        return Number(series[series.length - 1].pnl || 0);
+    }
+
+    return loadAgentTrades().reduce((sum: number, trade: any) => {
+        return sum + Number(trade.pnl || trade.pnl_sol || 0);
+    }, 0);
 }
 
 function getBootstrapWalletInfo() {
@@ -783,9 +1126,41 @@ const TRADING_CONFIG_FILE = path.join(__dirname, "../data/trading-config.json");
 const EMERGENCY_STOP_FILE = path.join(__dirname, "../data/emergency-stop.json");
 const PROTOCOL_CONFIG_FILE = path.join(__dirname, "../data/protocol-config.json");
 
-function invalidateWalletBalanceCache() {
-    cachedBalances = null;
-    lastBalanceFetch = 0;
+function invalidateWalletBalanceCache(address?: string | null) {
+    if (address) {
+        cachedWalletBalances.delete(address);
+        return;
+    }
+    cachedWalletBalances.clear();
+}
+
+async function executeManualSellWithFallback(tokenMint: string, amountRaw: number, preferPumpFun: boolean) {
+    const attempts = preferPumpFun
+        ? [
+            { venue: "pumpfun", execute: () => sellOnPumpFun(tokenMint, amountRaw, { applyRuntimeSellPercent: false }) },
+            { venue: "jupiter", execute: () => sellViaJupiter(tokenMint, amountRaw, { applyRuntimeSellPercent: false }) },
+        ]
+        : [
+            { venue: "jupiter", execute: () => sellViaJupiter(tokenMint, amountRaw, { applyRuntimeSellPercent: false }) },
+            { venue: "pumpfun", execute: () => sellOnPumpFun(tokenMint, amountRaw, { applyRuntimeSellPercent: false }) },
+        ];
+
+    const failures: string[] = [];
+
+    for (const attempt of attempts) {
+        try {
+            const signature = await attempt.execute();
+            return {
+                signature,
+                venue: attempt.venue,
+                failures,
+            };
+        } catch (error: any) {
+            failures.push(`${attempt.venue}: ${error?.message || String(error)}`);
+        }
+    }
+
+    throw new Error(failures.join(" | ") || "Unable to execute manual sell");
 }
 
 function validateTradingConfigUpdates(payload: Record<string, any>) {
@@ -1149,9 +1524,9 @@ app.get("/api/wallet/export", (req, res) => {
         if (!wallet) return res.status(404).json({ error: "Wallet not found" });
 
         const fallbackConfiguredWallet = loadConfiguredFallbackWallet();
-        const secretBase58 = exportWalletSecretBase58(wallet.secretRef)
+        const secretBase58 = exportWalletSecretBase58(wallet.secretRef, wallet.publicKey)
             || (fallbackConfiguredWallet?.publicKey === wallet.publicKey && fallbackConfiguredWallet.secretRef
-                ? exportWalletSecretBase58(fallbackConfiguredWallet.secretRef)
+                ? exportWalletSecretBase58(fallbackConfiguredWallet.secretRef, wallet.publicKey)
                 : null);
 
         if (!secretBase58) {
@@ -1172,18 +1547,19 @@ app.get("/api/wallet/export", (req, res) => {
 /**
  * GET /api/wallet/balances - Retorna saldo de SOL e tokens SPL reais (Cachê de 60s)
  */
-let cachedBalances: any = null;
-let lastBalanceFetch = 0;
+const cachedWalletBalances = new Map<string, { payload: any; fetchedAt: number }>();
 const BALANCE_CACHE_TTL = 60_000;
 
 app.get("/api/wallet/balances", async (req, res) => {
+    let address: string | null = null;
     try {
-        if (cachedBalances && Date.now() - lastBalanceFetch < BALANCE_CACHE_TTL) {
-            return res.json(cachedBalances);
-        }
-
-        const address = getActiveTradingWalletAddress();
+        address = getActiveTradingWalletAddress();
         if (!address) return res.status(400).json({ error: "Wallet address not configured" });
+
+        const cachedEntry = cachedWalletBalances.get(address);
+        if (cachedEntry && Date.now() - cachedEntry.fetchedAt < BALANCE_CACHE_TTL) {
+            return res.json(cachedEntry.payload);
+        }
 
         const owner = new PublicKey(address);
         const solLamports = await connection.getBalance(owner);
@@ -1207,14 +1583,121 @@ app.get("/api/wallet/balances", async (req, res) => {
             })
             .filter(Boolean);
 
-        cachedBalances = { address, solBalance, tokens, cachedAt: new Date().toISOString() };
-        lastBalanceFetch = Date.now();
+        const payload = { address, solBalance, tokens, cachedAt: new Date().toISOString() };
+        cachedWalletBalances.set(address, {
+            payload,
+            fetchedAt: Date.now(),
+        });
 
-        res.json(cachedBalances);
+        res.json(payload);
     } catch (error: any) {
-        // If it fails (e.g. 429), return cached if available, else error
-        if (cachedBalances) return res.json(cachedBalances);
+        if (address) {
+            const cachedEntry = cachedWalletBalances.get(address);
+            if (cachedEntry) return res.json(cachedEntry.payload);
+        }
         res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/wallet/sell - Executa venda manual de um token da wallet ativa
+ */
+app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
+    try {
+        const context = getScopedRequestContext(req);
+        if (!context) return res.status(401).json({ error: "Account not found" });
+
+        const mint = String(req.body?.mint || "").trim();
+        const requestedPercent = Number(req.body?.percent ?? 100);
+
+        if (!mint) {
+            return res.status(400).json({ error: "mint is required" });
+        }
+
+        let sellPercent = Math.floor(requestedPercent);
+        if (!Number.isFinite(sellPercent) || sellPercent < 1 || sellPercent > 100) {
+            return res.status(400).json({ error: "percent must be between 1 and 100" });
+        }
+
+        try {
+            new PublicKey(mint);
+        } catch {
+            return res.status(400).json({ error: "Invalid mint address" });
+        }
+
+        const beforeBalance = await getWalletTokenBalanceSnapshot(mint);
+        if (beforeBalance.rawAmount <= 0) {
+            return res.status(409).json({ error: "No wallet balance available for this token" });
+        }
+
+        const amountRaw = Math.floor(beforeBalance.rawAmount * (sellPercent / 100));
+        if (amountRaw <= 0) {
+            return res.status(400).json({ error: "Sell amount rounded to zero. Increase percent or token balance." });
+        }
+
+        const runtimePositions = loadPositions();
+        const activePositionIndex = runtimePositions.findIndex((position: any) => position.isActive && position.mint === mint);
+        const activePosition = activePositionIndex >= 0 ? runtimePositions[activePositionIndex] : null;
+
+        const execution = await executeManualSellWithFallback(mint, amountRaw, Boolean(activePosition?.bondingCurve));
+
+        invalidateWalletBalanceCache();
+        const afterBalance = await waitForWalletTokenBalanceChange(mint, beforeBalance.rawAmount, {
+            direction: "decrease",
+            timeoutMs: 20_000,
+            pollIntervalMs: 800,
+        }).catch(() => ({
+            address: beforeBalance.address,
+            mint,
+            rawAmount: 0,
+            decimals: beforeBalance.decimals,
+            uiAmount: 0,
+            accountCount: 0,
+            fetchedAt: Date.now(),
+        }));
+
+        let positionState: "untracked" | "updated" | "closed" = "untracked";
+        if (activePosition) {
+            const sync = buildPositionBalanceSyncResult(activePosition, {
+                baselineRawAmount: beforeBalance.rawAmount,
+                balance: afterBalance,
+                reason: "MANUAL_SELL",
+                signature: execution.signature,
+                venue: execution.venue,
+            });
+            const updatedPosition = {
+                ...activePosition,
+                ...sync.updates,
+                isActive: !sync.isClosed,
+            };
+
+            runtimePositions[activePositionIndex] = updatedPosition;
+            writeJsonFile(POSITIONS_FILE, runtimePositions);
+            if (shouldSyncLegacyScope(context)) {
+                replaceScopedPositions({
+                    userId: context.user.id,
+                    walletId: context.walletId,
+                    positions: runtimePositions,
+                });
+            }
+            positionState = sync.isClosed ? "closed" : "updated";
+        }
+
+        broadcastDashboardUpdate();
+
+        return res.json({
+            ok: true,
+            mint,
+            percent: sellPercent,
+            venue: execution.venue,
+            signature: execution.signature,
+            attempts: execution.failures,
+            walletBalanceBefore: beforeBalance,
+            walletBalanceAfter: afterBalance,
+            positionState,
+        });
+    } catch (error: any) {
+        return res.status(500).json({ error: error.message || "Manual sell failed" });
     }
 });
 
@@ -1387,12 +1870,23 @@ app.get("/api/agent/learned-rules", (req, res) => {
 });
 
 /**
- * GET /api/agent/postmortems - Ultimas autopsias de trades perdedores
+ * GET /api/agent/postmortems - Últimas autópsias concluídas de trades elegíveis
  */
 app.get("/api/agent/postmortems", (req, res) => {
     try {
         const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
         res.json(getRecentPostMortemTrades(limit));
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/agent/postmortem-summary - Resumo operacional da fila de autópsias
+ */
+app.get("/api/agent/postmortem-summary", (_req, res) => {
+    try {
+        res.json(loadPostMortemSummary());
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -1514,10 +2008,12 @@ app.get("/api/simulation/status", (req, res) => {
         const metrics = getSimulationMetrics();
         const readiness = isSimulationReadyForLive();
         const agentConfig = loadAgentConfig();
+        const ataRecovery = getSimulationAtaRecoveryMetrics();
 
         res.json({
             mode: agentConfig.mode || "SIMULATION",
             metrics,
+            ataRecovery,
             readyForLive: readiness.ready,
             readinessScore: readiness.score,
             reasons: readiness.reasons,
@@ -1533,27 +2029,7 @@ app.get("/api/simulation/status", (req, res) => {
 app.get("/api/simulation/trades", (req, res) => {
     try {
         const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, parseInt(req.query.limit as string || String(DEFAULT_HISTORY_LIMIT))));
-        const rows = db.prepare(`
-            SELECT 
-                token_mint as tokenMint,
-                token_symbol as tokenSymbol,
-                entry_time as entryTime,
-                entry_price as entryPrice,
-                entry_amount as entryAmount,
-                exit_time as exitTime,
-                exit_price as exitPrice,
-                pnl_sol as pnl,
-                pnl_percent as pnlPercent,
-                confidence,
-                status,
-                reason,
-                token_holders as tokenHolders,
-                market_cap_entry as marketCapEntry,
-                market_cap_exit as marketCapExit
-            FROM simulated_trades
-            ORDER BY entry_time DESC
-            LIMIT ?
-        `).all(limit);
+        const rows = loadSimulationTradesFromDb(limit);
         if (rows.length === 0) {
             return res.json(loadSimTradesFallback(limit));
         }
@@ -2259,7 +2735,6 @@ export function broadcastDashboardUpdate() {
 
     broadcastTimeout = setTimeout(() => {
         const stats = getStats();
-        const trades = loadAgentTrades();
 
         // Prevent recording corrupted P&L points if stats are temporarily empty due to race conditions
         if (stats.activePositions === 0 && stats.totalPositions === 0) {
@@ -2272,33 +2747,13 @@ export function broadcastDashboardUpdate() {
             }
         }
 
-        const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+        const totalPnl = getTrackedPnlTotal();
         recordPnLPoint(totalPnl, stats.activePositions);
 
         const plHistory = getPnLHistory(30);
 
         // Recent simulation trades
-        const simTrades = db.prepare(`
-            SELECT
-                token_mint as tokenMint,
-                token_symbol as tokenSymbol,
-                entry_time as entryTime,
-                entry_price as entryPrice,
-                entry_amount as entryAmount,
-                exit_time as exitTime,
-                exit_price as exitPrice,
-                pnl_sol as pnl,
-                pnl_percent as pnlPercent,
-                confidence,
-                status,
-                reason,
-                token_holders as tokenHolders,
-                market_cap_entry as marketCapEntry,
-                market_cap_exit as marketCapExit
-            FROM simulated_trades
-            ORDER BY entry_time DESC
-            LIMIT ?
-        `).all(EXPANDED_HISTORY_LIMIT);
+        const simTrades = loadSimulationTradesFromDb(EXPANDED_HISTORY_LIMIT);
 
         io.emit("dashboardUpdate", {
             stats,
@@ -2326,6 +2781,26 @@ function recordPnLPoint(pnlSol: number, positionsCount: number) {
 
 function getPnLHistory(days: number = 30) {
     try {
+        const agentConfig = loadAgentConfig();
+        if ((agentConfig.mode || "SIMULATION") !== "LIVE") {
+            const simMetrics = getSimulationMetrics();
+            const fileSeries = buildSimulationFileDerivedPnLSeries(days);
+            if (fileSeries.length > 0) {
+                return formatPnLSeriesPayload(fileSeries);
+            }
+
+            const metricsTotal = Number(simMetrics?.totalPnL ?? NaN);
+            if (Number.isFinite(metricsTotal)) {
+                const now = Date.now();
+                return {
+                    timestamps: [formatTimestamp(now)],
+                    rawTimestamps: [now],
+                    plValues: [parseFloat(metricsTotal.toFixed(4))],
+                    positions: [0],
+                };
+            }
+        }
+
         const since = Date.now() - (days * 24 * 60 * 60 * 1000);
         const rows: any[] = db.prepare(`
             SELECT timestamp, pnl_sol, positions_count
@@ -2334,27 +2809,22 @@ function getPnLHistory(days: number = 30) {
             ORDER BY timestamp ASC
         `).all(since);
 
-        if (rows.length === 0) {
-            // Se vazio, gerar a partir dos trades simulados (JSON) ou agent trades
-            const simTrades = loadSimTradesFallback(200).filter((t: any) => t.status !== "OPEN" && t.pnl !== undefined);
-            const trades = simTrades.length > 0 ? simTrades : loadAgentTrades();
-            let cumulative = 0;
-            const series = trades
-                .filter((t: any) => t.exitTime || t.entryTime)
-                .sort((a: any, b: any) => (a.exitTime || a.entryTime) - (b.exitTime || b.entryTime))
-                .map((t: any) => {
-                    cumulative += Number(t.pnl || 0);
-                    return { ts: t.exitTime || t.entryTime, pnl: parseFloat(cumulative.toFixed(4)) };
-                });
+        const tradeDerivedSeries = buildTradeDerivedPnLSeries(days);
+        const persistedLatest = rows.length > 0 ? Number(rows[rows.length - 1].pnl_sol || 0) : 0;
+        const persistedHasNonZero = rows.some((row) => Math.abs(Number(row.pnl_sol || 0)) > 1e-9);
+        const tradeLatest = tradeDerivedSeries.length > 0 ? Number(tradeDerivedSeries[tradeDerivedSeries.length - 1].pnl || 0) : 0;
+        const tradeHasNonZero = tradeDerivedSeries.some((point) => Math.abs(Number(point.pnl || 0)) > 1e-9);
+        const shouldUseTradeSeries =
+            rows.length === 0 ||
+            ((!persistedHasNonZero || Math.abs(persistedLatest) < 1e-9) && tradeHasNonZero) ||
+            (tradeHasNonZero && Math.abs(tradeLatest - persistedLatest) > 1e-6);
 
-            const timestamps = series.length ? series.map(s => s.ts) : [Date.now()];
-            const values = series.length ? series.map(s => s.pnl) : [0];
-            return {
-                timestamps: timestamps.map(t => formatTimestamp(t)),
-                rawTimestamps: timestamps,
-                plValues: values,
-                positions: values.map(() => 0)
-            };
+        if (shouldUseTradeSeries) {
+            return formatPnLSeriesPayload(
+                tradeDerivedSeries.length
+                    ? tradeDerivedSeries
+                    : [{ ts: Date.now(), pnl: 0 }]
+            );
         }
 
         return {
@@ -2400,8 +2870,7 @@ if (require.main === module) {
 // Snapshots horários e limpeza
 if (require.main === module) {
     setInterval(() => {
-        const trades = loadAgentTrades();
-        const totalPnl = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+        const totalPnl = getTrackedPnlTotal();
         const activeCount = loadPositions().filter(p => p.isActive).length;
         recordPnLPoint(totalPnl, activeCount);
     }, 60 * 60 * 1000);

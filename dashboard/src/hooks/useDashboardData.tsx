@@ -10,8 +10,11 @@ const DASHBOARD_HISTORY_LIMIT = 150;
 export interface DashboardData {
   stats: any;
   simTrades: any[];
+  postMortems: any[];
+  postMortemSummary: any;
   logs: any[];
   connected: boolean;
+  isInitialLoading: boolean;
   isAgentActive: boolean;
   isBotOnline: boolean;
   plChartData: any[];
@@ -35,14 +38,17 @@ export interface DashboardData {
   triggerEmergencyStop: (active: boolean, reason?: string) => Promise<void>;
   resetCircuitBreaker: () => Promise<void>;
   toggleProtocol: (key: string) => Promise<void>;
+  sellWalletToken: (mint: string, percent?: number) => Promise<any>;
 }
 
 const DashboardContext = createContext<DashboardData | null>(null);
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const socketRef = useRef<Socket | null>(null);
+  const hasCompletedInitialLoadRef = useRef(false);
 
   const [connected, setConnected] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [stats, setStats] = useState<any>(null);
   const [plChartData, setPlChartData] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
@@ -50,6 +56,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [tradeHistory, setTradeHistory] = useState<any[]>([]);
   const [simStatus, setSimStatus] = useState<any>(null);
   const [simTrades, setSimTrades] = useState<any[]>([]);
+  const [postMortems, setPostMortems] = useState<any[]>([]);
+  const [postMortemSummary, setPostMortemSummary] = useState<any>(null);
   const [patterns, setPatterns] = useState<any>(null);
   const [botHealth, setBotHealth] = useState<any>(null);
   const [tradingConfig, setTradingConfig] = useState<any>(null);
@@ -117,7 +125,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const refreshData = async () => {
+  const fetchCoreData = useCallback(async () => {
     try {
       let chartData: any[] = [];
 
@@ -128,14 +136,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         historyData,
         simStatData,
         simTrData,
-        patData,
         healthData,
         tConfig,
         pConfig,
-        emergData,
-        rulesData,
-        cbData,
-        walletData,
         plHistoryData,
       ] = await Promise.all([
         apiFetch(`${API_BASE}/me/stats`).catch(() => null),
@@ -144,39 +147,34 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         apiFetch(`${API_BASE}/me/trades?limit=${DASHBOARD_HISTORY_LIMIT}`).catch(() => []),
         apiFetch(`${API_BASE}/simulation/status`).catch(() => null),
         apiFetch(`${API_BASE}/simulation/trades?limit=${DASHBOARD_HISTORY_LIMIT}`).catch(() => []),
-        apiFetch(`${API_BASE}/agent/patterns`).catch(() => null),
         apiFetch(`${API_BASE}/bot-health`).catch(() => null),
         apiFetch(`${API_BASE}/me/trading-config`).catch(() => null),
         apiFetch(`${API_BASE}/protocol-config`).catch(() => null),
-        apiFetch(`${API_BASE}/emergency-stop`).catch(() => ({ active: false })),
-        apiFetch(`${API_BASE}/agent/learned-rules`).catch(() => []),
-        apiFetch(`${API_BASE}/cb-status`).catch(() => null),
-        apiFetch(`${API_BASE}/wallet/balances`).catch(() => null),
         apiFetch(`${API_BASE}/pl-history`).catch(() => null),
       ]);
 
       if (statsData) setStats(statsData);
-      if (posData) setPositions(posData);
+      if (Array.isArray(posData)) setPositions(posData);
       if (agentData) setAgentStatus(agentData);
-      if (historyData) setTradeHistory(historyData);
+      if (Array.isArray(historyData)) setTradeHistory(historyData);
       if (simStatData) setSimStatus(simStatData);
       if (simTrData && Array.isArray(simTrData) && simTrData.length > 0) {
         setSimTrades(simTrData);
         // Build PnL chart from closed simulation trades
-        const closedTrades = simTrData.filter((t: any) => t.status !== "OPEN" && t.pnl !== undefined);
+        const closedTrades = simTrData.filter(
+          (t: any) =>
+            t.status !== "OPEN" &&
+            t.pnl !== undefined &&
+            !(t.anomalyFlag === true || Number(t.anomalyFlag) === 1)
+        );
         chartData = buildPlChart(closedTrades);
       } else if (simTrData && Array.isArray(simTrData) && simTrData.length === 0) {
         // Server returned genuinely empty — only update if we have no data at all
         setSimTrades((prev: any[]) => prev.length === 0 ? simTrData : prev);
       }
-      if (patData) setPatterns(patData);
       if (healthData) setBotHealth(healthData);
       if (tConfig) setTradingConfig(tConfig);
       if (pConfig) setProtocolConfig(pConfig);
-      setEmergencyActive(emergData?.active || false);
-      if (rulesData) setLearnedRules(rulesData);
-      if (cbData) setCbStatus(cbData);
-      if (walletData) setWalletBalances(walletData);
 
       const span = (vals: any[]) => {
         if (!Array.isArray(vals) || vals.length === 0) return 0;
@@ -197,7 +195,52 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.error("Dashboard fetch error:", e);
     }
-  };
+  }, [buildPlChart]);
+
+  const fetchSecondaryData = useCallback(async () => {
+    try {
+      const [
+        patData,
+        emergData,
+        rulesData,
+        cbData,
+        walletData,
+        postMortemData,
+        postMortemSummaryData,
+      ] = await Promise.all([
+        apiFetch(`${API_BASE}/agent/patterns`).catch(() => null),
+        apiFetch(`${API_BASE}/emergency-stop`).catch(() => ({ active: false })),
+        apiFetch(`${API_BASE}/agent/learned-rules`).catch(() => []),
+        apiFetch(`${API_BASE}/cb-status`).catch(() => null),
+        apiFetch(`${API_BASE}/wallet/balances`).catch(() => null),
+        apiFetch(`${API_BASE}/agent/postmortems?limit=12`).catch(() => []),
+        apiFetch(`${API_BASE}/agent/postmortem-summary`).catch(() => null),
+      ]);
+
+      if (patData) setPatterns(patData);
+      setEmergencyActive(emergData?.active || false);
+      if (rulesData) setLearnedRules(rulesData);
+      if (cbData) setCbStatus(cbData);
+      if (walletData) setWalletBalances(walletData);
+      if (postMortemData) setPostMortems(postMortemData);
+      if (postMortemSummaryData) setPostMortemSummary(postMortemSummaryData);
+    } catch (e) {
+      console.error("Dashboard secondary fetch error:", e);
+    }
+  }, []);
+
+  const refreshData = useCallback(async () => {
+    if (!hasCompletedInitialLoadRef.current) {
+      setIsInitialLoading(true);
+      await fetchCoreData();
+      hasCompletedInitialLoadRef.current = true;
+      setIsInitialLoading(false);
+      void fetchSecondaryData();
+      return;
+    }
+
+    await Promise.allSettled([fetchCoreData(), fetchSecondaryData()]);
+  }, [fetchCoreData, fetchSecondaryData]);
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL);
@@ -239,7 +282,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       };
 
     const logInterval = setInterval(fetchLogs, 5000); // 5s log poll (was 2s)
-    refreshData();
+    void refreshData();
     const pollInterval = setInterval(refreshData, 20000); // 20s data poll (was 10s)
 
     return () => {
@@ -247,7 +290,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       clearInterval(pollInterval);
       newSocket.close();
     };
-  }, []);
+  }, [refreshData]);
 
   const toggleAgent = async () => {
     // Optimistic: flip locally
@@ -319,6 +362,17 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const sellWalletToken = async (mint: string, percent: number = 100) => {
+    const result = await apiFetch(`${API_BASE}/wallet/sell`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mint, percent }),
+    });
+
+    await refreshData();
+    return result;
+  };
+
   const isAgentActive = agentStatus?.enabled === true;
   const isBotOnline = isAgentActive && (
     !botHealth || (
@@ -334,8 +388,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       value={{
         stats,
         simTrades,
+        postMortems,
+        postMortemSummary,
         logs,
         connected,
+        isInitialLoading,
         isAgentActive,
         isBotOnline,
         plChartData,
@@ -359,6 +416,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         triggerEmergencyStop,
         resetCircuitBreaker,
         toggleProtocol,
+        sellWalletToken,
       }}
     >
       {children}

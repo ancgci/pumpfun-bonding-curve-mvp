@@ -147,7 +147,11 @@ export function buildTradeDecisionContext(
   };
 }
 
-export function getPostMortemStatusForClosedTrade(pnl: number, status: string): PostMortemStatus {
+export function getPostMortemStatusForClosedTrade(
+  pnl: number,
+  status: string,
+  anomalyFlag: boolean = false
+): PostMortemStatus {
   if (status === "OPEN") return "PENDING";
-  return pnl < 0 || status === "CLOSED_SL" ? "PENDING" : "SKIPPED";
+  return anomalyFlag || pnl < 0 || status === "CLOSED_SL" ? "PENDING" : "SKIPPED";
 }

@@ -41,6 +41,33 @@ export interface TradeOrganicitySnapshot {
   uniqueWalletsLifetime: number;
 }
 
+export interface TradeFeedAudit {
+  source: "DEXSCREENER_LATEST_TOKEN";
+  capturedAt: number;
+  pairAddress: string | null;
+  pairIndex: number | null;
+  pairCount: number;
+  selectedBy: "FIRST_AVAILABLE" | "PREFERRED_PAIR";
+  dexId?: string | null;
+  url?: string | null;
+  priceNative: number | null;
+  marketCap: number | null;
+  liquidityUsd?: number | null;
+  fdv?: number | null;
+  rawPair?: Record<string, unknown> | null;
+}
+
+export interface TradeAnomalyContext {
+  flaggedAt: number;
+  reasons: string[];
+  priceRatio?: number | null;
+  marketCapRatio?: number | null;
+  coherenceRatio?: number | null;
+  entryPairAddress?: string | null;
+  exitPairAddress?: string | null;
+  snapshotPriceDeltaPct?: number | null;
+}
+
 export interface TradeMarketSnapshot {
   capturedAt: number;
   price: number | null;

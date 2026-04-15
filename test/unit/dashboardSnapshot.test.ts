@@ -215,6 +215,7 @@ function createSnapshot(): DashboardSnapshot {
         totalTrades: 48,
         winTrades: 22,
         lossTrades: 26,
+        anomalousTrades: 1,
         winRate: 45.8,
         totalPnL: 0.2345,
         avgPnL: 0.004,
@@ -223,6 +224,15 @@ function createSnapshot(): DashboardSnapshot {
         expectedValue: 0.002,
         riskRewardRatio: 1.4,
         lastUpdate: now,
+      },
+      ataRecovery: {
+        exitsCount: 3,
+        totalRecoveredSol: 0.0061,
+        totalHypotheticalSellValueSol: -0.0012,
+        recoveryDeltaSol: 0.0073,
+        displayRecoveredSol: 0.0061,
+        displayHypotheticalSellValueSol: 0,
+        displayRecoveryDeltaSol: 0.0073,
       },
       readyForLive: false,
       readinessScore: 40,
@@ -310,6 +320,7 @@ describe("dashboardSnapshot formatters", () => {
     expect(formatPositionsSummaryForTelegram(snapshot)).toContain("CTO");
     expect(formatSimulationSummaryForTelegram(snapshot)).toContain("48");
     expect(formatSimulationSummaryForTelegram(snapshot)).toContain("Only 48/50 trades completed");
+    expect(formatSimulationSummaryForTelegram(snapshot)).toContain("ATA recovery");
   });
 
   it("builds a JSON copilot context with dashboard, simulation and logs", () => {
@@ -321,6 +332,7 @@ describe("dashboardSnapshot formatters", () => {
     expect(parsed.agent.learnedRulesCount).toBe(7);
     expect(parsed.livePositions[0].symbol).toBe("SLOP");
     expect(parsed.simulation.openTrades[0].symbol).toBe("CTO");
+    expect(parsed.simulation.ataRecovery.exitsCount).toBe(3);
     expect(parsed.recentLogs[0].message).toContain("simulated trade");
   });
 });

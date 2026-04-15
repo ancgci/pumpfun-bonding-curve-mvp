@@ -1,6 +1,6 @@
 import { jsonSchema, tool } from "ai";
 import logger from "./logger";
-import { getPendingLossTrades, SimulatedTrade, updateTradePostMortem } from "./simulationEngine";
+import { getPendingPostMortemTrades, SimulatedTrade, updateTradePostMortem } from "./simulationEngine";
 import { TradePostMortemReport } from "./postMortemTypes";
 import { generateStructuredLlm } from "./llmGateway";
 import {
@@ -208,6 +208,12 @@ function analyzeDeterministically(trade: SimulatedTrade): DeterministicAnalysis 
     rootCauseScores.NO_FOLLOW_THROUGH += 35;
     evidenceMap.NO_FOLLOW_THROUGH.push(`Trade expirou sem atingir alvo`);
   }
+  if (trade.exitType === "BURN_AND_CLOSE_ATA") {
+    rootCauseScores.NO_FOLLOW_THROUGH += 20;
+    evidenceMap.NO_FOLLOW_THROUGH.push(
+      `Saida ATA-aware recuperou ${Number(trade.realizedExitValueSol || 0).toFixed(6)} SOL porque o sell neto (${Number(trade.netSellValue || 0).toFixed(6)}) ficou abaixo do fechamento de ATA (${Number(trade.netAtaCloseValue || 0).toFixed(6)})`
+    );
+  }
   if (excursions.mfe !== null && excursions.mfe < 2) {
     rootCauseScores.NO_FOLLOW_THROUGH += 25;
     evidenceMap.NO_FOLLOW_THROUGH.push(`Nao houve follow-through relevante apos a entrada (MFE ${excursions.mfe.toFixed(1)}%)`);
@@ -283,6 +289,10 @@ function analyzeDeterministically(trade: SimulatedTrade): DeterministicAnalysis 
     findings.push("A entrada nao recebeu continuidade suficiente para validar o breakout.");
     recommendations.push("Exigir follow-through minimo antes de considerar o trade valido.");
     candidateRules.push("Evitar entrada quando o setup nao mostrar follow-through > 2% nos primeiros checks.");
+    if (trade.exitType === "BURN_AND_CLOSE_ATA") {
+      recommendations.push("Quando a liquidez colapsar e o sell neto perder para o rent do ATA, priorizar burn + close.");
+      candidateRules.push("Preferir BURN_AND_CLOSE_ATA sempre que netSellValue <= netAtaCloseValue.");
+    }
     betterEntry = {
       verdict: "Faltou continuidade logo apos a entrada",
       suggestedAction: "Esperar o breakout se sustentar por 2-3 checks antes de aumentar exposicao.",
@@ -483,14 +493,14 @@ export async function runPostMortemCycle(): Promise<void> {
   });
 
   try {
-    const losses = getPendingLossTrades(batchSize);
+    const pendingTrades = getPendingPostMortemTrades(batchSize);
 
-    if (losses.length === 0) {
-      logger.info("🧠 [PostMortemAgent] No pending losing trades to analyze.");
+    if (pendingTrades.length === 0) {
+      logger.info("🧠 [PostMortemAgent] No pending trades to analyze.");
       markAgentIdle("postMortem", {
         enabled: true,
         details: {
-          pendingLosses: 0,
+          pendingTrades: 0,
           batchSize,
           llmEnrichment: postMortemLlmEnabled(),
           llmConfigured,
@@ -501,13 +511,13 @@ export async function runPostMortemCycle(): Promise<void> {
       return;
     }
 
-    logger.info(`🧠 [PostMortemAgent] Starting post-mortem cycle for ${losses.length} losing trades...`);
+    logger.info(`🧠 [PostMortemAgent] Starting post-mortem cycle for ${pendingTrades.length} pending trades...`);
 
     let processedCount = 0;
     let failedCount = 0;
     let lastFailureMessage: string | null = null;
 
-    for (const trade of losses) {
+    for (const trade of pendingTrades) {
       try {
         updateTradePostMortem(trade.tokenMint, trade.entryTime, "PROCESSING");
         const deterministic = analyzeDeterministically(trade);
@@ -542,7 +552,7 @@ export async function runPostMortemCycle(): Promise<void> {
         lastError: lastFailureMessage,
         lastErrorAt: lastFailureMessage ? new Date().toISOString() : null,
         details: {
-          pendingLosses: losses.length,
+          pendingTrades: pendingTrades.length,
           processedCount,
           failedCount,
           batchSize,
@@ -556,7 +566,7 @@ export async function runPostMortemCycle(): Promise<void> {
       markAgentSuccess("postMortem", {
         enabled: true,
         details: {
-          pendingLosses: losses.length,
+          pendingTrades: pendingTrades.length,
           processedCount,
           failedCount: 0,
           batchSize,

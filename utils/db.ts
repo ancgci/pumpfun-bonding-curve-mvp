@@ -46,6 +46,16 @@ db.exec(`
         entry_snapshot TEXT,
         exit_snapshot TEXT,
         monitoring_trace TEXT,
+        entry_feed_audit TEXT,
+        exit_feed_audit TEXT,
+        anomaly_flag INTEGER DEFAULT 0,
+        anomaly_reason TEXT,
+        anomaly_context TEXT,
+        exit_type TEXT,
+        net_sell_value REAL,
+        net_ata_close_value REAL,
+        decision_reason TEXT,
+        realized_exit_value_sol REAL,
         postmortem_status TEXT DEFAULT 'PENDING',
         postmortem_summary TEXT,
         postmortem_report TEXT,
@@ -189,6 +199,66 @@ try {
     if (!hasMonitoringTrace) {
         db.exec("ALTER TABLE simulated_trades ADD COLUMN monitoring_trace TEXT");
         console.log("Database migration: Added monitoring_trace to simulated_trades");
+    }
+
+    const hasEntryFeedAudit = tableInfo.some(col => col.name === 'entry_feed_audit');
+    if (!hasEntryFeedAudit) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN entry_feed_audit TEXT");
+        console.log("Database migration: Added entry_feed_audit to simulated_trades");
+    }
+
+    const hasExitFeedAudit = tableInfo.some(col => col.name === 'exit_feed_audit');
+    if (!hasExitFeedAudit) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN exit_feed_audit TEXT");
+        console.log("Database migration: Added exit_feed_audit to simulated_trades");
+    }
+
+    const hasAnomalyFlag = tableInfo.some(col => col.name === 'anomaly_flag');
+    if (!hasAnomalyFlag) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN anomaly_flag INTEGER DEFAULT 0");
+        console.log("Database migration: Added anomaly_flag to simulated_trades");
+    }
+
+    const hasAnomalyReason = tableInfo.some(col => col.name === 'anomaly_reason');
+    if (!hasAnomalyReason) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN anomaly_reason TEXT");
+        console.log("Database migration: Added anomaly_reason to simulated_trades");
+    }
+
+    const hasAnomalyContext = tableInfo.some(col => col.name === 'anomaly_context');
+    if (!hasAnomalyContext) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN anomaly_context TEXT");
+        console.log("Database migration: Added anomaly_context to simulated_trades");
+    }
+
+    const hasExitType = tableInfo.some(col => col.name === 'exit_type');
+    if (!hasExitType) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN exit_type TEXT");
+        console.log("Database migration: Added exit_type to simulated_trades");
+    }
+
+    const hasNetSellValue = tableInfo.some(col => col.name === 'net_sell_value');
+    if (!hasNetSellValue) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN net_sell_value REAL");
+        console.log("Database migration: Added net_sell_value to simulated_trades");
+    }
+
+    const hasNetAtaCloseValue = tableInfo.some(col => col.name === 'net_ata_close_value');
+    if (!hasNetAtaCloseValue) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN net_ata_close_value REAL");
+        console.log("Database migration: Added net_ata_close_value to simulated_trades");
+    }
+
+    const hasDecisionReason = tableInfo.some(col => col.name === 'decision_reason');
+    if (!hasDecisionReason) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN decision_reason TEXT");
+        console.log("Database migration: Added decision_reason to simulated_trades");
+    }
+
+    const hasRealizedExitValueSol = tableInfo.some(col => col.name === 'realized_exit_value_sol');
+    if (!hasRealizedExitValueSol) {
+        db.exec("ALTER TABLE simulated_trades ADD COLUMN realized_exit_value_sol REAL");
+        console.log("Database migration: Added realized_exit_value_sol to simulated_trades");
     }
 
     const hasPostMortemStatus = tableInfo.some(col => col.name === 'postmortem_status');

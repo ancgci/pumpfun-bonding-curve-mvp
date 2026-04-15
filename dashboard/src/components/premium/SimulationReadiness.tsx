@@ -8,6 +8,7 @@ export function SimulationReadiness() {
   if (!simStatus) return null;
 
   const metrics = simStatus.metrics || {};
+  const ataRecovery = simStatus.ataRecovery || {};
   const score = Number(simStatus.readinessScore || 0);
   const ready = simStatus.readyForLive || false;
 
@@ -30,7 +31,7 @@ export function SimulationReadiness() {
           <Progress value={score} className="h-2 bg-black overflow-hidden border border-white/5" />
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">Win Rate</div>
             <div className="font-mono font-bold text-green-400">{Number(metrics.winRate || 0).toFixed(1)}%</div>
@@ -46,6 +47,25 @@ export function SimulationReadiness() {
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">Max Drawdown</div>
             <div className="font-mono font-bold text-red-400">{Number(metrics.maxDrawdownPercentage || 0).toFixed(2)}%</div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">Anomalies Excluded</div>
+            <div className="font-mono font-bold text-amber-300">{Number(metrics.anomalousTrades || 0)}</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">SOL via ATA</div>
+            <div className="font-mono font-bold text-emerald-400">{Number(ataRecovery.displayRecoveredSol || 0).toFixed(4)}</div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">Hyp Sell</div>
+            <div className="font-mono font-bold text-sky-400">{Number(ataRecovery.displayHypotheticalSellValueSol || 0).toFixed(4)}</div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">ATA Exits</div>
+            <div className="font-mono font-bold">{Number(ataRecovery.exitsCount || 0)}</div>
           </div>
         </div>
       </CardContent>
