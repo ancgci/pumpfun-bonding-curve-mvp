@@ -1021,7 +1021,7 @@ export async function getAgentDecision(
 export async function executeAgentTrade(
   tokenAnalysis: TokenAnalysis,
   decision: AgentDecision,
-  executeRealTrade: (force?: boolean, buyAmountSol?: number) => Promise<void>
+  executeRealTrade: (force?: boolean, buyAmountSol?: number) => Promise<{ executed: boolean; reason: string }>
 ): Promise<AgentTradeExecutionResult> {
   // Get agent mode from config
   const runtimeCfg = getRuntimeConfig();
@@ -1130,6 +1130,10 @@ export async function executeAgentTrade(
     const isUltraAggressive = taConfigExec.scoreMinimo <= 5;
     const recheckDelayMs = Math.max(1000, taConfigExec.recheckDelayMs || 6000);
     const recheckMaxAttempts = Math.max(1, taConfigExec.recheckMaxAttempts || 1);
+    const entryBlockContext = {
+      protocol: tokenAnalysis.protocol,
+      bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+    };
 
     logger.info(`[Pipeline 5/8 - Hard Blocks] 🛡️ Validando ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) revalidando Hard Blocks (Pré-execução)...`);
     const blockCheck = await runRecheckLoop({
@@ -1140,8 +1144,8 @@ export async function executeAgentTrade(
       delayMs: recheckDelayMs,
       evaluate: async () => {
         const snap = getTASnapshotV2(tokenAnalysis.mint, taConfigExec);
-        const blocks = checkEntryBlocks(snap, taConfigExec, tokenAnalysis.mint);
-        const assessment = assessEntryBlockPressure(blocks, taConfigExec);
+        const blocks = checkEntryBlocks(snap, taConfigExec, tokenAnalysis.mint, entryBlockContext);
+        const assessment = assessEntryBlockPressure(blocks, taConfigExec, entryBlockContext);
         const hasInsufficientData = blocks.some((block) => block.code === "BLOCK_INSUFFICIENT_DATA");
         let resolution: StageResolution = assessment.action;
 
@@ -1436,23 +1440,31 @@ export async function executeAgentTrade(
     logger.info(`[Pipeline 7/8 - Micro-Confirm] ✅ ${C_BLUE}APROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) confirmado contra Despejos Rápidos!`);
 
     const maxSpike = isUltraAggressive ? 25.0 : 10.0;
-    const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, maxSpike);
+    const validation = validateTradeExecution(tokenAnalysis.mint, tokenAnalysis.symbol, tokenAnalysis.price, {
+      maxSlippagePct: maxSpike,
+      rsiOverboughtBlock: taConfigExec.rsiOverboughtBlock,
+      protocol: tokenAnalysis.protocol,
+      bondingCurvePercent: tokenAnalysis.bondingCurvePercent,
+    });
+    const executionBlockReason = validation.isValid
+      ? "PRE_EXECUTION_VALID"
+      : (validation.reason?.includes("RSI=") ? "RSI_PRE_EXECUTION" : "PRICE_SPIKE_PRE_EXECUTION");
     recordFunnelEvent({
       stage: "execution",
       outcome: validation.isValid ? "approved" : "blocked",
-      reason: validation.isValid ? "PRE_EXECUTION_VALID" : "PRICE_SPIKE_PRE_EXECUTION",
+      reason: executionBlockReason,
       protocol,
       mint: tokenAnalysis.mint,
       symbol: tokenAnalysis.symbol,
-      metadata: { maxSpike },
+      metadata: { maxSpike, validationReason: validation.reason || null, rsiOverboughtBlock: taConfigExec.rsiOverboughtBlock },
     });
     if (!validation.isValid) {
       logger.warn(
-        `♻️ [Orchestrator] Trade aborted: Pre-Execution price spike > ${maxSpike}%. ` +
+        `♻️ [Orchestrator] Trade aborted: ${validation.reason || executionBlockReason}. ` +
         `Moving ${tokenAnalysis.symbol} to Dip Waitlist (Dip Sniper Mode).`
       );
-      logger.info(`[Pipeline 8/8 - Execution] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) abortado (Price Spike detectado pré-compra).`);
-      return moveToDipWaitlist("PRICE_SPIKE_PRE_EXECUTION", false);
+      logger.info(`[Pipeline 8/8 - Execution] 🛑 ${C_RED}REPROVADO${C_RST} | ${tokenAnalysis.symbol || '???'} (${tokenAnalysis.mint}) abortado (${validation.reason || executionBlockReason}).`);
+      return moveToDipWaitlist(executionBlockReason, false);
     }
 
     logger.info(`✅ [Post-LLM Full] ${tokenAnalysis.symbol} TA=${tokenAnalysis.taScore} ORGANIC=✅ APROVADO — executando compra.`);
@@ -1574,7 +1586,34 @@ export async function executeAgentTrade(
       logger.info(`💰 [LIVE] Executing real trade...`);
 
       try {
-        await executeRealTrade(decision.force, adjustedBuyAmount);
+        const liveExecution = await executeRealTrade(decision.force, adjustedBuyAmount);
+        if (!liveExecution.executed) {
+          const temporaryExecutorSkip =
+            liveExecution.reason.startsWith("BUY_NOT_ELIGIBLE") ||
+            liveExecution.reason === "SINGLE_TRADE_MODE_ACTIVE" ||
+            liveExecution.reason === "CIRCUIT_BREAKER_BLOCK";
+
+          logger.warn(`⚠️ [LIVE] Trade não executado para ${tokenAnalysis.symbol}: ${liveExecution.reason}`);
+          recordFunnelEvent({
+            stage: "execution",
+            outcome: temporaryExecutorSkip ? "recheck" : "skipped",
+            reason: liveExecution.reason,
+            protocol,
+            mint: tokenAnalysis.mint,
+            symbol: tokenAnalysis.symbol,
+            score: executionConfidence,
+          });
+
+          return finish({
+            executed: false,
+            persistDecision: !temporaryExecutorSkip,
+            temporary: temporaryExecutorSkip,
+            reason: temporaryExecutorSkip
+              ? buildTemporarySkipReason(liveExecution.reason)
+              : liveExecution.reason,
+          });
+        }
+
         logger.info(`✅ Trade executed successfully for ${tokenAnalysis.symbol}`);
         recordFunnelEvent({
           stage: "execution",

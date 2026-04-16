@@ -119,6 +119,52 @@ function normalizeSimulationTradeRow(row: any) {
     };
 }
 
+type PnLHistorySource = "auto" | "simulation" | "live";
+
+function normalizePnLHistorySource(source: unknown): PnLHistorySource {
+    const normalized = String(source || "").trim().toLowerCase();
+    if (normalized === "simulation" || normalized === "sim") {
+        return "simulation";
+    }
+    if (normalized === "live" || normalized === "mainnet" || normalized === "main") {
+        return "live";
+    }
+    return "auto";
+}
+
+function toPnLTimestamp(value: unknown) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric;
+    }
+
+    const parsed = Date.parse(String(value || ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function normalizeClosedPnlTrades(
+    trades: any[],
+    options: { excludeAnomalies?: boolean } = {}
+) {
+    return (Array.isArray(trades) ? trades : [])
+        .map((trade) => ({
+            ts: toPnLTimestamp(trade?.exitTime ?? trade?.entryTime ?? trade?.timestamp ?? trade?.ts),
+            pnl: Number(trade?.pnl ?? trade?.pnl_sol ?? 0),
+            status: String(trade?.status || ""),
+            anomalous: options.excludeAnomalies ? isAnomalousSimulationTrade(trade) : false,
+        }))
+        .filter((trade) => {
+            if (trade.status === "OPEN") return false;
+            if (trade.anomalous) return false;
+            return Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl);
+        })
+        .map((trade) => ({
+            ts: trade.ts,
+            pnl: trade.pnl,
+        }))
+        .sort((a, b) => a.ts - b.ts);
+}
+
 function isPostMortemEligibleTrade(trade: any): boolean {
     const status = String(trade?.status || "");
     const pnl = Number(trade?.pnl ?? trade?.pnl_sol ?? 0);
@@ -265,64 +311,39 @@ function loadSimulationTradesFromDb(limit: number = EXPANDED_HISTORY_LIMIT) {
     }
 }
 
-function loadClosedPnlTrades() {
+function loadSimulationClosedPnlTrades(limit: number = 10000) {
     try {
         const rows = db.prepare(`
             SELECT
-                COALESCE(exit_time, entry_time) as ts,
-                pnl_sol as pnl
+                status,
+                exit_time as exitTime,
+                entry_time as entryTime,
+                pnl_sol as pnl,
+                anomaly_flag as anomalyFlag
             FROM simulated_trades
             WHERE status != 'OPEN'
-              AND COALESCE(anomaly_flag, 0) = 0
-              AND COALESCE(exit_time, entry_time) IS NOT NULL
             ORDER BY COALESCE(exit_time, entry_time) ASC
         `).all() as any[];
 
-        if (rows.length > 0) {
-            return rows
-                .map((row) => ({
-                    ts: Number(row.ts),
-                    pnl: Number(row.pnl ?? 0),
-                }))
-                .filter((row) => Number.isFinite(row.ts) && row.ts > 0 && Number.isFinite(row.pnl));
+        const normalizedRows = normalizeClosedPnlTrades(rows, { excludeAnomalies: true });
+        if (normalizedRows.length > 0) {
+            return normalizedRows;
         }
     } catch (error) {
         console.error("Erro ao carregar série P&L da simulação (SQLite)", error);
     }
 
-    const simTrades = loadSimTradesFallback(10000)
-        .filter((trade: any) =>
-            trade.status !== "OPEN" &&
-            !isAnomalousSimulationTrade(trade) &&
-            trade.pnl !== undefined &&
-            (trade.exitTime || trade.entryTime)
-        )
-        .map((trade: any) => ({
-            ts: Number(trade.exitTime || trade.entryTime || 0),
-            pnl: Number(trade.pnl || 0),
-        }))
-        .filter((trade: any) => Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl))
-        .sort((a: any, b: any) => a.ts - b.ts);
-
-    if (simTrades.length > 0) {
-        return simTrades;
-    }
-
-    return loadAgentTrades()
-        .filter((trade: any) => trade.status !== "OPEN" && (trade.exitTime || trade.entryTime))
-        .map((trade: any) => ({
-            ts: Number(trade.exitTime || trade.entryTime || 0),
-            pnl: Number(trade.pnl || trade.pnl_sol || 0),
-        }))
-        .filter((trade: any) => Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl))
-        .sort((a: any, b: any) => a.ts - b.ts);
+    return normalizeClosedPnlTrades(loadSimTradesFallback(limit), { excludeAnomalies: true });
 }
 
-function buildTradeDerivedPnLSeries(days?: number) {
-  const closedTrades = loadClosedPnlTrades();
-  if (closedTrades.length === 0) return [];
+function loadLiveClosedPnlTrades(trades: any[] = loadAgentTrades()) {
+    return normalizeClosedPnlTrades(trades);
+}
 
-  let cumulative = 0;
+function buildCumulativePnlSeries(closedTrades: Array<{ ts: number; pnl: number }>, days?: number) {
+    if (closedTrades.length === 0) return [];
+
+    let cumulative = 0;
     const series = closedTrades.map((trade) => {
         cumulative += Number(trade.pnl || 0);
         return {
@@ -331,7 +352,19 @@ function buildTradeDerivedPnLSeries(days?: number) {
         };
     });
 
-  return slicePnLSeriesByDays(series, days);
+    return slicePnLSeriesByDays(series, days);
+}
+
+function buildTradeDerivedPnLSeries(
+    days?: number,
+    source: Exclude<PnLHistorySource, "auto"> = "live",
+    liveTrades?: any[]
+) {
+    const closedTrades = source === "simulation"
+        ? loadSimulationClosedPnlTrades()
+        : loadLiveClosedPnlTrades(Array.isArray(liveTrades) ? liveTrades : loadAgentTrades());
+
+    return buildCumulativePnlSeries(closedTrades, days);
 }
 
 function slicePnLSeriesByDays(series: Array<{ ts: number; pnl: number }>, days?: number) {
@@ -362,32 +395,7 @@ function slicePnLSeriesByDays(series: Array<{ ts: number; pnl: number }>, days?:
 }
 
 function buildSimulationFileDerivedPnLSeries(days?: number) {
-  const closedTrades = loadSimTradesFallback(10000)
-    .filter((trade: any) =>
-      trade.status !== "OPEN" &&
-      !isAnomalousSimulationTrade(trade) &&
-      trade.pnl !== undefined &&
-      (trade.exitTime || trade.entryTime)
-    )
-    .map((trade: any) => ({
-      ts: Number(trade.exitTime || trade.entryTime || 0),
-      pnl: Number(trade.pnl || 0),
-    }))
-    .filter((trade: any) => Number.isFinite(trade.ts) && trade.ts > 0 && Number.isFinite(trade.pnl))
-    .sort((a: any, b: any) => a.ts - b.ts);
-
-  if (closedTrades.length === 0) return [];
-
-  let cumulative = 0;
-  const series = closedTrades.map((trade) => {
-    cumulative += Number(trade.pnl || 0);
-    return {
-      ts: trade.ts,
-      pnl: parseFloat(cumulative.toFixed(4)),
-    };
-  });
-
-  return slicePnLSeriesByDays(series, days);
+    return buildTradeDerivedPnLSeries(days, "simulation");
 }
 
 function formatPnLSeriesPayload(series: Array<{ ts: number; pnl: number }>) {
@@ -401,6 +409,11 @@ function formatPnLSeriesPayload(series: Array<{ ts: number; pnl: number }>) {
     plValues: series.map((point) => point.pnl),
     positions: series.map(() => 0),
   };
+}
+
+function getLivePnLHistory(days: number = 30, liveTrades?: any[]) {
+    const series = buildTradeDerivedPnLSeries(days, "live", liveTrades);
+    return formatPnLSeriesPayload(series);
 }
 
 function getTrackedPnlTotal() {
@@ -418,7 +431,7 @@ function getTrackedPnlTotal() {
         }
     }
 
-    const series = buildTradeDerivedPnLSeries();
+    const series = buildTradeDerivedPnLSeries(undefined, "live");
     if (series.length > 0) {
         return Number(series[series.length - 1].pnl || 0);
     }
@@ -581,6 +594,21 @@ function syncLegacyScopeDataIfNeeded(context: { user: any; walletId: number; wal
     } catch (error) {
         console.error("Failed to sync legacy scope data:", error);
     }
+}
+
+function getRequestScopedLivePnLHistory(req: Request, days: number = 30) {
+    const context = getScopedRequestContext(req);
+    if (!context) return null;
+
+    syncLegacyScopeDataIfNeeded(context);
+
+    const liveTrades = getScopedTrades({
+        userId: context.user.id,
+        walletId: context.walletId,
+        limit: 500,
+    });
+
+    return getLivePnLHistory(days, liveTrades);
 }
 
 syncBootstrapAdminUser();
@@ -1951,7 +1979,15 @@ app.get("/api/blocks/last-checked", (req, res) => {
  */
 app.get("/api/pl-history", (req, res) => {
     try {
-        const history = getPnLHistory(30);
+        const source = normalizePnLHistorySource(req.query.source);
+        const history = source === "live" || (source === "auto" && (loadAgentConfig().mode || "SIMULATION") === "LIVE")
+            ? getRequestScopedLivePnLHistory(req, 30)
+            : getPnLHistory(30, source);
+
+        if (!history) {
+            return res.status(401).json({ error: "Account not found" });
+        }
+
         res.json(history);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -1963,7 +1999,15 @@ app.get("/api/pl-history", (req, res) => {
  */
 app.get("/api/pnl-history/csv", (req, res) => {
     try {
-        const history = getPnLHistory(30);
+        const source = normalizePnLHistorySource(req.query.source);
+        const history = source === "live" || (source === "auto" && (loadAgentConfig().mode || "SIMULATION") === "LIVE")
+            ? getRequestScopedLivePnLHistory(req, 30)
+            : getPnLHistory(30, source);
+
+        if (!history) {
+            return res.status(401).json({ error: "Account not found" });
+        }
+
         let csv = 'Timestamp,P&L (SOL),Positions\n';
         history.timestamps.forEach((ts, i) => {
             csv += `${ts},${history.plValues[i]},${history.positions[i]}\n`;
@@ -2751,6 +2795,8 @@ export function broadcastDashboardUpdate() {
         recordPnLPoint(totalPnl, stats.activePositions);
 
         const plHistory = getPnLHistory(30);
+        const plHistorySimulation = getPnLHistory(30, "simulation");
+        const plHistoryMainnet = getPnLHistory(30, "live");
 
         // Recent simulation trades
         const simTrades = loadSimulationTradesFromDb(EXPANDED_HISTORY_LIMIT);
@@ -2758,6 +2804,8 @@ export function broadcastDashboardUpdate() {
         io.emit("dashboardUpdate", {
             stats,
             plHistory,
+            plHistorySimulation,
+            plHistoryMainnet,
             simTrades,
             timestamp: Date.now()
         });
@@ -2779,10 +2827,18 @@ function recordPnLPoint(pnlSol: number, positionsCount: number) {
     }
 }
 
-function getPnLHistory(days: number = 30) {
+function getPnLHistory(
+    days: number = 30,
+    source: PnLHistorySource = "auto",
+    liveTrades?: any[]
+) {
     try {
         const agentConfig = loadAgentConfig();
-        if ((agentConfig.mode || "SIMULATION") !== "LIVE") {
+        const effectiveSource = source === "auto"
+            ? ((agentConfig.mode || "SIMULATION") === "LIVE" ? "live" : "simulation")
+            : source;
+
+        if (effectiveSource === "simulation") {
             const simMetrics = getSimulationMetrics();
             const fileSeries = buildSimulationFileDerivedPnLSeries(days);
             if (fileSeries.length > 0) {
@@ -2799,40 +2855,11 @@ function getPnLHistory(days: number = 30) {
                     positions: [0],
                 };
             }
+
+            return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
         }
 
-        const since = Date.now() - (days * 24 * 60 * 60 * 1000);
-        const rows: any[] = db.prepare(`
-            SELECT timestamp, pnl_sol, positions_count
-            FROM pnl_history
-            WHERE timestamp >= ?
-            ORDER BY timestamp ASC
-        `).all(since);
-
-        const tradeDerivedSeries = buildTradeDerivedPnLSeries(days);
-        const persistedLatest = rows.length > 0 ? Number(rows[rows.length - 1].pnl_sol || 0) : 0;
-        const persistedHasNonZero = rows.some((row) => Math.abs(Number(row.pnl_sol || 0)) > 1e-9);
-        const tradeLatest = tradeDerivedSeries.length > 0 ? Number(tradeDerivedSeries[tradeDerivedSeries.length - 1].pnl || 0) : 0;
-        const tradeHasNonZero = tradeDerivedSeries.some((point) => Math.abs(Number(point.pnl || 0)) > 1e-9);
-        const shouldUseTradeSeries =
-            rows.length === 0 ||
-            ((!persistedHasNonZero || Math.abs(persistedLatest) < 1e-9) && tradeHasNonZero) ||
-            (tradeHasNonZero && Math.abs(tradeLatest - persistedLatest) > 1e-6);
-
-        if (shouldUseTradeSeries) {
-            return formatPnLSeriesPayload(
-                tradeDerivedSeries.length
-                    ? tradeDerivedSeries
-                    : [{ ts: Date.now(), pnl: 0 }]
-            );
-        }
-
-        return {
-            timestamps: rows.map(r => formatTimestamp(r.timestamp)),
-            rawTimestamps: rows.map(r => Number(r.timestamp)),
-            plValues: rows.map(r => parseFloat(r.pnl_sol.toFixed(4))),
-            positions: rows.map(r => r.positions_count)
-        };
+        return getLivePnLHistory(days, liveTrades);
     } catch (error) {
         console.error("Erro ao ler histórico P&L do SQLite:", error);
         return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
@@ -2844,7 +2871,12 @@ io.on("connection", (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
     // Send initial data
-    socket.emit("pnl-update", { stats: getStats(), plHistory: getPnLHistory() });
+    socket.emit("pnl-update", {
+        stats: getStats(),
+        plHistory: getPnLHistory(),
+        plHistorySimulation: getPnLHistory(30, "simulation"),
+        plHistoryMainnet: getPnLHistory(30, "live"),
+    });
 
     // Handle bot notification (if bot connects as client)
     socket.on("bot-event-update", () => {

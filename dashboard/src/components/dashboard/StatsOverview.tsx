@@ -17,27 +17,55 @@ import {
 } from "recharts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+type ChartPoint = {
+  timestamp: number;
+  pnl: number;
+};
+
+function createTimeAnchor() {
+  return Date.now();
+}
+
 export function StatsOverview() {
-  const { stats, plChartData, simStatus } = useDashboardData();
+  const {
+    stats,
+    simStatus,
+    agentStatus,
+    simulationPlChartData,
+    mainnetPlChartData,
+  } = useDashboardData();
 
   const [viewMode, setViewMode] = useState("simulation");
   const [timeFilter, setTimeFilter] = useState("all");
+  const [timeAnchor, setTimeAnchor] = useState(() => createTimeAnchor());
 
   const isSim = viewMode === "simulation";
+  const runtimeMode = agentStatus?.mode === "LIVE" ? "LIVE" : "SIMULATION";
+  const selectedChartData = (isSim ? simulationPlChartData : mainnetPlChartData) as ChartPoint[];
+
+  const handleViewModeChange = (nextMode: string) => {
+    setTimeAnchor(createTimeAnchor());
+    setViewMode(nextMode);
+  };
+
+  const handleTimeFilterChange = (nextFilter: string) => {
+    setTimeAnchor(createTimeAnchor());
+    setTimeFilter(nextFilter);
+  };
 
   // Dynamic Metrics Selection
   const winRate = Number(isSim ? (simStatus?.metrics?.winRate ?? 0) : (stats?.winRate ?? 0));
   const wins = Number(isSim ? (simStatus?.metrics?.winTrades ?? 0) : (stats?.wins ?? 0));
   const losses = Number(isSim ? (simStatus?.metrics?.lossTrades ?? 0) : (stats?.losses ?? 0));
-  const totalInvested = Number(isSim ? 0 : (stats?.totalInvested ?? 0));
+  const totalInvested = Number(isSim ? (simStatus?.metrics?.simBalance ?? 0) : (stats?.totalInvested ?? 0));
   const totalPnL = Number(isSim ? (simStatus?.metrics?.totalPnL ?? 0) : (stats?.totalPnL ?? 0));
   const maxDrawdown = Number(isSim ? (simStatus?.metrics?.maxDrawdown ?? 0) : 0);
 
   const filteredChartData = useMemo(() => {
-    if (!plChartData || plChartData.length === 0) return [];
-    if (timeFilter === "all") return plChartData;
+    if (!selectedChartData || selectedChartData.length === 0) return [];
+    if (timeFilter === "all") return selectedChartData;
 
-    const now = Date.now();
+    const now = timeAnchor;
     let durationMs = 0;
     switch (timeFilter) {
       case "1d": durationMs = 24 * 60 * 60 * 1000; break;
@@ -51,7 +79,7 @@ export function StatsOverview() {
     // To ensure the chart line connects from the previous point, we might technically need the last point *before* the cutoff,
     // but a simple filter is usually fine if we have frequent data.
     const cutoff = now - durationMs;
-    const filtered = plChartData.filter((d: any) => d.timestamp >= cutoff);
+    const filtered = selectedChartData.filter((point) => point.timestamp >= cutoff);
 
     // If no points fall within the timeframe, maybe there's just one old point. 
     // We can just return the filtered array. Recharts handles empty arrays.
@@ -59,35 +87,49 @@ export function StatsOverview() {
       { timestamp: cutoff, pnl: 0 },
       { timestamp: now, pnl: 0 },
     ];
-  }, [plChartData, timeFilter]);
+  }, [selectedChartData, timeAnchor, timeFilter]);
+
+  const lineColor = isSim ? "#a855f7" : "#22c55e";
+  const hasChartData = selectedChartData.length > 0;
+  const mainnetEmptyMessage = runtimeMode === "LIVE"
+    ? "Bot em LIVE, mas ainda sem trades executados para montar histórico."
+    : "Sem trades live ainda. Quando houver execução real, o gráfico aparece aqui.";
 
   return (
     <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
       {/* PnL Chart taking up 2 columns */}
       <Card className="glass md:col-span-2">
-        <Tabs value={viewMode} onValueChange={setViewMode} className="w-full">
+        <Tabs value={viewMode} onValueChange={handleViewModeChange} className="w-full">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg">Performance Overview</CardTitle>
-              <TabsList className="bg-black/40 border border-white/5">
-                <TabsTrigger value="simulation" className="text-xs data-[state=active]:bg-purple-500/20 data-[state=active]:text-purple-400">
-                  SIMULATION
-                </TabsTrigger>
-                <TabsTrigger value="mainnet" className="text-xs data-[state=active]:bg-green-500/20 data-[state=active]:text-green-400">
-                  MAINNET
-                </TabsTrigger>
-              </TabsList>
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-1 rounded-md border text-[10px] font-bold tracking-[0.18em] ${runtimeMode === "LIVE"
+                  ? "bg-green-500/10 text-green-400 border-green-500/20"
+                  : "bg-purple-500/10 text-purple-300 border-purple-500/20"
+                  }`}>
+                  RUNTIME {runtimeMode}
+                </span>
+                <TabsList className="bg-black/40 border border-white/5">
+                  <TabsTrigger value="simulation" className="text-xs data-[state=active]:bg-purple-500/20 data-[state=active]:text-purple-400">
+                    SIMULATION
+                  </TabsTrigger>
+                  <TabsTrigger value="mainnet" className="text-xs data-[state=active]:bg-green-500/20 data-[state=active]:text-green-400">
+                    MAINNET
+                  </TabsTrigger>
+                </TabsList>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <TabsContent value="simulation" className="mt-0 focus-visible:outline-none focus-visible:ring-0">
+            <TabsContent value={viewMode} className="mt-0 focus-visible:outline-none focus-visible:ring-0">
               <div className="flex justify-end mb-2 gap-1">
                 {["1d", "7d", "1m", "1y", "all"].map((t) => (
                   <button
                     key={t}
-                    onClick={() => setTimeFilter(t)}
+                    onClick={() => handleTimeFilterChange(t)}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${timeFilter === t
-                      ? "bg-purple-500/20 text-purple-400"
+                      ? (isSim ? "bg-purple-500/20 text-purple-400" : "bg-green-500/20 text-green-400")
                       : "text-muted-foreground hover:bg-white/5 hover:text-white"
                       }`}
                   >
@@ -96,79 +138,73 @@ export function StatsOverview() {
                 ))}
               </div>
               <div className="h-[250px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={
-                      filteredChartData.length > 0
-                        ? filteredChartData
-                        : [
-                          { timestamp: Date.now() - 60000, pnl: 0 },
-                          { timestamp: Date.now(), pnl: 0 },
-                        ]
-                    }
-                  >
-                    <XAxis
-                      dataKey="timestamp"
-                      type="number"
-                      domain={["dataMin", "dataMax"]}
-                      scale="time"
-                      stroke="#ffffff40"
-                      fontSize={12}
-                      tickCount={6}
-                      interval="preserveStartEnd"
-                      minTickGap={24}
-                      tickMargin={10}
-                      tickLine={false}
-                      axisLine={false}
-                      tickFormatter={(val) => {
-                        if (typeof val !== "number") return val;
-                        const d = new Date(val);
-                        const span = filteredChartData.length > 1 ? filteredChartData[filteredChartData.length - 1].timestamp - filteredChartData[0].timestamp : 0;
-                        const oneDay = 24 * 60 * 60 * 1000;
-                        const threeDays = 3 * oneDay;
-                        if (span <= oneDay || timeFilter === "1d") {
-                          return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-                        } else if (span <= threeDays || timeFilter === "7d") {
-                          return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-                        } else {
-                          return d.toLocaleDateString([], { month: "short", day: "numeric" });
-                        }
-                      }}
-                    />
-                    <YAxis
-                      stroke="#ffffff40"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                      tickFormatter={(value) => `${Number(value).toFixed(2)} SOL`}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        borderColor: "hsl(var(--border))",
-                        borderRadius: "8px",
-                      }}
-                      itemStyle={{ color: "hsl(var(--primary))" }}
-                      labelFormatter={(lbl) => new Date(lbl).toLocaleString()}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="pnl"
-                      stroke="#a855f7" // Purple for simulation
-                      strokeWidth={3}
-                      dot={false}
-                      activeDot={{ r: 6, fill: "#a855f7" }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="mainnet" className="mt-0 focus-visible:outline-none focus-visible:ring-0">
-              <div className="h-[250px] w-full mt-4 flex items-center justify-center flex-col gap-2 border border-dashed border-white/10 rounded-lg bg-black/20">
-                <span className="text-green-400 font-mono">LIVE TRADING DATA</span>
-                <span className="text-sm text-muted-foreground">Bot is currently operating in SIMULATION mode.</span>
-                <span className="text-xs text-muted-foreground">Mainnet chart will appear here when LIVE.</span>
+                {hasChartData ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={filteredChartData}>
+                      <XAxis
+                        dataKey="timestamp"
+                        type="number"
+                        domain={["dataMin", "dataMax"]}
+                        scale="time"
+                        stroke="#ffffff40"
+                        fontSize={12}
+                        tickCount={6}
+                        interval="preserveStartEnd"
+                        minTickGap={24}
+                        tickMargin={10}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(val) => {
+                          if (typeof val !== "number") return val;
+                          const d = new Date(val);
+                          const span = filteredChartData.length > 1 ? filteredChartData[filteredChartData.length - 1].timestamp - filteredChartData[0].timestamp : 0;
+                          const oneDay = 24 * 60 * 60 * 1000;
+                          const threeDays = 3 * oneDay;
+                          if (span <= oneDay || timeFilter === "1d") {
+                            return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                          } else if (span <= threeDays || timeFilter === "7d") {
+                            return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                          } else {
+                            return d.toLocaleDateString([], { month: "short", day: "numeric" });
+                          }
+                        }}
+                      />
+                      <YAxis
+                        stroke="#ffffff40"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(value) => `${Number(value).toFixed(2)} SOL`}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--card))",
+                          borderColor: "hsl(var(--border))",
+                          borderRadius: "8px",
+                        }}
+                        itemStyle={{ color: "hsl(var(--primary))" }}
+                        labelFormatter={(lbl) => new Date(lbl).toLocaleString()}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="pnl"
+                        stroke={lineColor}
+                        strokeWidth={3}
+                        dot={false}
+                        activeDot={{ r: 6, fill: lineColor }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full w-full flex items-center justify-center flex-col gap-2 border border-dashed border-white/10 rounded-lg bg-black/20 text-center px-6">
+                    <span className={`font-mono ${isSim ? "text-purple-400" : "text-green-400"}`}>
+                      {isSim ? "SIMULATION HISTORY" : "MAINNET HISTORY"}
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      {isSim ? "Sem histórico de simulação disponível." : mainnetEmptyMessage}
+                    </span>
+                  </div>
+                )}
               </div>
             </TabsContent>
           </CardContent>

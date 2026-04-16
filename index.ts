@@ -301,9 +301,10 @@ winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
   };
 
   try {
-    await executeHybridTrade(tokenData, "BUY", force === true, buyAmountSol);
+    return await executeHybridTrade(tokenData, "BUY", force === true, buyAmountSol);
   } catch (err: any) {
     logger.error(`❌ Winner Reentry failed to execute trade: ${err.message}`);
+    return { executed: false, reason: `WINNER_REENTRY_ERROR:${err.message}` };
   }
 });
 
@@ -1290,6 +1291,7 @@ async function runProtocolSimulationDiscovery(params: {
     markDecisionActivity();
     const tradeResult = await executeAgentTrade(tokenAnalysis, decision, async (_force, _buyAmountSol) => {
       logger.warn(`⚠️ [${protocolLabel}] Execução LIVE ainda não implementada para este protocolo. Fluxo mantido apenas em simulação.`);
+      return { executed: false, reason: "LIVE_NOT_IMPLEMENTED_FOR_PROTOCOL" };
     });
 
     if (tradeResult.persistDecision) {
@@ -1303,37 +1305,20 @@ async function runProtocolSimulationDiscovery(params: {
   }
 }
 
-// Função para processar transações PumpFun (movida do handleStream original)
-async function processPumpFunTransaction(txn: any, parsedTxn: any) {
-  const tOutput = transactionOutput(parsedTxn);
-
-  // Verificar se os dados essenciais estão presentes
-  if (!tOutput.mint || !tOutput.user) {
-    // logger.info("⚠️  Transação com dados incompletos ignorada");
-    return;
-  }
-
-  // Verificar se é uma transação válida (com valores não zero)
-  if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
-    // logger.info("⚠️  Transação BUY com token amount zero ignorada");
-    return;
-  }
-
-  const balance = await getBondingCurveAddress(tOutput.bondingCurve);
-  const progress = calculateCurveProgress(Number(balance));
-  logVerboseTransaction(
-    `
-    TYPE : ${tOutput.type}
-    MINT : ${tOutput.mint}
-    SIGNER : ${tOutput.user}
-    BONDING CURVE : ${tOutput.bondingCurve}
-    TOKEN AMOUNT : ${tOutput.tokenAmount}
-    SOL AMOUNT : ${tOutput.solAmount} SOL
-    POOL DETAILS : ${balance} SOL
-                  ${Number(progress).toFixed(2)}% to completion
-    SIGNATURE : ${txn.transaction.signatures[0]}
-    `
-  );
+async function processPumpFunObservation(params: {
+  tOutput: {
+    mint: string;
+    user: string;
+    type: string;
+    bondingCurve: string;
+    tokenAmount: number;
+    solAmount: number;
+  };
+  signature: string;
+  progress: number;
+  balance: number;
+}) {
+  const { tOutput, signature, progress, balance } = params;
 
   // 🕵️ EXTRAÇÃO DE CRIADOR (DEV)
   let creator = tOutput.user; // O signer da transação Create ou da primeira transação vista
@@ -1383,7 +1368,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         `Symbol: <b>${safeTokenSymbol}</b>\n` +
         `Dev Wallet: ${buildTelegramLink(buildTelegramWalletUrl(creator), creator)}\n` +
         `Action: <b>${safeActionText}</b>\n` +
-        `Signature: ${formatTxLinks(txn.transaction.signatures[0])}\n` +
+        `Signature: ${formatTxLinks(signature)}\n` +
         safeHoldingText;
 
       sendMessage(alertMsg);
@@ -1427,7 +1412,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         `Symbol: <b>${safeTokenSymbol}</b>\n` +
         `Amount: <b>${Number(tOutput.solAmount).toFixed(2)} SOL</b> ${emoji}\n` +
         `Whale Wallet: ${buildTelegramLink(buildTelegramWalletUrl(tOutput.user), tOutput.user)}\n` +
-        `Signature: ${formatTxLinks(txn.transaction.signatures[0])}\n`;
+        `Signature: ${formatTxLinks(signature)}\n`;
 
       sendMessage(whaleAlertMsg);
     }
@@ -1474,7 +1459,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
           `Market Cap: <b>${safeMarketCap}</b>\n` +
           `Type: <b>${safeType}</b>\n` +
           `Curve: <b>${Number(progress).toFixed(1)} %</b>\n` +
-          `Signature: ${formatTxLinks(txn.transaction.signatures[0])}`
+          `Signature: ${formatTxLinks(signature)}`
         );
       }
       if (isDiscovery) {
@@ -1620,19 +1605,31 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         const maxRetries = 3;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            await executeHybridTrade(tokenData, tOutput.type, force, buyAmountSol);
+            const executionResult = await executeHybridTrade(tokenData, "BUY", force, buyAmountSol); // FIX 2026-04-16: use agent decision type ("BUY"), not raw market event type (tOutput.type which can be "SELL")
+            if (!executionResult.executed) {
+              if (executionResult.reason.startsWith("EXECUTION_ERROR:")) {
+                throw new Error(executionResult.reason);
+              }
+
+              logger.info(`ℹ️ Trade não executado (${tOutput.type}) para ${tOutput.mint}: ${executionResult.reason}`);
+              return executionResult;
+            }
+
             markTradeExecutionActivity();
             logger.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
-            return;
+            return executionResult;
           } catch (error: any) {
             if (attempt === maxRetries) {
               logger.error(`❌ Trade falhou após retries: ${error.message}`);
               recordError();
+              return { executed: false, reason: `EXECUTION_ERROR:${error.message}` };
             } else {
               await new Promise(r => setTimeout(r, 1000 * attempt));
             }
           }
         }
+
+        return { executed: false, reason: "EXECUTION_RETRY_EXHAUSTED" };
       };
 
       // ── AI Agent / Copy-Trading orchestration ──
@@ -1666,7 +1663,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
             type: tOutput.type as any,
             solAmount: Number(tOutput.solAmount),
             tokenAmount: Number(tOutput.tokenAmount),
-            signature: txn.transaction.signatures[0]
+            signature
           });
           if (decision) decision.force = true; // Forçar mirror sells/buys
         }
@@ -1680,7 +1677,7 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
         if (decision) {
           markDecisionActivity();
           const tradeResult = await executeAgentTrade(tokenAnalysis, decision, async (force, buyAmountSol) => {
-            await executeTradeWithRetry(force || decision.force, buyAmountSol);
+            return await executeTradeWithRetry(force || decision.force, buyAmountSol);
           });
 
           if (tradeResult.persistDecision) {
@@ -1702,6 +1699,45 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
       if (isDiscovery) currentlyProcessing.delete(tOutput.mint);
     }
   }
+}
+
+// Função para processar transações PumpFun (movida do handleStream original)
+async function processPumpFunTransaction(txn: any, parsedTxn: any) {
+  const tOutput = transactionOutput(parsedTxn);
+
+  // Verificar se os dados essenciais estão presentes
+  if (!tOutput.mint || !tOutput.user) {
+    // logger.info("⚠️  Transação com dados incompletos ignorada");
+    return;
+  }
+
+  // Verificar se é uma transação válida (com valores não zero)
+  if (tOutput.type === "BUY" && (!tOutput.tokenAmount || tOutput.tokenAmount === 0)) {
+    // logger.info("⚠️  Transação BUY com token amount zero ignorada");
+    return;
+  }
+
+  const balance = await getBondingCurveAddress(tOutput.bondingCurve);
+  const progress = calculateCurveProgress(Number(balance));
+  logVerboseTransaction(
+    `
+    TYPE : ${tOutput.type}
+    MINT : ${tOutput.mint}
+    SIGNER : ${tOutput.user}
+    BONDING CURVE : ${tOutput.bondingCurve}
+    TOKEN AMOUNT : ${tOutput.tokenAmount}
+    SOL AMOUNT : ${tOutput.solAmount} SOL
+    POOL DETAILS : ${balance} SOL
+                  ${Number(progress).toFixed(2)}% to completion
+    SIGNATURE : ${txn.transaction.signatures[0]}
+    `
+  );
+  await processPumpFunObservation({
+    tOutput,
+    signature: txn.transaction.signatures[0],
+    progress,
+    balance,
+  });
 }
 
 // Função para processar transações Meteora DBC
@@ -2738,16 +2774,20 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
   if (candidate.protocolProgram !== PUMP_FUN_PROGRAM_ID.toBase58()) return;
   if (!candidate.marketAddress || !candidate.mint || !candidate.trader) return;
 
-  const tokenKey = getProtocolTokenKey("pumpfun", candidate.mint);
+  const runtimeCfg = getRuntimeConfig();
+  const discoveryKey =
+    (runtimeCfg.AGENT_MODE || "SIMULATION") === "SIMULATION"
+      ? getProtocolTokenKey("pumpfun", candidate.mint)
+      : candidate.mint;
   if (
-    aiProcessedAddresses.has(tokenKey) ||
-    currentlyProcessing.has(tokenKey) ||
-    bitqueryDiscoveryWarmupInFlight.has(tokenKey)
+    aiProcessedAddresses.has(discoveryKey) ||
+    currentlyProcessing.has(discoveryKey) ||
+    bitqueryDiscoveryWarmupInFlight.has(discoveryKey)
   ) {
     return;
   }
 
-  bitqueryDiscoveryWarmupInFlight.add(tokenKey);
+  bitqueryDiscoveryWarmupInFlight.add(discoveryKey);
   try {
     const poolSnapshot = bitqueryEventBus.getLatestPoolSnapshot(candidate.marketAddress);
     const balance =
@@ -2761,12 +2801,28 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
     }
 
     watchBitqueryTransferMint(candidate.mint);
-    const tokenMetadata = await loadTokenMetadataSafe(candidate.mint, "token Bitquery PumpFun");
-    await backfillTokenHistory(candidate.mint, 50, candidate.marketAddress);
+    if ((runtimeCfg.AGENT_MODE || "SIMULATION") === "SIMULATION") {
+      const tokenMetadata = await loadTokenMetadataSafe(candidate.mint, "token Bitquery PumpFun");
+      await backfillTokenHistory(candidate.mint, 50, candidate.marketAddress);
 
-    await runProtocolSimulationDiscovery({
-      protocolId: "pumpfun",
-      protocolLabel: "PumpFun",
+      await runProtocolSimulationDiscovery({
+        protocolId: "pumpfun",
+        protocolLabel: "PumpFun",
+        tOutput: {
+          mint: candidate.mint,
+          user: candidate.trader,
+          type: candidate.type,
+          bondingCurve: candidate.marketAddress,
+          tokenAmount: candidate.tokenAmount,
+          solAmount: candidate.solAmount,
+        },
+        progress: Number(progress),
+        tokenMetadata,
+      });
+      return;
+    }
+
+    await processPumpFunObservation({
       tOutput: {
         mint: candidate.mint,
         user: candidate.trader,
@@ -2775,13 +2831,14 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
         tokenAmount: candidate.tokenAmount,
         solAmount: candidate.solAmount,
       },
+      signature: candidate.signature,
       progress: Number(progress),
-      tokenMetadata,
+      balance: Number(balance),
     });
   } catch (error: any) {
     logger.error(`❌ Erro ao processar candidate Bitquery PumpFun ${candidate.mint}: ${error.message}`);
   } finally {
-    bitqueryDiscoveryWarmupInFlight.delete(tokenKey);
+    bitqueryDiscoveryWarmupInFlight.delete(discoveryKey);
   }
 }
 

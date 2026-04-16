@@ -18,6 +18,8 @@ export interface DashboardData {
   isAgentActive: boolean;
   isBotOnline: boolean;
   plChartData: any[];
+  simulationPlChartData: any[];
+  mainnetPlChartData: any[];
   positions: any[];
   agentStats: any;
   agentStatus: any;
@@ -51,6 +53,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [stats, setStats] = useState<any>(null);
   const [plChartData, setPlChartData] = useState<any[]>([]);
+  const [simulationPlChartData, setSimulationPlChartData] = useState<any[]>([]);
+  const [mainnetPlChartData, setMainnetPlChartData] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
   const [agentStatus, setAgentStatus] = useState<any>(null);
   const [tradeHistory, setTradeHistory] = useState<any[]>([]);
@@ -90,18 +94,32 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const applyPlHistory = (history: any) => {
+  const mapPlHistory = useCallback((history: any) => {
     if (!history || !Array.isArray(history.plValues)) return;
     const timestamps = history.rawTimestamps || history.timestamps || [];
-    const mapped = timestamps
+    return timestamps
       .map((t: any, idx: number) => {
         const time = typeof t === "number" ? t : Date.parse(t);
         if (Number.isNaN(time)) return null;
         return { timestamp: time, pnl: Number(history.plValues[idx] ?? 0) };
       })
       .filter(Boolean) as any[];
-    if (mapped.length > 0) setPlChartData(mapped);
-  };
+  }, []);
+
+  const applyPlHistory = useCallback((
+    history: any,
+    target: "default" | "simulation" | "mainnet" = "default"
+  ) => {
+    const mapped = mapPlHistory(history) || [];
+    if (target === "simulation") {
+      setSimulationPlChartData(mapped);
+    } else if (target === "mainnet") {
+      setMainnetPlChartData(mapped);
+    } else {
+      setPlChartData(mapped);
+    }
+    return mapped;
+  }, [mapPlHistory]);
 
   // Build cumulative PnL chart from simulation trades
   const buildPlChart = useCallback((trades: any[]) => {
@@ -127,7 +145,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const fetchCoreData = useCallback(async () => {
     try {
-      let chartData: any[] = [];
+      let simulationFallbackChartData: any[] = [];
 
       const [
         statsData,
@@ -139,7 +157,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         healthData,
         tConfig,
         pConfig,
-        plHistoryData,
+        simulationPlHistoryData,
+        mainnetPlHistoryData,
       ] = await Promise.all([
         apiFetch(`${API_BASE}/me/stats`).catch(() => null),
         apiFetch(`${API_BASE}/me/positions`).catch(() => []),
@@ -150,7 +169,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         apiFetch(`${API_BASE}/bot-health`).catch(() => null),
         apiFetch(`${API_BASE}/me/trading-config`).catch(() => null),
         apiFetch(`${API_BASE}/protocol-config`).catch(() => null),
-        apiFetch(`${API_BASE}/pl-history`).catch(() => null),
+        apiFetch(`${API_BASE}/pl-history?source=simulation`).catch(() => null),
+        apiFetch(`${API_BASE}/pl-history?source=mainnet`).catch(() => null),
       ]);
 
       if (statsData) setStats(statsData);
@@ -167,7 +187,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
             t.pnl !== undefined &&
             !(t.anomalyFlag === true || Number(t.anomalyFlag) === 1)
         );
-        chartData = buildPlChart(closedTrades);
+        simulationFallbackChartData = buildPlChart(closedTrades);
       } else if (simTrData && Array.isArray(simTrData) && simTrData.length === 0) {
         // Server returned genuinely empty — only update if we have no data at all
         setSimTrades((prev: any[]) => prev.length === 0 ? simTrData : prev);
@@ -176,26 +196,21 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       if (tConfig) setTradingConfig(tConfig);
       if (pConfig) setProtocolConfig(pConfig);
 
-      const span = (vals: any[]) => {
-        if (!Array.isArray(vals) || vals.length === 0) return 0;
-        const nums = vals.map((v) => Number(v) || 0);
-        return Math.max(...nums) - Math.min(...nums);
-      };
+      const simulationHistoryChart = mapPlHistory(simulationPlHistoryData) || [];
+      const mainnetHistoryChart = mapPlHistory(mainnetPlHistoryData) || [];
+      const nextSimulationChart = simulationHistoryChart.length > 0
+        ? simulationHistoryChart
+        : simulationFallbackChartData;
+      const nextMainnetChart = mainnetHistoryChart;
+      const resolvedMode = agentData?.mode || "SIMULATION";
 
-      const historySpan = plHistoryData ? span(plHistoryData.plValues || []) : 0;
-      const chartSpan = span(chartData.map((c: any) => c.pnl));
-
-      if (historySpan > 1e-6 && plHistoryData) {
-        applyPlHistory(plHistoryData);
-      } else if (chartSpan > 0 && chartData.length > 0) {
-        setPlChartData(chartData);
-      } else if (plHistoryData) {
-        applyPlHistory(plHistoryData);
-      }
+      setSimulationPlChartData(nextSimulationChart);
+      setMainnetPlChartData(nextMainnetChart);
+      setPlChartData(resolvedMode === "LIVE" ? nextMainnetChart : nextSimulationChart);
     } catch (e) {
       console.error("Dashboard fetch error:", e);
     }
-  }, [buildPlChart]);
+  }, [buildPlChart, mapPlHistory]);
 
   const fetchSecondaryData = useCallback(async () => {
     try {
@@ -256,11 +271,15 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       if (data.simTrades && Array.isArray(data.simTrades) && data.simTrades.length > 0) {
         setSimTrades(data.simTrades);
       }
+      if (data.plHistorySimulation) applyPlHistory(data.plHistorySimulation, "simulation");
+      if (data.plHistoryMainnet) applyPlHistory(data.plHistoryMainnet, "mainnet");
       if (data.plHistory) applyPlHistory(data.plHistory);
     });
 
     newSocket.on("pnl-update", (data: any) => {
       if (data.stats) setStats(data.stats);
+      if (data.plHistorySimulation) applyPlHistory(data.plHistorySimulation, "simulation");
+      if (data.plHistoryMainnet) applyPlHistory(data.plHistoryMainnet, "mainnet");
       if (data.plHistory) applyPlHistory(data.plHistory);
     });
 
@@ -290,7 +309,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       clearInterval(pollInterval);
       newSocket.close();
     };
-  }, [refreshData]);
+  }, [applyPlHistory, refreshData]);
 
   const toggleAgent = async () => {
     // Optimistic: flip locally
@@ -396,6 +415,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         isAgentActive,
         isBotOnline,
         plChartData,
+        simulationPlChartData,
+        mainnetPlChartData,
         positions,
         agentStatus,
         agentStats: agentStatus,

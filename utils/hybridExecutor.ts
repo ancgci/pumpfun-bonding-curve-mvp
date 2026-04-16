@@ -71,6 +71,12 @@ export interface TokenData {
   mode: "CURVE" | "DEX" | "REENTRY";
 }
 
+export interface HybridTradeExecutionResult {
+  executed: boolean;
+  reason: string;
+  signature?: string | null;
+}
+
 export type { Position } from "./positionManager";
 
 // Configurações do ambiente
@@ -1169,13 +1175,19 @@ export async function executeHybridTrade(
   tradeType: string = "BUY",
   force: boolean = false,
   buyAmountOverrideSol?: number
-): Promise<void> {
+): Promise<HybridTradeExecutionResult> {
+  const skip = (reason: string): HybridTradeExecutionResult => ({ executed: false, reason, signature: null });
+  const done = (reason: string, signature?: string | null): HybridTradeExecutionResult => ({
+    executed: true,
+    reason,
+    signature: signature || null,
+  });
   const currentConfig = getRuntimeConfig();
 
   // 🚨 EMERGENCY STOP CHECK 🚨
   if ((currentConfig as any).EMERGENCY_STOP_ACTIVE) {
     logger.warn("🛑 [EXECUTOR] EMERGENCY STOP ATIVO! Bloqueando execução do trade.");
-    return;
+    return skip("EMERGENCY_STOP_ACTIVE");
   }
 
   try {
@@ -1191,13 +1203,13 @@ export async function executeHybridTrade(
 
     // Checking Circuit Breaker
     if (!circuitBreaker.canTrade() && !force) {
-      return;
+      return skip("CIRCUIT_BREAKER_BLOCK");
     }
 
     // Verificar se o tipo de trade é permitido
     if (!isTradeTypeAllowed(tradeType) && !force) {
       logger.info(`⚠️  Tipo de trade ${tradeType} não permitido.`);
-      return;
+      return skip(`TRADE_TYPE_NOT_ALLOWED:${tradeType}`);
     }
 
     // ─── COMPRA ───
@@ -1205,7 +1217,7 @@ export async function executeHybridTrade(
       // Verificar se a compra automática está habilitada (Mirror ignora isso)
       if (!AUTO_BUY_ENABLED && !force) {
         logger.info(`ℹ️  Compra automática desativada. AUTO_BUY_ENABLED=${AUTO_BUY_ENABLED}`);
-        return;
+        return skip("AUTO_BUY_DISABLED");
       }
 
       const isDiscoveryBuy = tokenData.mode === "CURVE" && tokenData.curvePercent >= 97.7;
@@ -1213,7 +1225,7 @@ export async function executeHybridTrade(
       if (isDiscoveryBuy || isReentryBuy || force) {
         if (SINGLE_TRADE_MODE && hasActiveTrade() && !force) {
           logger.info(`⚠️  Trade único habilitado e já existe uma posição aberta.`);
-          return;
+          return skip("SINGLE_TRADE_MODE_ACTIVE");
         }
 
         let tradeSolAmount =
@@ -1278,7 +1290,14 @@ export async function executeHybridTrade(
         await positionManager.savePosition(position);
         circuitBreaker.recordSuccess(0);
         notifyDashboardUpdate();
+        return done("BUY_EXECUTED", signature);
       }
+
+      logger.info(
+        `ℹ️  Compra não executada para ${tokenData.mint}: elegibilidade insuficiente ` +
+        `(mode=${tokenData.mode}, curve=${tokenData.curvePercent.toFixed(1)}%, force=${force}).`
+      );
+      return skip(`BUY_NOT_ELIGIBLE:${tokenData.mode}:${tokenData.curvePercent.toFixed(1)}`);
     }
 
     // ─── VENDA ───
@@ -1296,7 +1315,7 @@ export async function executeHybridTrade(
             lastExitReason: "EXTERNAL_SELL_DETECTED",
           });
           notifyDashboardUpdate();
-          return;
+          return skip("EXTERNAL_BALANCE_ZERO");
         }
 
         const autoSellTakeProfit = currentConfig.AUTO_SELL_TAKE_PROFIT !== false;
@@ -1318,7 +1337,7 @@ export async function executeHybridTrade(
         });
         if (!quote && !force && !ataExitEnabled) {
           logger.debug(`Não foi possível obter quote de saída para ${tokenData.mint}, pulando verificação`);
-          return;
+          return skip("SELL_QUOTE_UNAVAILABLE");
         }
 
         const currentPrice = quote?.pricePerTokenSol || 0;
@@ -1326,7 +1345,7 @@ export async function executeHybridTrade(
           || (walletBalance.uiAmount > 0 ? position.buySolAmount / walletBalance.uiAmount : 0);
         if (!(buyPrice > 0) && !force) {
           logger.warn(`⚠️  Não foi possível determinar preço de entrada para ${tokenData.mint}.`);
-          return;
+          return skip("ENTRY_PRICE_UNAVAILABLE");
         }
         const highWaterMark = Math.max(
           Number(position.lastHighPrice || 0),
@@ -1384,6 +1403,8 @@ export async function executeHybridTrade(
                 reason: ataExit.recoveryReason,
               }
             );
+            notifyDashboardUpdate();
+            return done("SELL_EXECUTED", ataExit.signature);
           } else {
             let signature: string;
             let venue: "pumpfun" | "jupiter" = tokenData.mode === "CURVE" ? "pumpfun" : "jupiter";
@@ -1406,8 +1427,9 @@ export async function executeHybridTrade(
               currentPrice,
               exitDecision
             );
+            notifyDashboardUpdate();
+            return done("SELL_EXECUTED", signature);
           }
-          notifyDashboardUpdate();
         } else {
           // Update High Water Mark
           if (exitResult.newHighWaterMark > Number(position.lastHighPrice || 0)) {
@@ -1419,8 +1441,11 @@ export async function executeHybridTrade(
               lastBalanceSyncedAt: walletBalance.fetchedAt,
             });
           }
+          return skip(`SELL_EXIT_NOT_TRIGGERED:${exitResult.reason}`);
         }
       }
+
+      return skip("SELL_POSITION_NOT_FOUND");
     }
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
@@ -1453,5 +1478,9 @@ export async function executeHybridTrade(
     } else {
       circuitBreaker.recordFailure(error);
     }
+
+    return skip(`EXECUTION_ERROR:${errorMsg.substring(0, 160)}`);
   }
+
+  return skip("NO_OPERATION");
 }

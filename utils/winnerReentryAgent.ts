@@ -79,7 +79,7 @@ type ReentryExecutionBridge = (
   candidate: WinnerReentryCandidate,
   force?: boolean,
   buyAmountSol?: number
-) => Promise<void>;
+) => Promise<{ executed: boolean; reason: string }>;
 
 function buildSourceTradeKey(trade: SimulatedTrade): string {
   return `${trade.tokenMint}:${trade.entryTime}:${trade.exitTime || 0}:${trade.status}`;
@@ -579,7 +579,11 @@ export class WinnerReentryAgentService {
       const tradeResult = await executeAgentTrade(
         tokenAnalysis as any,
         decision,
-        async (force, buyAmountSol) => this.onExecute?.(candidate, force, buyAmountSol)
+        async (force, buyAmountSol) =>
+          (await this.onExecute?.(candidate, force, buyAmountSol)) || {
+            executed: false,
+            reason: "WINNER_REENTRY_EXECUTOR_UNAVAILABLE",
+          }
       );
 
       logger.info(

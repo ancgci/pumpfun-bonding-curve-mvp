@@ -6,6 +6,21 @@ export interface ExecutionValidationResult {
     reason?: string;
 }
 
+export interface ExecutionValidationOptions {
+    maxSlippagePct?: number;
+    rsiOverboughtBlock?: number;
+    protocol?: string | null;
+    bondingCurvePercent?: number | null;
+}
+
+function isCompactPumpfunAggressiveRsiBypass(options: ExecutionValidationOptions): boolean {
+    return (
+        String(options.protocol || "").toLowerCase() === "pumpfun" &&
+        Number(options.bondingCurvePercent || 0) >= 95 &&
+        (options.rsiOverboughtBlock ?? 70) >= 95
+    );
+}
+
 /**
  * Validates right before executing a buy order to ensure the price
  * hasn't spiked while the LLM was "thinking".
@@ -19,8 +34,14 @@ export function validateTradeExecution(
     mint: string,
     symbol: string,
     initialPrice: number,
-    maxSlippagePct: number = 10.0
+    options: number | ExecutionValidationOptions = 10.0
 ): ExecutionValidationResult {
+    const normalizedOptions: ExecutionValidationOptions =
+        typeof options === "number"
+            ? { maxSlippagePct: options }
+            : (options || {});
+    const maxSlippagePct = normalizedOptions.maxSlippagePct ?? 10.0;
+    const rsiOverboughtBlock = normalizedOptions.rsiOverboughtBlock ?? 70;
     const currentPrice = getLatestPrice(mint);
 
     if (!currentPrice) {
@@ -38,8 +59,16 @@ export function validateTradeExecution(
 
     // 2. High-Res RSI Check (to ensure we don't buy the exact top)
     const rsi = getHighResRSI(mint);
-    if (rsi && rsi > 70) {
-        const reason = `Extremely Overbought (RSI=${rsi.toFixed(1)} > 70)`;
+    if (rsi && isCompactPumpfunAggressiveRsiBypass(normalizedOptions)) {
+        logger.info(
+            `🟡 [PreExecution] ${symbol}: compact PumpFun near migration, bypassing RSI guard ` +
+            `(RSI=${rsi.toFixed(1)}, limit=${rsiOverboughtBlock}).`
+        );
+        return { isValid: true };
+    }
+
+    if (rsi && rsi > rsiOverboughtBlock) {
+        const reason = `Extremely Overbought (RSI=${rsi.toFixed(1)} > ${rsiOverboughtBlock})`;
         logger.warn(`🛑 [PreExecution] ABORT ${symbol}: ${reason}`);
         return { isValid: false, reason };
     }
