@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   LineChart,
   Line,
@@ -23,6 +23,27 @@ function createTimeAnchor() {
   return Date.now();
 }
 
+function computeMaxDrawdownSol(series: ChartPoint[]): number {
+  const normalized = Array.isArray(series)
+    ? [...series]
+        .filter((point) => Number.isFinite(Number(point?.timestamp)) && Number.isFinite(Number(point?.pnl)))
+        .sort((a, b) => a.timestamp - b.timestamp)
+    : [];
+
+  if (normalized.length === 0) return 0;
+
+  let peak = 0;
+  let maxDrawdown = 0;
+
+  for (const point of normalized) {
+    const pnl = Number(point.pnl || 0);
+    peak = Math.max(peak, pnl);
+    maxDrawdown = Math.max(maxDrawdown, peak - pnl);
+  }
+
+  return Number(maxDrawdown.toFixed(4));
+}
+
 const PERIODS: Record<string, number | null> = {
   "1d": 24 * 60 * 60 * 1000,
   "7d": 7 * 24 * 60 * 60 * 1000,
@@ -40,7 +61,7 @@ export function PerformanceOverview() {
     mainnetPlChartData,
   } = useDashboardData();
   const runtimeMode: "SIMULATION" | "MAINNET" = agentStatus?.mode === "LIVE" ? "MAINNET" : "SIMULATION";
-  const [viewMode, setViewMode] = useState<"SIMULATION" | "MAINNET">("SIMULATION");
+  const [viewMode, setViewMode] = useState<"SIMULATION" | "MAINNET">(runtimeMode);
   const [period, setPeriod] = useState<keyof typeof PERIODS>("all");
   const [timeAnchor, setTimeAnchor] = useState(() => createTimeAnchor());
   const sourceChartData = (viewMode === "SIMULATION" ? simulationPlChartData : mainnetPlChartData) as ChartPoint[];
@@ -49,6 +70,11 @@ export function PerformanceOverview() {
     setTimeAnchor(createTimeAnchor());
     setViewMode(nextMode);
   };
+
+  useEffect(() => {
+    setTimeAnchor(createTimeAnchor());
+    setViewMode(runtimeMode);
+  }, [runtimeMode]);
 
   const handlePeriodChange = (nextPeriod: keyof typeof PERIODS) => {
     setTimeAnchor(createTimeAnchor());
@@ -69,12 +95,20 @@ export function PerformanceOverview() {
   }, [period, sourceChartData, timeAnchor]);
 
   const simMetrics = simStatus?.metrics || {};
-  const totalProfit = viewMode === "SIMULATION" ? Number(simMetrics.totalPnL || 0) : Number(stats?.totalPnL || 0);
+  const livePnlUnavailable = viewMode === "MAINNET" && stats?.pnlUnavailable === true;
+  const totalProfit = viewMode === "SIMULATION"
+    ? Number(simMetrics.totalPnL || 0)
+    : (livePnlUnavailable ? null : Number(stats?.totalPnL || 0));
   const winRate = viewMode === "SIMULATION" ? Number(simMetrics.winRate || 0) : Number(stats?.winRate || 0);
   const wins = viewMode === "SIMULATION" ? Number(simMetrics.winTrades || 0) : Number(stats?.wins || 0);
   const losses = viewMode === "SIMULATION" ? Number(simMetrics.lossTrades || 0) : Number(stats?.losses || 0);
-  const maxDrawdown = viewMode === "SIMULATION" ? Number(simMetrics.maxDrawdown || simMetrics.maxDrawdownPercentage || 0) : Number(stats?.maxDrawdown || 0);
+  const maxDrawdown = viewMode === "SIMULATION"
+    ? Number(simMetrics.maxDrawdown || simMetrics.maxDrawdownPercentage || 0)
+    : computeMaxDrawdownSol(mainnetPlChartData as ChartPoint[]);
   const investedBalance = viewMode === "SIMULATION" ? Number(simMetrics.simBalance || 0) : Number(stats?.totalInvested || 0);
+  const walletSpotSol = viewMode === "MAINNET" && stats?.walletSpotSol !== null && stats?.walletSpotSol !== undefined
+    ? Number(stats.walletSpotSol)
+    : null;
   const lineColor = viewMode === "SIMULATION" ? "#a855f7" : "#22c55e";
   const emptyMessage = viewMode === "SIMULATION"
     ? "Sem histórico de simulação disponível."
@@ -85,13 +119,13 @@ export function PerformanceOverview() {
   const metricCards = [
     {
       label: viewMode === "SIMULATION" ? "Sim Profit" : "Live Profit",
-      value: `${totalProfit >= 0 ? "+" : ""}${totalProfit.toFixed(4)} SOL`,
+      value: totalProfit === null ? "P&L Pending" : `${totalProfit >= 0 ? "+" : ""}${totalProfit.toFixed(4)} SOL`,
       accent: "text-green-400",
       icon: TrendingUp,
     },
     {
       label: viewMode === "SIMULATION" ? "Sim Balance" : "Invested",
-      value: `${investedBalance.toFixed(3)} SOL`,
+      value: `${investedBalance.toFixed(4)} SOL`,
       accent: "text-yellow-300",
       icon: Wallet,
     },
@@ -120,6 +154,15 @@ export function PerformanceOverview() {
       icon: Activity,
     },
   ];
+
+  if (viewMode === "MAINNET") {
+    metricCards.splice(1, 0, {
+      label: "Wallet SOL",
+      value: walletSpotSol !== null ? `${walletSpotSol.toFixed(6)} SOL` : "--",
+      accent: "text-cyan-300",
+      icon: Wallet,
+    });
+  }
 
   return (
     <div className="space-y-4">

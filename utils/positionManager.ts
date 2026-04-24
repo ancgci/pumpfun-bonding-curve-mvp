@@ -32,6 +32,12 @@ export interface Position {
     lastExitDecisionReason?: string;
     lastExitRecoveryNeeded?: boolean;
     lastExitRecoveryReason?: string;
+    lastAtaClosed?: boolean;
+    lastAtaCloseSignature?: string | null;
+    lastAtaCloseRecoveredSol?: number | null;
+    lastAtaCloseRecoveredLamports?: number | null;
+    lastAtaCloseTokenProgram?: string | null;
+    lastAtaCloseSkippedReason?: string | null;
     symbol?: string;
 }
 

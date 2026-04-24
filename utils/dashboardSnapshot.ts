@@ -358,6 +358,7 @@ function getTradingConfigDefaults() {
     slippageBps: parseInt(process.env.SLIPPAGE_BPS || "300", 10),
     agentMinConfidence: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70", 10),
     jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
+    autoCloseAtaAfterFullSell: process.env.AUTO_CLOSE_ATA_AFTER_FULL_SELL !== "false",
     autoBuyEnabled: process.env.AUTO_BUY_ENABLED === "true",
     singleTradeMode: process.env.SINGLE_TRADE_MODE === "true",
     copyTradeEnabled: process.env.COPY_TRADE_ENABLED === "true",

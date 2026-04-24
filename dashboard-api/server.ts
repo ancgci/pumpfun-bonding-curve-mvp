@@ -6,10 +6,7 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
-import { getRecentPostMortemTrades, getSimulationMetrics, isSimulationReadyForLive } from "../utils/simulationEngine";
-import { CONFIG } from "../utils/config";
-import { getSimulationAtaRecoveryMetrics } from "../utils/dashboardSnapshot";
-import { sellOnPumpFun, sellViaJupiter } from "../utils/hybridExecutor";
+import { CONFIG, getRuntimeConfig } from "../utils/config";
 import http from "http";
 import { Server } from "socket.io";
 import db from "../utils/db";
@@ -17,8 +14,6 @@ import cookieParser from "cookie-parser";
 import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
-import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
     buildClientUser,
     deleteUser,
@@ -52,15 +47,6 @@ import {
     getActiveTradingWalletAddress,
     loadConfiguredFallbackWallet,
 } from "../utils/walletStore";
-import { evaluateBotRuntimeHealth, readBotRuntimeHealth } from "../utils/botRuntimeHealth";
-import { rpcPool } from "../utils/rpcPool";
-import { getFunnelMetrics } from "../utils/decisionFunnelMetrics";
-import { readAgentHealthSnapshot } from "../utils/agentHealth";
-import {
-    buildPositionBalanceSyncResult,
-    getWalletTokenBalanceSnapshot,
-    waitForWalletTokenBalanceChange,
-} from "../utils/livePositionRuntime";
 
 // ── Auth Config ──────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -71,7 +57,140 @@ const DEFAULT_HISTORY_LIMIT = 20;
 const MAX_HISTORY_LIMIT = 300;
 const EXPANDED_HISTORY_LIMIT = 150;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
-const connection = new Connection(CONFIG.RPC_URL, "confirmed");
+let dashboardConnection: import("@solana/web3.js").Connection | null = null;
+const DASHBOARD_HEAVY_CACHE_TTL_MS = Math.max(5_000, Number(process.env.DASHBOARD_HEAVY_CACHE_TTL_MS || 15_000));
+const cachedWalletSpotSol = new Map<string, { value: number; fetchedAt: number }>();
+
+type DashboardCacheEntry<T> = {
+    fetchedAt: number;
+    value: T;
+};
+
+const dashboardHeavyCache = new Map<string, DashboardCacheEntry<any>>();
+
+function getSimulationEngine() {
+    return require("../utils/simulationEngine") as typeof import("../utils/simulationEngine");
+}
+
+function getDashboardSnapshot() {
+    return require("../utils/dashboardSnapshot") as typeof import("../utils/dashboardSnapshot");
+}
+
+function getHybridExecutor() {
+    return require("../utils/hybridExecutor") as typeof import("../utils/hybridExecutor");
+}
+
+function getBotRuntimeHealthModule() {
+    return require("../utils/botRuntimeHealth") as typeof import("../utils/botRuntimeHealth");
+}
+
+function getRpcPoolModule() {
+    return require("../utils/rpcPool") as typeof import("../utils/rpcPool");
+}
+
+function getDecisionFunnelMetricsModule() {
+    return require("../utils/decisionFunnelMetrics") as typeof import("../utils/decisionFunnelMetrics");
+}
+
+function getAgentHealthModule() {
+    return require("../utils/agentHealth") as typeof import("../utils/agentHealth");
+}
+
+function getLivePositionRuntimeModule() {
+    return require("../utils/livePositionRuntime") as typeof import("../utils/livePositionRuntime");
+}
+
+function getMetadataCacheModule() {
+    return require("../utils/metadataCache") as typeof import("../utils/metadataCache");
+}
+
+function getWeb3Module() {
+    return require("@solana/web3.js") as typeof import("@solana/web3.js");
+}
+
+function getSplTokenModule() {
+    return require("@solana/spl-token") as typeof import("@solana/spl-token");
+}
+
+function getDashboardConnection() {
+    if (dashboardConnection) return dashboardConnection;
+    const { Connection } = getWeb3Module();
+    dashboardConnection = new Connection(CONFIG.RPC_URL, "confirmed");
+    return dashboardConnection;
+}
+
+function readCachedDashboardValue<T>(key: string, producer: () => T, ttlMs: number = DASHBOARD_HEAVY_CACHE_TTL_MS): T {
+    const now = Date.now();
+    const cached = dashboardHeavyCache.get(key);
+    if (cached && now - cached.fetchedAt < ttlMs) {
+        return cached.value as T;
+    }
+
+    const value = producer();
+    dashboardHeavyCache.set(key, {
+        fetchedAt: now,
+        value,
+    });
+    return value;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((resolve) => {
+                timer = setTimeout(() => resolve(fallback), timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+async function resolveDashboardTokenIdentity(mint: string, fallbackSymbol?: string | null) {
+    const safeMint = String(mint || "").trim();
+    const fallback = String(fallbackSymbol || "").trim();
+    if (!safeMint) {
+        return {
+            symbol: fallback || null,
+            name: fallback || null,
+            displayName: fallback || null,
+        };
+    }
+
+    try {
+        const { getCachedTokenMetadata } = getMetadataCacheModule();
+        const metadata = await withTimeout(getCachedTokenMetadata(safeMint), 2500, null);
+        const symbol = String(metadata?.symbol || fallback || `${safeMint.slice(0, 6)}...`).trim();
+        const name = String(metadata?.name || symbol).trim();
+        return {
+            symbol,
+            name,
+            displayName: name || symbol,
+        };
+    } catch {
+        const symbol = fallback || `${safeMint.slice(0, 6)}...`;
+        return {
+            symbol,
+            name: symbol,
+            displayName: symbol,
+        };
+    }
+}
+
+function invalidateDashboardHeavyCache(prefix?: string) {
+    if (!prefix) {
+        dashboardHeavyCache.clear();
+        return;
+    }
+
+    for (const key of dashboardHeavyCache.keys()) {
+        if (key.startsWith(prefix)) {
+            dashboardHeavyCache.delete(key);
+        }
+    }
+}
 
 function signAccessToken(payload: object) {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: "15m" });
@@ -120,6 +239,22 @@ function normalizeSimulationTradeRow(row: any) {
 }
 
 type PnLHistorySource = "auto" | "simulation" | "live";
+type DashboardSimulationMetrics = {
+    totalTrades: number;
+    winTrades: number;
+    lossTrades: number;
+    winRate: number;
+    totalPnL: number;
+    avgPnL: number;
+    maxDrawdown: number;
+    sharpRatio: number;
+    expectedValue: number;
+    riskRewardRatio: number;
+    anomalousTrades?: number;
+    lastUpdate?: number;
+};
+
+const SIMULATION_METRICS_FILE = path.join(__dirname, "../data/simulation/metrics.json");
 
 function normalizePnLHistorySource(source: unknown): PnLHistorySource {
     const normalized = String(source || "").trim().toLowerCase();
@@ -130,6 +265,66 @@ function normalizePnLHistorySource(source: unknown): PnLHistorySource {
         return "live";
     }
     return "auto";
+}
+
+function loadSimulationMetricsSnapshot(): DashboardSimulationMetrics | null {
+    try {
+        if (!fs.existsSync(SIMULATION_METRICS_FILE)) return null;
+        const raw = JSON.parse(fs.readFileSync(SIMULATION_METRICS_FILE, "utf-8"));
+        return raw && typeof raw === "object" ? raw as DashboardSimulationMetrics : null;
+    } catch (error) {
+        console.error("Erro ao carregar snapshot de métricas de simulação:", error);
+        return null;
+    }
+}
+
+function evaluateSimulationReadiness(metrics: DashboardSimulationMetrics | null) {
+    if (!metrics) {
+        return {
+            ready: false,
+            score: 0,
+            reasons: ["No simulation metrics found"],
+        };
+    }
+
+    const reasons: string[] = [];
+    let score = 0;
+
+    if (Number(metrics.totalTrades) < 50) {
+        reasons.push(`Only ${Number(metrics.totalTrades || 0)}/50 trades completed`);
+    } else {
+        score += 20;
+    }
+
+    if (Number(metrics.winRate) < 40) {
+        reasons.push(`Win rate ${Number(metrics.winRate || 0).toFixed(1)}% < 40%`);
+    } else {
+        score += 20;
+    }
+
+    if (Number(metrics.expectedValue) <= 0) {
+        reasons.push(`Expected value ${Number(metrics.expectedValue || 0).toFixed(4)} ≤ 0`);
+    } else {
+        score += 20;
+    }
+
+    if (Number(metrics.maxDrawdown) > 10) {
+        reasons.push(`Max drawdown ${Number(metrics.maxDrawdown || 0).toFixed(4)} SOL > 10 SOL`);
+    } else {
+        score += 20;
+    }
+
+    if (Number(metrics.totalPnL) <= 0) {
+        reasons.push(`Total P&L ${Number(metrics.totalPnL || 0).toFixed(4)} ≤ 0`);
+    } else {
+        score += 20;
+    }
+
+    return {
+        ready: reasons.length === 0,
+        score,
+        reasons,
+    };
 }
 
 function toPnLTimestamp(value: unknown) {
@@ -337,7 +532,417 @@ function loadSimulationClosedPnlTrades(limit: number = 10000) {
 }
 
 function loadLiveClosedPnlTrades(trades: any[] = loadAgentTrades()) {
-    return normalizeClosedPnlTrades(trades);
+    const normalizedTrades = normalizeClosedPnlTrades(trades);
+    if (normalizedTrades.length > 0) {
+        return normalizedTrades;
+    }
+
+    return normalizeClosedPnlTrades(
+        buildLiveClosedPositionHistory().filter((trade: any) => typeof trade?.pnl === "number")
+    );
+}
+
+function isTakeProfitExit(reason: unknown): boolean {
+    return /take profit/i.test(String(reason || ""));
+}
+
+function isStopLossExit(reason: unknown): boolean {
+    return /stop loss/i.test(String(reason || ""));
+}
+
+function isExternalSellDetected(reason: unknown): boolean {
+    return String(reason || "").toUpperCase() === "EXTERNAL_SELL_DETECTED";
+}
+
+function isManualSell(reason: unknown): boolean {
+    return String(reason || "").toUpperCase() === "MANUAL_SELL";
+}
+
+function mapLiveExitStatus(reason: unknown): string {
+    if (isTakeProfitExit(reason)) return "CLOSED_TP";
+    if (isStopLossExit(reason)) return "CLOSED_SL";
+    if (isManualSell(reason)) return "CLOSED_MANUAL";
+    if (isExternalSellDetected(reason)) return "RECONCILED_EXTERNAL";
+    return "CLOSED";
+}
+
+function deriveClosedPositionPnl(position: any): number | null {
+    const buySolAmount = Number(position?.buySolAmount || 0);
+    const netSellValue = Number(position?.lastExitNetSellValue || 0);
+    const netAtaCloseValue = Number(position?.lastExitNetAtaCloseValue || 0);
+
+    if (!(buySolAmount > 0) || !(netSellValue > 0 || netAtaCloseValue > 0)) {
+        return null;
+    }
+
+    return Number((netSellValue + netAtaCloseValue - buySolAmount).toFixed(9));
+}
+
+function classifyClosedPositionOutcome(position: any): "win" | "loss" | "neutral" | null {
+    if (isExternalSellDetected(position?.lastExitReason)) return null;
+
+    const pnl = deriveClosedPositionPnl(position);
+    if (typeof pnl === "number") {
+        if (pnl > 0) return "win";
+        if (pnl < 0) return "loss";
+        return "neutral";
+    }
+
+    if (isTakeProfitExit(position?.lastExitReason)) return "win";
+    if (isStopLossExit(position?.lastExitReason)) return "loss";
+    return null;
+}
+
+function buildLiveClosedPositionHistory(positions: any[] = loadPositions()) {
+    return (Array.isArray(positions) ? positions : [])
+        .filter((position: any) => !position?.isActive)
+        .map((position: any) => {
+            const buySolAmount = Number(position?.buySolAmount || 0);
+            const pnl = deriveClosedPositionPnl(position);
+            const entryTime = Number(position?.buyTimestamp || 0) || null;
+            const exitTime = Number(
+                position?.lastBalanceSyncedAt
+                || position?.lastCheckedAt
+                || position?.buyTimestamp
+                || 0
+            ) || null;
+            const symbol = position?.symbol || position?.tokenSymbol || null;
+            const tokenLabel = symbol || (position?.mint ? `${String(position.mint).slice(0, 6)}...` : "Unknown");
+
+            return {
+                token: tokenLabel,
+                symbol,
+                tokenSymbol: symbol,
+                mint: position?.mint || null,
+                tokenMint: position?.mint || null,
+                timestamp: exitTime || entryTime || Date.now(),
+                entryTime,
+                exitTime,
+                entryPrice: Number(position?.entryPricePerToken || 0) || 0,
+                exitPrice: Number(position?.lastHighPrice || 0) || 0,
+                pnl,
+                pnl_sol: pnl,
+                pnlPercent: typeof pnl === "number" && buySolAmount > 0
+                    ? Number(((pnl / buySolAmount) * 100).toFixed(2))
+                    : null,
+                pnl_percent: typeof pnl === "number" && buySolAmount > 0
+                    ? Number(((pnl / buySolAmount) * 100).toFixed(2))
+                    : null,
+                confidence: Number(position?.confidence || 0),
+                status: mapLiveExitStatus(position?.lastExitReason),
+                reason: isExternalSellDetected(position?.lastExitReason)
+                    ? "External balance change detected"
+                    : position?.lastExitReason || null,
+                exitReason: isExternalSellDetected(position?.lastExitReason)
+                    ? "External balance change detected"
+                    : position?.lastExitReason || null,
+                isSimulation: false,
+                isReconciliationEvent: isExternalSellDetected(position?.lastExitReason),
+                buyAmountSol: buySolAmount > 0 ? buySolAmount : null,
+                entryAmount: buySolAmount > 0 ? buySolAmount : null,
+                marketCapEntry: position?.marketCapEntry ?? null,
+                marketCapExit: position?.marketCapExit ?? null,
+                lastExitSignature: position?.lastExitSignature || null,
+                lastExitVenue: position?.lastExitVenue || null,
+                pnlUnavailable: pnl === null,
+            };
+        })
+        .sort((a: any, b: any) => Number(b.exitTime || b.entryTime || 0) - Number(a.exitTime || a.entryTime || 0));
+}
+
+function buildLiveOpenPositionHistory(positions: any[] = loadPositions()) {
+    return (Array.isArray(positions) ? positions : [])
+        .filter((position: any) => position?.isActive)
+        .map((position: any) => {
+            const buySolAmount = Number(position?.buySolAmount || 0);
+            const entryTime = Number(position?.buyTimestamp || position?.entryTime || position?.timestamp || 0) || null;
+            const symbol = position?.symbol || position?.tokenSymbol || null;
+            const tokenLabel = symbol || (position?.mint ? `${String(position.mint).slice(0, 6)}...` : "Unknown");
+
+            return {
+                token: tokenLabel,
+                symbol,
+                tokenSymbol: symbol,
+                mint: position?.mint || null,
+                tokenMint: position?.mint || null,
+                timestamp: entryTime || Date.now(),
+                entryTime,
+                exitTime: null,
+                entryPrice: Number(position?.entryPricePerToken || 0) || 0,
+                exitPrice: 0,
+                pnl: null,
+                pnl_sol: null,
+                pnlPercent: null,
+                pnl_percent: null,
+                confidence: Number(position?.confidence || 0),
+                status: "OPEN",
+                reason: null,
+                exitReason: null,
+                isSimulation: false,
+                mode: "LIVE",
+                buyAmountSol: buySolAmount > 0 ? buySolAmount : null,
+                entryAmount: buySolAmount > 0 ? buySolAmount : null,
+                lastExitSignature: null,
+                lastExitVenue: null,
+                pnlUnavailable: true,
+            };
+        })
+        .sort((a: any, b: any) => Number(b.entryTime || 0) - Number(a.entryTime || 0));
+}
+
+function getLatestTrackedPositionByMint(positions: any[] = loadPositions()) {
+    const latestByMint = new Map<string, any>();
+
+    for (const position of Array.isArray(positions) ? positions : []) {
+        const mint = String(position?.mint || "").trim();
+        if (!mint) continue;
+
+        const currentTs = Number(
+            position?.lastBalanceSyncedAt
+            || position?.lastCheckedAt
+            || position?.buyTimestamp
+            || position?.entryTime
+            || position?.timestamp
+            || 0
+        );
+        const existing = latestByMint.get(mint);
+        const existingTs = Number(
+            existing?.lastBalanceSyncedAt
+            || existing?.lastCheckedAt
+            || existing?.buyTimestamp
+            || existing?.entryTime
+            || existing?.timestamp
+            || 0
+        );
+
+        if (!existing || currentTs >= existingTs) {
+            latestByMint.set(mint, position);
+        }
+    }
+
+    return latestByMint;
+}
+
+async function loadTrackedWalletTokenBalances(positions: any[] = loadPositions()) {
+    const latestByMint = getLatestTrackedPositionByMint(positions);
+    const mints = [...latestByMint.keys()];
+    if (mints.length === 0) return [];
+
+    const { getWalletTokenBalanceSnapshot } = getLivePositionRuntimeModule();
+    const snapshots = await Promise.all(
+        mints.map(async (mint) => {
+            try {
+                const balance = await getWalletTokenBalanceSnapshot(mint);
+                if (!(Number(balance?.rawAmount || 0) > 0)) return null;
+                const meta = latestByMint.get(mint) || {};
+                const identity = await resolveDashboardTokenIdentity(
+                    mint,
+                    meta?.name || meta?.symbol || meta?.tokenSymbol || null
+                );
+
+                return {
+                    mint,
+                    symbol: identity.symbol,
+                    name: identity.name,
+                    displayName: identity.displayName,
+                    rawAmount: Number(balance.rawAmount || 0),
+                    uiAmount: Number(balance.uiAmount || 0),
+                    decimals: Number(balance.decimals || meta?.tokenDecimals || 0),
+                    address: balance.address || null,
+                    fetchedAt: Number(balance.fetchedAt || Date.now()),
+                    meta,
+                };
+            } catch {
+                return null;
+            }
+        })
+    );
+
+    return snapshots.filter(Boolean) as any[];
+}
+
+async function buildEffectiveActivePositions(positions: any[] = loadPositions()) {
+    const basePositions = Array.isArray(positions) ? positions : [];
+    const activeByMint = new Map<string, any>();
+
+    for (const position of basePositions.filter((item: any) => item?.isActive)) {
+        const mint = String(position?.mint || "").trim();
+        if (!mint) continue;
+        activeByMint.set(mint, { ...position });
+    }
+
+    const trackedBalances = await loadTrackedWalletTokenBalances(basePositions);
+
+    for (const tracked of trackedBalances) {
+        const existing = activeByMint.get(tracked.mint);
+        const meta = tracked.meta || {};
+        const base = existing || meta || {};
+
+        activeByMint.set(tracked.mint, {
+            ...base,
+            mint: tracked.mint,
+            tokenMint: tracked.mint,
+            symbol: tracked.symbol || base.symbol || base.tokenSymbol,
+            tokenSymbol: tracked.symbol || base.tokenSymbol || base.symbol,
+            name: tracked.name || base.name || base.symbol || base.tokenSymbol,
+            displayName: tracked.displayName || tracked.name || tracked.symbol || base.name || base.symbol || base.tokenSymbol,
+            isActive: true,
+            tokenDecimals: tracked.decimals,
+            buyTokenAmount: Number(base.buyTokenAmount || 0) > 0 ? base.buyTokenAmount : tracked.rawAmount,
+            lastKnownTokenBalanceRaw: tracked.rawAmount,
+            lastKnownTokenBalanceUi: tracked.uiAmount,
+            lastBalanceSyncedAt: tracked.fetchedAt,
+            accountAddress: tracked.address || base.accountAddress || null,
+            positionRecoveredFromWallet: !existing,
+        });
+    }
+
+    return [...activeByMint.values()].sort((a: any, b: any) => {
+        const tsA = Number(a?.buyTimestamp || a?.entryTime || a?.timestamp || 0);
+        const tsB = Number(b?.buyTimestamp || b?.entryTime || b?.timestamp || 0);
+        return tsB - tsA;
+    });
+}
+
+async function enrichActivePositionsForDashboard(positions: any[] = []) {
+    const normalized = Array.isArray(positions) ? positions : [];
+    if (normalized.length === 0) return [];
+
+    const {
+        getWalletTokenBalanceSnapshot,
+        getExecutableExitQuote,
+    } = getLivePositionRuntimeModule();
+
+    return await Promise.all(
+        normalized.map(async (position: any) => {
+            const mint = String(position?.mint || position?.tokenMint || "").trim();
+            const buyTimestamp = Number(position?.buyTimestamp || position?.entryTime || position?.timestamp || 0) || null;
+            const buySolAmount = Number(position?.buySolAmount || position?.entryAmount || 0);
+            const identity = await resolveDashboardTokenIdentity(
+                mint,
+                position?.name || position?.displayName || position?.symbol || position?.tokenSymbol || null
+            );
+
+            let balanceSnapshot: any = null;
+            try {
+                if (mint) {
+                    balanceSnapshot = await withTimeout(getWalletTokenBalanceSnapshot(mint), 2500, null);
+                }
+            } catch {
+                balanceSnapshot = null;
+            }
+
+            const rawAmount = Math.max(
+                0,
+                Math.floor(Number(
+                    balanceSnapshot?.rawAmount
+                    || position?.lastKnownTokenBalanceRaw
+                    || position?.buyTokenAmount
+                    || 0
+                ))
+            );
+
+            let quote: any = null;
+            try {
+                if (mint && rawAmount > 0) {
+                    quote = await withTimeout(getExecutableExitQuote({
+                        mint,
+                        amountRaw: rawAmount,
+                        decimalsHint: Number(balanceSnapshot?.decimals ?? position?.tokenDecimals ?? 0) || undefined,
+                        slippageBps: CONFIG.SLIPPAGE_BPS || 100,
+                        preferVenue: position?.entryVenue === "jupiter" ? "jupiter" : "pumpfun",
+                    }), 3500, null);
+                }
+            } catch {
+                quote = null;
+            }
+
+            const currentValueSol = Number(quote?.estimatedSolOutput || 0);
+            const currentPrice = Number(quote?.pricePerTokenSol || 0);
+            const unrealizedPnl = buySolAmount > 0 && currentValueSol > 0
+                ? Number((currentValueSol - buySolAmount).toFixed(9))
+                : null;
+            const unrealizedPnlPercent = buySolAmount > 0 && typeof unrealizedPnl === "number"
+                ? Number(((unrealizedPnl / buySolAmount) * 100).toFixed(2))
+                : null;
+            const age = buyTimestamp ? Date.now() - buyTimestamp : null;
+
+            return {
+                ...position,
+                symbol: identity.symbol || position?.symbol || position?.tokenSymbol || null,
+                tokenSymbol: identity.symbol || position?.tokenSymbol || position?.symbol || null,
+                name: identity.name || position?.name || null,
+                displayName: identity.displayName || identity.name || identity.symbol || null,
+                entryTime: buyTimestamp,
+                entryAmount: buySolAmount > 0 ? buySolAmount : null,
+                tokenDecimals: Number(balanceSnapshot?.decimals ?? position?.tokenDecimals ?? 0) || 0,
+                lastKnownTokenBalanceRaw: Number(balanceSnapshot?.rawAmount ?? position?.lastKnownTokenBalanceRaw ?? 0),
+                lastKnownTokenBalanceUi: Number(balanceSnapshot?.uiAmount ?? position?.lastKnownTokenBalanceUi ?? 0),
+                accountAddress: balanceSnapshot?.address || position?.accountAddress || null,
+                currentPrice: currentPrice > 0 ? currentPrice : null,
+                currentValueSol: currentValueSol > 0 ? currentValueSol : null,
+                unrealizedPnl,
+                unrealizedPnlPercent,
+                age,
+                ageFormatted: age !== null ? formatAge(age) : null,
+            };
+        })
+    );
+}
+
+function buildMainnetLearningFallback(positions: any[] = loadPositions()) {
+    const closedPositions = (Array.isArray(positions) ? positions : []).filter((position: any) => !position?.isActive);
+    const outcomes = closedPositions.map(classifyClosedPositionOutcome);
+    const wins = outcomes.filter((outcome) => outcome === "win").length;
+    const losses = outcomes.filter((outcome) => outcome === "loss").length;
+    const tradesAnalyzed = wins + losses;
+    const winRate = tradesAnalyzed > 0 ? (wins / tradesAnalyzed) * 100 : 0;
+
+    return {
+        tradesAnalyzed,
+        tradesRequired: 50,
+        winRateImprovement: Number(winRate.toFixed(1)),
+        nextOptimization: tradesAnalyzed > 0 ? `${wins}W/${losses}L` : null,
+        source: tradesAnalyzed > 0 ? "positions" : "empty",
+    };
+}
+
+function computeLiveDashboardStats(trades: any[], positions: any[]) {
+    const normalizedTrades = Array.isArray(trades) ? trades : [];
+    const closedPositions = (Array.isArray(positions) ? positions : []).filter((position: any) => !position?.isActive);
+
+    if (normalizedTrades.length > 0) {
+        const totalPnL = normalizedTrades.reduce((sum: number, trade: any) => {
+            return sum + Number(trade?.pnl ?? trade?.pnl_sol ?? 0);
+        }, 0);
+        const wins = normalizedTrades.filter((trade: any) => Number(trade?.pnl ?? trade?.pnl_sol ?? 0) > 0).length;
+        const losses = normalizedTrades.filter((trade: any) => Number(trade?.pnl ?? trade?.pnl_sol ?? 0) < 0).length;
+
+        return {
+            totalPnL: Number(totalPnL.toFixed(4)),
+            wins,
+            losses,
+            pnlUnavailable: false,
+            source: "trades",
+        };
+    }
+
+    const outcomes = closedPositions.map(classifyClosedPositionOutcome);
+    const wins = outcomes.filter((outcome) => outcome === "win").length;
+    const losses = outcomes.filter((outcome) => outcome === "loss").length;
+    const derivedTotalPnL = closedPositions.reduce((sum: number, position: any) => {
+        const pnl = deriveClosedPositionPnl(position);
+        return sum + (typeof pnl === "number" ? pnl : 0);
+    }, 0);
+    const hasExactPnl = closedPositions.some((position: any) => typeof deriveClosedPositionPnl(position) === "number");
+
+    return {
+        totalPnL: hasExactPnl ? Number(derivedTotalPnL.toFixed(4)) : null,
+        wins,
+        losses,
+        pnlUnavailable: !hasExactPnl,
+        source: hasExactPnl ? "positions" : "positions_no_exact_pnl",
+    };
 }
 
 function buildCumulativePnlSeries(closedTrades: Array<{ ts: number; pnl: number }>, days?: number) {
@@ -398,6 +1003,54 @@ function buildSimulationFileDerivedPnLSeries(days?: number) {
     return buildTradeDerivedPnLSeries(days, "simulation");
 }
 
+function buildConsistentSimulationMetrics(): DashboardSimulationMetrics | null {
+    const snapshot = loadSimulationMetricsSnapshot();
+    const closedTrades = loadSimulationClosedPnlTrades();
+
+    if (closedTrades.length === 0) {
+        return snapshot;
+    }
+
+    let cumulative = 0;
+    let peak = 0;
+    let maxDrawdown = 0;
+    let totalPnL = 0;
+    let winTrades = 0;
+    let lossTrades = 0;
+
+    for (const trade of closedTrades) {
+        const pnl = Number(trade.pnl || 0);
+        totalPnL += pnl;
+        cumulative += pnl;
+        if (cumulative > peak) peak = cumulative;
+        const drawdown = peak - cumulative;
+        if (drawdown > maxDrawdown) {
+            maxDrawdown = drawdown;
+        }
+        if (pnl > 0) winTrades += 1;
+        if (pnl < 0) lossTrades += 1;
+    }
+
+    const totalTrades = closedTrades.length;
+    const avgPnL = totalTrades > 0 ? totalPnL / totalTrades : 0;
+    const winRate = totalTrades > 0 ? (winTrades / totalTrades) * 100 : 0;
+
+    return {
+        totalTrades,
+        winTrades,
+        lossTrades,
+        winRate: Number(winRate.toFixed(1)),
+        totalPnL: Number(totalPnL.toFixed(4)),
+        avgPnL: Number(avgPnL.toFixed(4)),
+        maxDrawdown: Number(maxDrawdown.toFixed(4)),
+        sharpRatio: Number(snapshot?.sharpRatio || 0),
+        expectedValue: Number(snapshot?.expectedValue || 0),
+        riskRewardRatio: Number(snapshot?.riskRewardRatio || 0),
+        anomalousTrades: Number(snapshot?.anomalousTrades || 0),
+        lastUpdate: Number(snapshot?.lastUpdate || Date.now()),
+    };
+}
+
 function formatPnLSeriesPayload(series: Array<{ ts: number; pnl: number }>) {
   if (series.length === 0) {
     return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
@@ -419,15 +1072,15 @@ function getLivePnLHistory(days: number = 30, liveTrades?: any[]) {
 function getTrackedPnlTotal() {
     const agentConfig = loadAgentConfig();
     if ((agentConfig.mode || "SIMULATION") !== "LIVE") {
-        const simMetrics = getSimulationMetrics();
-        const metricsTotal = Number(simMetrics?.totalPnL ?? NaN);
-        if (Number.isFinite(metricsTotal)) {
-            return Number(metricsTotal.toFixed(4));
-        }
-
         const fileSeries = buildSimulationFileDerivedPnLSeries();
         if (fileSeries.length > 0) {
             return Number(fileSeries[fileSeries.length - 1].pnl || 0);
+        }
+
+        const simMetrics = buildConsistentSimulationMetrics();
+        const metricsTotal = Number(simMetrics?.totalPnL ?? NaN);
+        if (Number.isFinite(metricsTotal)) {
+            return Number(metricsTotal.toFixed(4));
         }
     }
 
@@ -813,7 +1466,7 @@ app.get("/api/me/account", (req: Request, res: Response) => {
     }
 });
 
-app.get("/api/me/stats", (req: Request, res: Response) => {
+app.get("/api/me/stats", async (req: Request, res: Response) => {
     try {
         const context = getScopedRequestContext(req);
         if (!context) return res.status(401).json({ error: "Account not found" });
@@ -824,6 +1477,7 @@ app.get("/api/me/stats", (req: Request, res: Response) => {
             walletId: context.walletId,
             activeOnly: false,
         });
+        const effectiveActivePositions = await buildEffectiveActivePositions(positions);
         const active = positions.filter((position: any) => position.isActive);
         const closed = positions.filter((position: any) => !position.isActive);
         const totalInvested = active.reduce((sum: number, position: any) => sum + Number(position.buySolAmount || 0), 0);
@@ -833,26 +1487,27 @@ app.get("/api/me/stats", (req: Request, res: Response) => {
             walletId: context.walletId,
             limit: 500,
         });
-
-        const totalPnl = trades.reduce((sum: number, trade: any) => {
-            return sum + Number(trade.pnl ?? trade.pnl_sol ?? 0);
-        }, 0);
-
-        const wins = trades.filter((trade: any) => Number(trade.pnl ?? trade.pnl_sol ?? 0) > 0).length;
-        const losses = trades.filter((trade: any) => Number(trade.pnl ?? trade.pnl_sol ?? 0) < 0).length;
+        const liveStats = computeLiveDashboardStats(trades, positions);
+        const totalPnl = liveStats.totalPnL;
+        const wins = liveStats.wins;
+        const losses = liveStats.losses;
         const closedCount = wins + losses;
+        const walletSpotSol = await resolveWalletSpotSol(context.wallet?.publicKey || getActiveTradingWalletAddress());
 
         res.json({
             totalPositions: positions.length,
-            activePositions: active.length,
+            activePositions: effectiveActivePositions.length,
             closedPositions: closed.length,
             totalInvested: parseFloat(totalInvested.toFixed(4)),
-            totalPnL: parseFloat(totalPnl.toFixed(4)),
-            walletSol: parseFloat(totalPnl.toFixed(4)),
+            totalPnL: totalPnl,
+            walletSol: totalPnl,
+            walletSpotSol,
             walletAddress: context.wallet?.publicKey || null,
             wins,
             losses,
             winRate: closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : "0.0",
+            pnlUnavailable: liveStats.pnlUnavailable,
+            pnlSource: liveStats.source,
             circuitBreaker: loadCBState(),
         });
     } catch (error: any) {
@@ -860,27 +1515,18 @@ app.get("/api/me/stats", (req: Request, res: Response) => {
     }
 });
 
-app.get("/api/me/positions", (req: Request, res: Response) => {
+app.get("/api/me/positions", async (req: Request, res: Response) => {
     try {
         const context = getScopedRequestContext(req);
         if (!context) return res.status(401).json({ error: "Account not found" });
         syncLegacyScopeDataIfNeeded(context);
 
-        const positions = getScopedPositions({
+        const effectivePositions = await buildEffectiveActivePositions(getScopedPositions({
             userId: context.user.id,
             walletId: context.walletId,
-            activeOnly: true,
-        });
-
-        const enriched = positions.map((position: any) => {
-            const buyTimestamp = Number(position.buyTimestamp || position.entryTime || position.timestamp || Date.now());
-            const age = Date.now() - buyTimestamp;
-            return {
-                ...position,
-                age,
-                ageFormatted: formatAge(age),
-            };
-        });
+            activeOnly: false,
+        }));
+        const enriched = await enrichActivePositionsForDashboard(effectivePositions);
 
         res.json(enriched);
     } catch (error: any) {
@@ -888,7 +1534,7 @@ app.get("/api/me/positions", (req: Request, res: Response) => {
     }
 });
 
-app.get("/api/me/trades", (req: Request, res: Response) => {
+app.get("/api/me/trades", async (req: Request, res: Response) => {
     try {
         const context = getScopedRequestContext(req);
         if (!context) return res.status(401).json({ error: "Account not found" });
@@ -900,20 +1546,55 @@ app.get("/api/me/trades", (req: Request, res: Response) => {
             walletId: context.walletId,
             limit,
         });
+        const scopedPositions = getScopedPositions({
+            userId: context.user.id,
+            walletId: context.walletId,
+            activeOnly: false,
+        });
+        const fallbackTrades = trades.length > 0
+            ? trades
+            : [
+                ...buildLiveOpenPositionHistory(scopedPositions),
+                ...buildLiveClosedPositionHistory(scopedPositions),
+            ]
+                .sort((a: any, b: any) => Number(b.exitTime || b.entryTime || 0) - Number(a.exitTime || a.entryTime || 0))
+                .slice(0, limit);
 
-        res.json(trades.map((trade: any) => ({
-            token: trade.token || trade.tokenSymbol || trade.symbol || "Unknown",
-            timestamp: formatTimestamp(trade.timestamp || trade.exitTime || trade.entryTime || Date.now()),
-            entryTime: trade.entryTime || trade.timestamp || null,
-            exitTime: trade.exitTime || null,
-            entryPrice: trade.entryPrice || 0,
-            exitPrice: trade.exitPrice || 0,
-            pnl: Number(trade.pnl ?? trade.pnl_sol ?? 0),
-            pnlPercent: Number(trade.pnlPercent ?? trade.pnl_percent ?? 0),
-            confidence: Number(trade.confidence || 0),
-            status: trade.status || "closed",
-            tokenMint: trade.mint || trade.tokenMint || null,
-        })));
+        const normalized = await Promise.all(fallbackTrades.map(async (trade: any) => {
+            const mint = trade.mint || trade.tokenMint || null;
+            const identity = mint
+                ? await resolveDashboardTokenIdentity(mint, trade.name || trade.token || trade.tokenSymbol || trade.symbol || null)
+                : {
+                    symbol: trade.symbol || trade.tokenSymbol || null,
+                    name: trade.name || trade.token || trade.symbol || trade.tokenSymbol || null,
+                    displayName: trade.name || trade.token || trade.symbol || trade.tokenSymbol || null,
+                };
+
+            return {
+                token: identity.displayName || trade.token || trade.tokenSymbol || trade.symbol || "Unknown",
+                symbol: identity.displayName || identity.symbol || trade.symbol || trade.tokenSymbol || null,
+                name: identity.name || trade.name || null,
+                timestamp: formatTimestamp(trade.timestamp || trade.exitTime || trade.entryTime || Date.now()),
+                entryTime: trade.entryTime || trade.timestamp || null,
+                exitTime: trade.exitTime || null,
+                entryPrice: trade.entryPrice || 0,
+                exitPrice: trade.exitPrice || 0,
+                pnl: trade.pnl ?? trade.pnl_sol ?? null,
+                pnlPercent: trade.pnlPercent ?? trade.pnl_percent ?? null,
+                confidence: Number(trade.confidence || 0),
+                status: trade.status || "closed",
+                reason: trade.reason || trade.exitReason || null,
+                tokenMint: mint,
+                isSimulation: trade.isSimulation === true,
+                mode: trade.mode || (trade.isSimulation === true ? "SIM" : "LIVE"),
+                isReconciliationEvent: trade.isReconciliationEvent === true || isExternalSellDetected(trade.reason || trade.exitReason),
+                buyAmountSol: trade.buyAmountSol ?? trade.entryAmount ?? null,
+                lastExitSignature: trade.lastExitSignature || null,
+                pnlUnavailable: trade.pnlUnavailable === true,
+            };
+        }));
+
+        res.json(normalized);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -1162,7 +1843,35 @@ function invalidateWalletBalanceCache(address?: string | null) {
     cachedWalletBalances.clear();
 }
 
+async function resolveWalletSpotSol(address?: string | null) {
+    const normalizedAddress = String(address || "").trim();
+    if (!normalizedAddress) return null;
+
+    try {
+        const { PublicKey } = getWeb3Module();
+        const lamports = await getDashboardConnection().getBalance(new PublicKey(normalizedAddress));
+        const value = Number((lamports / 1e9).toFixed(9));
+        cachedWalletSpotSol.set(normalizedAddress, {
+            value,
+            fetchedAt: Date.now(),
+        });
+        return value;
+    } catch {
+        const cachedSpot = cachedWalletSpotSol.get(normalizedAddress);
+        if (cachedSpot) return cachedSpot.value;
+
+        const cachedBalances = cachedWalletBalances.get(normalizedAddress);
+        const cachedSolBalance = Number(cachedBalances?.payload?.solBalance);
+        if (Number.isFinite(cachedSolBalance)) {
+            return Number(cachedSolBalance.toFixed(9));
+        }
+
+        return null;
+    }
+}
+
 async function executeManualSellWithFallback(tokenMint: string, amountRaw: number, preferPumpFun: boolean) {
+    const { sellOnPumpFun, sellViaJupiter } = getHybridExecutor();
     const attempts = preferPumpFun
         ? [
             { venue: "pumpfun", execute: () => sellOnPumpFun(tokenMint, amountRaw, { applyRuntimeSellPercent: false }) },
@@ -1241,6 +1950,191 @@ function writeJsonFile(filePath: string, value: unknown) {
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
 
+function mergeTradeRecordByIdentity(existingTrades: any[], tradeRecord: any) {
+    const next = Array.isArray(existingTrades) ? [...existingTrades] : [];
+    const tradeSignature = String(
+        tradeRecord?.lastExitSignature
+        || tradeRecord?.signature
+        || ""
+    ).trim();
+    const tradeMint = String(tradeRecord?.tokenMint || tradeRecord?.mint || "").trim();
+    const tradeEntryTime = Number(tradeRecord?.entryTime || 0);
+    const tradeExitTime = Number(tradeRecord?.exitTime || tradeRecord?.timestamp || 0);
+
+    const duplicateIndex = next.findIndex((entry: any) => {
+        const entrySignature = String(
+            entry?.lastExitSignature
+            || entry?.signature
+            || ""
+        ).trim();
+        if (tradeSignature && entrySignature && tradeSignature === entrySignature) return true;
+
+        const entryMint = String(entry?.tokenMint || entry?.mint || "").trim();
+        const entryEntryTime = Number(entry?.entryTime || 0);
+        const entryExitTime = Number(entry?.exitTime || entry?.timestamp || 0);
+        return !!tradeMint
+            && tradeMint === entryMint
+            && tradeEntryTime > 0
+            && tradeEntryTime === entryEntryTime
+            && tradeExitTime > 0
+            && tradeExitTime === entryExitTime;
+    });
+
+    if (duplicateIndex >= 0) {
+        next[duplicateIndex] = {
+            ...next[duplicateIndex],
+            ...tradeRecord,
+        };
+    } else {
+        next.unshift(tradeRecord);
+    }
+
+    return next
+        .sort((a: any, b: any) => Number(b?.exitTime || b?.entryTime || b?.timestamp || 0) - Number(a?.exitTime || a?.entryTime || a?.timestamp || 0))
+        .slice(0, 1000);
+}
+
+function persistRuntimeLiveTradeRecord(
+    tradeRecord: any,
+    context?: { user: any; walletId: number; wallet: any | null } | null
+) {
+    const nextRuntimeTrades = mergeTradeRecordByIdentity(loadAgentTrades(), tradeRecord);
+    writeJsonFile(AGENT_TRADES_FILE, nextRuntimeTrades);
+
+    if (!context) return;
+
+    if (shouldSyncLegacyScope(context)) {
+        replaceScopedTrades({
+            userId: context.user.id,
+            walletId: context.walletId,
+            trades: nextRuntimeTrades,
+        });
+        return;
+    }
+
+    const nextScopedTrades = mergeTradeRecordByIdentity(
+        getScopedTrades({
+            userId: context.user.id,
+            walletId: context.walletId,
+            limit: 500,
+        }),
+        tradeRecord
+    );
+
+    replaceScopedTrades({
+        userId: context.user.id,
+        walletId: context.walletId,
+        trades: nextScopedTrades,
+    });
+}
+
+async function getWalletNetSolChangeForSignature(signature: string, walletAddress?: string | null) {
+    const normalizedSignature = String(signature || "").trim();
+    const normalizedWallet = String(walletAddress || "").trim();
+    if (!normalizedSignature || !normalizedWallet) {
+        return {
+            exitTime: Date.now(),
+            netSolChange: null as number | null,
+            feeSol: null as number | null,
+        };
+    }
+
+    const connection = getDashboardConnection();
+    const maxAttempts = 8;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const tx = await connection.getTransaction(normalizedSignature, {
+            maxSupportedTransactionVersion: 0,
+            commitment: "confirmed",
+        });
+
+        if (!tx) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+        }
+
+        const staticKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
+        const walletIndex = staticKeys.findIndex((key: any) => key.toBase58() === normalizedWallet);
+        const feeSol = Number(((Number(tx.meta?.fee || 0)) / 1e9).toFixed(9));
+        const exitTime = Number(tx.blockTime || 0) > 0
+            ? Number(tx.blockTime) * 1000
+            : Date.now();
+
+        if (walletIndex < 0) {
+            return {
+                exitTime,
+                netSolChange: null,
+                feeSol,
+            };
+        }
+
+        const preBalanceLamports = Number(tx.meta?.preBalances?.[walletIndex] || 0);
+        const postBalanceLamports = Number(tx.meta?.postBalances?.[walletIndex] || 0);
+
+        return {
+            exitTime,
+            netSolChange: Number(((postBalanceLamports - preBalanceLamports) / 1e9).toFixed(9)),
+            feeSol,
+        };
+    }
+
+    return {
+        exitTime: Date.now(),
+        netSolChange: null,
+        feeSol: null,
+    };
+}
+
+async function getManualExitMarketContext(
+    mint: string,
+    entryPricePerToken?: number | null,
+    existingEntryMarketCap?: number | null
+) {
+    const safeMint = String(mint || "").trim();
+    if (!safeMint) {
+        return {
+            marketCapEntry: null as number | null,
+            marketCapExit: null as number | null,
+        };
+    }
+
+    try {
+        const { getCachedTokenMetadata } = getMetadataCacheModule();
+        const metadata = await withTimeout(getCachedTokenMetadata(safeMint), 2500, null);
+        const marketCapExit = Number(metadata?.marketCap || 0) > 0
+            ? Number(metadata!.marketCap)
+            : null;
+        const livePrice = Number(metadata?.price || 0) > 0
+            ? Number(metadata!.price)
+            : null;
+        const normalizedExistingEntryMc = Number(existingEntryMarketCap || 0) > 0
+            ? Number(existingEntryMarketCap)
+            : null;
+        const normalizedEntryPrice = Number(entryPricePerToken || 0) > 0
+            ? Number(entryPricePerToken)
+            : null;
+
+        const marketCapEntry = normalizedExistingEntryMc
+            ?? (
+                marketCapExit !== null
+                && livePrice !== null
+                && normalizedEntryPrice !== null
+                ? Number((marketCapExit * (normalizedEntryPrice / livePrice)).toFixed(2))
+                : null
+            );
+
+        return {
+            marketCapEntry,
+            marketCapExit,
+        };
+    } catch {
+        return {
+            marketCapEntry: Number(existingEntryMarketCap || 0) > 0 ? Number(existingEntryMarketCap) : null,
+            marketCapExit: null,
+        };
+    }
+}
+
 function syncActiveRuntimeTradingConfig(userId: number, walletId: number, config: Record<string, any>) {
     const activeWallet = getActiveTradingWallet()?.wallet;
     if (!activeWallet) return;
@@ -1302,39 +2196,49 @@ function switchRuntimeWalletContext(userId: number, nextWalletId: number, previo
 /**
  * GET /api/stats - Estatísticas gerais
  */
-app.get("/api/stats", (req, res) => {
+app.get("/api/stats", async (req, res) => {
     try {
         const positions = loadPositions();
         const cbState = loadCBState();
+        const agentConfig = loadAgentConfig();
+        const mode = agentConfig.mode || "SIMULATION";
 
         const active = positions.filter(p => p.isActive);
+        const effectiveActivePositions = await buildEffectiveActivePositions(positions);
         const closed = positions.filter(p => !p.isActive);
 
         const totalInvested = active.reduce((sum, p) => sum + p.buySolAmount, 0);
-        const trades = loadAgentTrades();
-        const totalPnlTrades = trades.reduce((sum: number, t: any) => sum + Number(t.pnl || t.pnl_sol || 0), 0);
-        const plHistory = getPnLHistory(30);
-        const pnlFromHistory = plHistory?.plValues?.length ? plHistory.plValues[plHistory.plValues.length - 1] : 0;
-        const totalPnL = parseFloat((totalPnlTrades || pnlFromHistory || 0).toFixed(4));
-
-        const wins = closed.filter(p => {
-            // Simplificado: assumir que posição fechada = lucro se durou menos de 1h
-            return p.buyTimestamp && Date.now() - p.buyTimestamp < 3600000;
-        }).length;
-        const losses = closed.length - wins;
+        const simulationMetrics = mode === "LIVE" ? null : buildConsistentSimulationMetrics();
+        const liveStats = mode === "LIVE"
+            ? computeLiveDashboardStats(loadAgentTrades(), positions)
+            : null;
+        const totalPnL = mode === "LIVE"
+            ? liveStats?.totalPnL ?? null
+            : parseFloat(getTrackedPnlTotal().toFixed(4));
+        const wins = mode === "LIVE"
+            ? Number(liveStats?.wins || 0)
+            : Number(simulationMetrics?.winTrades || 0);
+        const losses = mode === "LIVE"
+            ? Number(liveStats?.losses || 0)
+            : Number(simulationMetrics?.lossTrades || 0);
+        const closedCount = wins + losses;
         const walletAddress = getActiveTradingWalletAddress();
+        const walletSpotSol = await resolveWalletSpotSol(walletAddress);
 
         res.json({
             totalPositions: positions.length,
-            activePositions: active.length,
+            activePositions: effectiveActivePositions.length,
             closedPositions: closed.length,
             totalInvested: parseFloat(totalInvested.toFixed(4)),
             totalPnL,
             walletSol: totalPnL,
+            walletSpotSol,
             walletAddress,
             wins,
             losses,
-            winRate: closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : "0.0",
+            winRate: closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : "0.0",
+            pnlUnavailable: mode === "LIVE" ? liveStats?.pnlUnavailable === true : false,
+            pnlSource: mode === "LIVE" ? liveStats?.source || "trades" : "simulation",
             circuitBreaker: {
                 isTripped: cbState.isTripped,
                 tripReason: cbState.tripReason,
@@ -1350,16 +2254,11 @@ app.get("/api/stats", (req, res) => {
 /**
  * GET /api/positions - Lista de posições ativas
  */
-app.get("/api/positions", (req, res) => {
+app.get("/api/positions", async (req, res) => {
     try {
         const positions = loadPositions();
-        const active = positions.filter(p => p.isActive);
-
-        const enriched = active.map(p => ({
-            ...p,
-            age: Date.now() - p.buyTimestamp,
-            ageFormatted: formatAge(Date.now() - p.buyTimestamp),
-        }));
+        const active = await buildEffectiveActivePositions(positions);
+        const enriched = await enrichActivePositionsForDashboard(active);
 
         res.json(enriched);
     } catch (error: any) {
@@ -1387,6 +2286,9 @@ app.get("/api/agent/stats", (req, res) => {
         const agentConfig = loadAgentConfig();
         const learningMetrics = loadLearningMetrics();
         const mainnetMetrics = loadMainnetLearningMetrics();
+        const resolvedMainnetMetrics = Number(mainnetMetrics?.tradesAnalyzed || 0) > 0
+            ? { ...mainnetMetrics, source: "file" }
+            : buildMainnetLearningFallback(loadPositions());
         const agentStatus = loadAgentStatus();
         const subAgentHealth = loadSubAgentHealth();
 
@@ -1402,10 +2304,11 @@ app.get("/api/agent/stats", (req, res) => {
                 nextOptimization: learningMetrics.nextOptimization || null,
             },
             mainnet: {
-                tradesAnalyzed: mainnetMetrics.tradesAnalyzed || 0,
-                tradesRequired: mainnetMetrics.tradesRequired || 50,
-                winRateImprovement: mainnetMetrics.winRateImprovement || 0,
-                nextOptimization: mainnetMetrics.nextOptimization || null,
+                tradesAnalyzed: resolvedMainnetMetrics.tradesAnalyzed || 0,
+                tradesRequired: resolvedMainnetMetrics.tradesRequired || 50,
+                winRateImprovement: resolvedMainnetMetrics.winRateImprovement || 0,
+                nextOptimization: resolvedMainnetMetrics.nextOptimization || null,
+                source: resolvedMainnetMetrics.source || "empty",
             },
             rateLimited: agentStatus.rateLimited || false,
             rateLimitAt: agentStatus.at || null,
@@ -1423,20 +2326,28 @@ app.get("/api/agent/stats", (req, res) => {
  */
 app.get("/api/agent/trades", (req, res) => {
     try {
+        const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, parseInt(req.query.limit as string || String(DEFAULT_HISTORY_LIMIT))));
         const trades = loadAgentTrades();
+        const fallbackTrades = trades.length === 0
+            ? [...buildLiveOpenPositionHistory(loadPositions()), ...buildLiveClosedPositionHistory(loadPositions())]
+                .sort((a: any, b: any) => Number(b.exitTime || b.entryTime || 0) - Number(a.exitTime || a.entryTime || 0))
+            : trades;
 
-        res.json(trades.slice(0, 20).map(trade => ({
+        res.json(fallbackTrades.slice(0, limit).map(trade => ({
             token: trade.token || "Unknown",
             timestamp: formatTimestamp(trade.timestamp),
             entryTime: trade.entryTime || trade.timestamp || null,
             exitTime: trade.exitTime || null,
             entryPrice: trade.entryPrice || 0,
             exitPrice: trade.exitPrice || 0,
-            pnl: trade.pnl || 0,
-            pnlPercent: trade.pnlPercent || trade.pnl_percent || 0,
+            pnl: trade.pnl ?? trade.pnl_sol ?? null,
+            pnlPercent: trade.pnlPercent ?? trade.pnl_percent ?? null,
             confidence: trade.confidence || 0,
             status: trade.status || "closed",
             tokenMint: trade.mint || trade.tokenMint || null,
+            isSimulation: trade.isSimulation === true,
+            mode: trade.mode || (trade.isSimulation === true ? "SIM" : "LIVE"),
+            reason: trade.reason || trade.exitReason || null,
         })));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -1457,6 +2368,7 @@ app.post("/api/wallet/new", (req, res) => {
         const label = String(req.body?.label || `Trading Wallet ${nextIndex}`).trim();
         const previousDefaultWallet = existingWallets.find((wallet) => wallet.isDefault) || existingWallets[0] || null;
 
+        const { Keypair } = getWeb3Module();
         const kp = Keypair.generate();
         const storedSecret = createManagedWalletSecret(kp);
         const wallet = ensureUserWallet({
@@ -1589,27 +2501,22 @@ app.get("/api/wallet/balances", async (req, res) => {
             return res.json(cachedEntry.payload);
         }
 
+        const { PublicKey, LAMPORTS_PER_SOL } = getWeb3Module();
+        const connection = getDashboardConnection();
         const owner = new PublicKey(address);
         const solLamports = await connection.getBalance(owner);
         const solBalance = solLamports / LAMPORTS_PER_SOL;
-
-        const tokensResp = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID });
-        const tokens = tokensResp.value
-            .map((acc: any) => {
-                const info = acc.account.data?.parsed?.info;
-                if (!info?.tokenAmount) return null;
-                const t = info.tokenAmount;
-                if (Number(t.amount) <= 0) return null;
-                const mint = info.mint;
-                return {
-                    mint,
-                    amount: t.amount,
-                    decimals: t.decimals,
-                    uiAmount: t.uiAmount,
-                    symbol: t.symbol || (mint ? mint.slice(0, 4) : 'TOK'),
-                };
-            })
-            .filter(Boolean);
+        const trackedTokens = await loadTrackedWalletTokenBalances(loadPositions());
+        const tokens = trackedTokens.map((token: any) => ({
+            mint: token.mint,
+            amount: String(token.rawAmount),
+            decimals: token.decimals,
+            uiAmount: token.uiAmount,
+            symbol: token.symbol || (token.mint ? token.mint.slice(0, 4) : "TOK"),
+            name: token.name || token.symbol || null,
+            displayName: token.displayName || token.name || token.symbol || null,
+            ata: token.address || null,
+        }));
 
         const payload = { address, solBalance, tokens, cachedAt: new Date().toISOString() };
         cachedWalletBalances.set(address, {
@@ -1648,11 +2555,17 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
         }
 
         try {
+            const { PublicKey } = getWeb3Module();
             new PublicKey(mint);
         } catch {
             return res.status(400).json({ error: "Invalid mint address" });
         }
 
+        const {
+            buildPositionBalanceSyncResult,
+            getWalletTokenBalanceSnapshot,
+            waitForWalletTokenBalanceChange,
+        } = getLivePositionRuntimeModule();
         const beforeBalance = await getWalletTokenBalanceSnapshot(mint);
         if (beforeBalance.rawAmount <= 0) {
             return res.status(409).json({ error: "No wallet balance available for this token" });
@@ -1668,6 +2581,22 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
         const activePosition = activePositionIndex >= 0 ? runtimePositions[activePositionIndex] : null;
 
         const execution = await executeManualSellWithFallback(mint, amountRaw, Boolean(activePosition?.bondingCurve));
+        const walletAddress = context.wallet?.publicKey || getActiveTradingWalletAddress() || null;
+        const executionSettlement = await getWalletNetSolChangeForSignature(execution.signature, walletAddress);
+        const manualExitMarketContext = activePosition
+            ? await getManualExitMarketContext(
+                mint,
+                Number(activePosition.entryPricePerToken || 0) || null,
+                Number((activePosition as any).marketCapEntry || 0) || null
+            )
+            : { marketCapEntry: null, marketCapExit: null };
+        const soldRatio = beforeBalance.rawAmount > 0
+            ? Math.max(0, Math.min(1, amountRaw / beforeBalance.rawAmount))
+            : 0;
+        const realizedEntryAmount = activePosition
+            ? Number((Number(activePosition.buySolAmount || 0) * soldRatio).toFixed(9))
+            : null;
+        const realizedExitValueSol = executionSettlement.netSolChange;
 
         invalidateWalletBalanceCache();
         const afterBalance = await waitForWalletTokenBalanceChange(mint, beforeBalance.rawAmount, {
@@ -1683,6 +2612,25 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
             accountCount: 0,
             fetchedAt: Date.now(),
         }));
+        const shouldAutoCloseAta = getRuntimeConfig().AUTO_CLOSE_ATA_AFTER_FULL_SELL !== false;
+        const ataCloseResult = afterBalance.rawAmount <= 0 && shouldAutoCloseAta
+            ? await getHybridExecutor().closeAtaAfterFullSell(mint, { retryAttempts: 2 })
+            : null;
+
+        const realizedPnlWithAta = (
+            typeof realizedExitValueSol === "number"
+            && realizedEntryAmount !== null
+            && realizedEntryAmount > 0
+        )
+            ? Number(((realizedExitValueSol + Number(ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? 0)) - realizedEntryAmount).toFixed(9))
+            : null;
+        const realizedPnlPercentWithAta = (
+            typeof realizedPnlWithAta === "number"
+            && realizedEntryAmount !== null
+            && realizedEntryAmount > 0
+        )
+            ? Number(((realizedPnlWithAta / realizedEntryAmount) * 100).toFixed(2))
+            : null;
 
         let positionState: "untracked" | "updated" | "closed" = "untracked";
         if (activePosition) {
@@ -1692,10 +2640,24 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
                 reason: "MANUAL_SELL",
                 signature: execution.signature,
                 venue: execution.venue,
+                netSellValue: realizedExitValueSol,
+                netAtaCloseValue: ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? null,
+                recoveryNeeded: ataCloseResult?.deferredCloseRecoveryNeeded === true,
+                recoveryReason: ataCloseResult?.recoveryReason || null,
+                ataClosed: ataCloseResult
+                    ? (ataCloseResult.alreadyClosed ? true : ataCloseResult.closedAccounts > 0)
+                    : undefined,
+                ataCloseSignature: ataCloseResult?.signature ?? null,
+                ataCloseRecoveredSol: ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? null,
+                ataCloseRecoveredLamports: ataCloseResult?.rentRecoveredLamports ?? null,
+                ataCloseTokenProgram: ataCloseResult?.tokenPrograms?.[0] || null,
+                ataCloseSkippedReason: ataCloseResult?.skippedReason || null,
             });
             const updatedPosition = {
                 ...activePosition,
                 ...sync.updates,
+                marketCapEntry: manualExitMarketContext.marketCapEntry,
+                marketCapExit: manualExitMarketContext.marketCapExit,
                 isActive: !sync.isClosed,
             };
 
@@ -1711,6 +2673,56 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
             positionState = sync.isClosed ? "closed" : "updated";
         }
 
+        if (activePosition) {
+            const identity = await resolveDashboardTokenIdentity(
+                mint,
+                activePosition.symbol || null
+            );
+            const exitTime = executionSettlement.exitTime || Date.now();
+            const manualTradeRecord = {
+                token: identity.displayName || identity.symbol || activePosition.symbol || mint.slice(0, 6),
+                symbol: identity.symbol || activePosition.symbol || null,
+                name: identity.name || null,
+                mint,
+                tokenMint: mint,
+                timestamp: exitTime,
+                entryTime: Number(activePosition.buyTimestamp || 0) || null,
+                exitTime,
+                entryPrice: Number(activePosition.entryPricePerToken || 0) || 0,
+                exitPrice: 0,
+                pnl: realizedPnlWithAta,
+                pnl_sol: realizedPnlWithAta,
+                pnlPercent: realizedPnlPercentWithAta,
+                pnl_percent: realizedPnlPercentWithAta,
+                confidence: Number(activePosition.confidence || 0),
+                status: positionState === "closed" ? "CLOSED_MANUAL" : "PARTIAL_MANUAL_SELL",
+                reason: "MANUAL_SELL",
+                exitReason: "MANUAL_SELL",
+                isSimulation: false,
+                mode: "LIVE",
+                isReconciliationEvent: false,
+                buyAmountSol: realizedEntryAmount,
+                entryAmount: realizedEntryAmount,
+                marketCapEntry: manualExitMarketContext.marketCapEntry,
+                marketCapExit: manualExitMarketContext.marketCapExit,
+                lastExitSignature: execution.signature,
+                lastExitVenue: execution.venue,
+                pnlUnavailable: realizedPnlWithAta === null,
+                feeSol: executionSettlement.feeSol,
+                realizedExitValueSol,
+                ataClosed: ataCloseResult
+                    ? (ataCloseResult.alreadyClosed ? true : ataCloseResult.closedAccounts > 0)
+                    : false,
+                ataCloseSignature: ataCloseResult?.signature || null,
+                ataCloseRecoveredSol: ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? null,
+                ataCloseRecoveredLamports: ataCloseResult?.rentRecoveredLamports ?? null,
+                ataCloseTokenProgram: ataCloseResult?.tokenPrograms?.[0] || null,
+                ataCloseSkippedReason: ataCloseResult?.skippedReason || null,
+            };
+
+            persistRuntimeLiveTradeRecord(manualTradeRecord, context);
+        }
+
         broadcastDashboardUpdate();
 
         return res.json({
@@ -1723,6 +2735,7 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
             walletBalanceBefore: beforeBalance,
             walletBalanceAfter: afterBalance,
             positionState,
+            ataClose: ataCloseResult,
         });
     } catch (error: any) {
         return res.status(500).json({ error: error.message || "Manual sell failed" });
@@ -1903,6 +2916,7 @@ app.get("/api/agent/learned-rules", (req, res) => {
 app.get("/api/agent/postmortems", (req, res) => {
     try {
         const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string || "20")));
+        const { getRecentPostMortemTrades } = getSimulationEngine();
         res.json(getRecentPostMortemTrades(limit));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -2049,8 +3063,9 @@ app.post("/api/agent/mode", (req, res) => {
  */
 app.get("/api/simulation/status", (req, res) => {
     try {
-        const metrics = getSimulationMetrics();
-        const readiness = isSimulationReadyForLive();
+        const { getSimulationAtaRecoveryMetrics } = getDashboardSnapshot();
+        const metrics = buildConsistentSimulationMetrics();
+        const readiness = evaluateSimulationReadiness(metrics);
         const agentConfig = loadAgentConfig();
         const ataRecovery = getSimulationAtaRecoveryMetrics();
 
@@ -2286,6 +3301,7 @@ function humanizeSubAgentName(name: string) {
 }
 
 function loadSubAgentHealth() {
+    const { readAgentHealthSnapshot } = getAgentHealthModule();
     const snapshot = readAgentHealthSnapshot();
     const subAgents = Object.entries(snapshot.agents)
         .map(([name, entry]) => ({
@@ -2320,6 +3336,7 @@ function loadSubAgentHealth() {
 }
 
 function buildBotRuntimeSummary(agentEnabled: boolean) {
+    const { evaluateBotRuntimeHealth, readBotRuntimeHealth } = getBotRuntimeHealthModule();
     const runtime = readBotRuntimeHealth();
     const runtimeEval = evaluateBotRuntimeHealth(runtime);
 
@@ -2353,6 +3370,7 @@ function getTradingConfigDefaults() {
         slippageBps: parseInt(process.env.SLIPPAGE_BPS || "300"),
         agentMinConfidence: parseInt(process.env.AGENT_MIN_CONFIDENCE || "70"),
         jitoTipAmount: parseFloat(process.env.JITO_TIP_AMOUNT || "0.0001"),
+        autoCloseAtaAfterFullSell: process.env.AUTO_CLOSE_ATA_AFTER_FULL_SELL !== "false",
         autoBuyEnabled: process.env.AUTO_BUY_ENABLED === "true",
         singleTradeMode: process.env.SINGLE_TRADE_MODE === "true",
         copyTradeEnabled: process.env.COPY_TRADE_ENABLED === "true",
@@ -2401,6 +3419,7 @@ app.post("/api/trading-config", (req, res) => {
             singleTradeMode,
             autoSellTakeProfit,
             autoSellStopLoss,
+            autoCloseAtaAfterFullSell,
             sellPercentOnTp,
             copyTradeEnabled,
             copyTradeAmountSol,
@@ -2437,6 +3456,7 @@ app.post("/api/trading-config", (req, res) => {
             ...(singleTradeMode !== undefined && { singleTradeMode }),
             ...(autoSellTakeProfit !== undefined && { autoSellTakeProfit }),
             ...(autoSellStopLoss !== undefined && { autoSellStopLoss }),
+            ...(autoCloseAtaAfterFullSell !== undefined && { autoCloseAtaAfterFullSell }),
             ...(sellPercentOnTp !== undefined && { sellPercentOnTp }),
             ...(copyTradeEnabled !== undefined && { copyTradeEnabled }),
             ...(copyTradeAmountSol !== undefined && { copyTradeAmountSol }),
@@ -2646,6 +3666,7 @@ app.post("/api/internal/broadcast", (req, res) => {
  */
 app.get("/api/agent/funnel-metrics", (req, res) => {
     try {
+        const { getFunnelMetrics } = getDecisionFunnelMetricsModule();
         res.json(getFunnelMetrics());
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -2669,6 +3690,7 @@ app.get("/api/bot-health", async (req, res) => {
         let rpcName: string | null = null;
 
         try {
+            const { rpcPool } = getRpcPoolModule();
             await rpcPool.getBestConnection();
             const rpcStats = rpcPool.getStats();
             const activeRpc = rpcStats.find((rpc) => rpc.isCurrent) || rpcStats.find((rpc) => rpc.isHealthy);
@@ -2733,25 +3755,39 @@ function getStats() {
     const active = positions.filter((p: any) => p.isActive);
     const closed = positions.filter((p: any) => !p.isActive);
     const totalInvested = active.reduce((sum: number, p: any) => sum + p.buySolAmount, 0);
-    const wins = closed.filter((p: any) => p.buyTimestamp && Date.now() - p.buyTimestamp < 3600000).length;
-    const losses = closed.length - wins;
 
     // Agent Stats
     const agentConfig = loadAgentConfig();
-    const learningMetrics = loadLearningMetrics();
     const agentStatus = loadAgentStatus();
-
-    // Simulation Stats
-    const simMetrics = getSimulationMetrics();
+    const isLiveMode = (agentConfig.mode || "SIMULATION") === "LIVE";
+    const liveTrades = isLiveMode ? loadAgentTrades() : [];
+    const liveStats = isLiveMode ? computeLiveDashboardStats(liveTrades, positions) : null;
+    const simulationMetrics = isLiveMode
+        ? buildConsistentSimulationMetrics()
+        : readCachedDashboardValue("simulation-overview-metrics", () => buildConsistentSimulationMetrics());
+    const wins = isLiveMode
+        ? Number(liveStats?.wins || 0)
+        : Number(simulationMetrics?.winTrades || 0);
+    const losses = isLiveMode
+        ? Number(liveStats?.losses || 0)
+        : Number(simulationMetrics?.lossTrades || 0);
+    const closedCount = wins + losses;
+    const totalPnL = isLiveMode
+        ? liveStats?.totalPnL ?? null
+        : parseFloat(getTrackedPnlTotal().toFixed(4));
 
     return {
         totalPositions: positions.length,
         activePositions: active.length,
         closedPositions: closed.length,
         totalInvested: parseFloat(totalInvested.toFixed(4)),
+        totalPnL,
+        walletSol: totalPnL,
         wins,
         losses,
-        winRate: closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : "0.0",
+        winRate: closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : "0.0",
+        pnlUnavailable: isLiveMode ? liveStats?.pnlUnavailable === true : false,
+        pnlSource: isLiveMode ? liveStats?.source || "trades" : "simulation",
         circuitBreaker: {
             isTripped: cbState.isTripped,
             tripReason: cbState.tripReason,
@@ -2766,7 +3802,7 @@ function getStats() {
             enabled: agentConfig.enabled || false,
             mode: agentConfig.mode || "SIMULATION",
             rateLimited: agentStatus.rateLimited || false,
-            simulation: simMetrics
+            simulation: simulationMetrics
         }
     };
 }
@@ -2793,20 +3829,8 @@ export function broadcastDashboardUpdate() {
 
         const totalPnl = getTrackedPnlTotal();
         recordPnLPoint(totalPnl, stats.activePositions);
-
-        const plHistory = getPnLHistory(30);
-        const plHistorySimulation = getPnLHistory(30, "simulation");
-        const plHistoryMainnet = getPnLHistory(30, "live");
-
-        // Recent simulation trades
-        const simTrades = loadSimulationTradesFromDb(EXPANDED_HISTORY_LIMIT);
-
         io.emit("dashboardUpdate", {
             stats,
-            plHistory,
-            plHistorySimulation,
-            plHistoryMainnet,
-            simTrades,
             timestamp: Date.now()
         });
 
@@ -2839,27 +3863,29 @@ function getPnLHistory(
             : source;
 
         if (effectiveSource === "simulation") {
-            const simMetrics = getSimulationMetrics();
-            const fileSeries = buildSimulationFileDerivedPnLSeries(days);
-            if (fileSeries.length > 0) {
-                return formatPnLSeriesPayload(fileSeries);
-            }
+            return readCachedDashboardValue(`pnl-history:${effectiveSource}:${days}`, () => {
+                const simMetrics = loadSimulationMetricsSnapshot();
+                const fileSeries = buildSimulationFileDerivedPnLSeries(days);
+                if (fileSeries.length > 0) {
+                    return formatPnLSeriesPayload(fileSeries);
+                }
 
-            const metricsTotal = Number(simMetrics?.totalPnL ?? NaN);
-            if (Number.isFinite(metricsTotal)) {
-                const now = Date.now();
-                return {
-                    timestamps: [formatTimestamp(now)],
-                    rawTimestamps: [now],
-                    plValues: [parseFloat(metricsTotal.toFixed(4))],
-                    positions: [0],
-                };
-            }
+                const metricsTotal = Number(simMetrics?.totalPnL ?? NaN);
+                if (Number.isFinite(metricsTotal)) {
+                    const now = Date.now();
+                    return {
+                        timestamps: [formatTimestamp(now)],
+                        rawTimestamps: [now],
+                        plValues: [parseFloat(metricsTotal.toFixed(4))],
+                        positions: [0],
+                    };
+                }
 
-            return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
+                return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
+            });
         }
 
-        return getLivePnLHistory(days, liveTrades);
+        return readCachedDashboardValue(`pnl-history:${effectiveSource}:${days}`, () => getLivePnLHistory(days, liveTrades));
     } catch (error) {
         console.error("Erro ao ler histórico P&L do SQLite:", error);
         return { timestamps: [], rawTimestamps: [], plValues: [], positions: [] };
@@ -2873,9 +3899,9 @@ io.on("connection", (socket) => {
     // Send initial data
     socket.emit("pnl-update", {
         stats: getStats(),
-        plHistory: getPnLHistory(),
-        plHistorySimulation: getPnLHistory(30, "simulation"),
-        plHistoryMainnet: getPnLHistory(30, "live"),
+        plHistory: readCachedDashboardValue("socket:pnl:auto", () => getPnLHistory(30)),
+        plHistorySimulation: readCachedDashboardValue("socket:pnl:simulation", () => getPnLHistory(30, "simulation")),
+        plHistoryMainnet: readCachedDashboardValue("socket:pnl:live", () => getPnLHistory(30, "live")),
     });
 
     // Handle bot notification (if bot connects as client)
@@ -2888,12 +3914,20 @@ io.on("connection", (socket) => {
 if (require.main === module) {
     fs.watch(POSITIONS_FILE, (event) => {
         if (event === 'change') {
+            invalidateDashboardHeavyCache("pnl-history:");
+            invalidateDashboardHeavyCache("broadcast:pnl:");
+            invalidateDashboardHeavyCache("socket:pnl:");
             broadcastDashboardUpdate();
         }
     });
 
     fs.watch(AGENT_TRADES_FILE, (event) => {
         if (event === 'change') {
+            invalidateDashboardHeavyCache("simulation-metrics");
+            invalidateDashboardHeavyCache("broadcast:sim-trades");
+            invalidateDashboardHeavyCache("pnl-history:");
+            invalidateDashboardHeavyCache("broadcast:pnl:");
+            invalidateDashboardHeavyCache("socket:pnl:");
             broadcastDashboardUpdate();
         }
     });

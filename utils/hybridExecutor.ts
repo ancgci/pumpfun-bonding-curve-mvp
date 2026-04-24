@@ -42,6 +42,7 @@ import {
   type ExecutableExitQuote,
   getExecutableExitQuote,
   getPositionEntryPrice,
+  getWalletNetSolChangeForSignature,
   getWalletTokenBalanceSnapshot,
   waitForWalletTokenBalanceChange,
 } from "./livePositionRuntime";
@@ -156,6 +157,8 @@ function resolveSellAmount(amountToken: number, applyRuntimeSellPercent: boolean
 interface AtaExitTokenAccount {
   address: PublicKey;
   rawAmount: bigint;
+  tokenProgramId: PublicKey;
+  rentLamports: number;
 }
 
 export interface AtaExitPlan {
@@ -178,6 +181,23 @@ export interface AtaExitExecutionResult {
   closeRetryAttemptsUsed: number;
   deferredCloseRecoveryNeeded: boolean;
   recoveryReason: string | null;
+  rentRecoveredLamports: number;
+  rentRecoveredSol: number;
+  netRecoveredSol: number | null;
+  tokenPrograms: string[];
+}
+
+export interface AtaCloseAfterSellResult {
+  signature: string | null;
+  closedAccounts: number;
+  alreadyClosed: boolean;
+  deferredCloseRecoveryNeeded: boolean;
+  recoveryReason: string | null;
+  rentRecoveredLamports: number;
+  rentRecoveredSol: number;
+  netRecoveredSol: number | null;
+  tokenPrograms: string[];
+  skippedReason: string | null;
 }
 
 export function evaluateAtaAwareExit(params: {
@@ -359,10 +379,16 @@ function normalizeAtaTokenAccounts(accountsResponse: any): AtaExitTokenAccount[]
       const address = account?.pubkey instanceof PublicKey
         ? account.pubkey
         : new PublicKey(String(account?.pubkey));
+      const tokenProgramId = account?.account?.owner instanceof PublicKey
+        ? account.account.owner
+        : new PublicKey(String(account?.account?.owner));
+      const rentLamports = Number(account?.account?.lamports || 0);
 
       return {
         address,
         rawAmount,
+        tokenProgramId,
+        rentLamports,
       };
     })
     .filter((account: AtaExitTokenAccount) => account.address && account.rawAmount >= 0n);
@@ -403,7 +429,7 @@ function buildAtaExitPlanForAccounts(params: {
             params.owner,
             tokenAccount.rawAmount,
             [],
-            TOKEN_PROGRAM_ID
+            tokenAccount.tokenProgramId
           )
         );
         instructionKinds.push("burn");
@@ -420,7 +446,7 @@ function buildAtaExitPlanForAccounts(params: {
           params.owner,
           params.owner,
           [],
-          TOKEN_PROGRAM_ID
+          tokenAccount.tokenProgramId
         )
       );
       instructionKinds.push("close");
@@ -475,6 +501,43 @@ function countZeroBalanceAtaAccounts(tokenAccounts: AtaExitTokenAccount[]): numb
   return tokenAccounts.filter((account) => account.rawAmount === 0n).length;
 }
 
+function sumZeroBalanceAtaRentLamports(tokenAccounts: AtaExitTokenAccount[]): number {
+  return tokenAccounts
+    .filter((account) => account.rawAmount === 0n)
+    .reduce((sum, account) => sum + Math.max(0, Number(account.rentLamports || 0)), 0);
+}
+
+function summarizeAtaTokenPrograms(tokenAccounts: AtaExitTokenAccount[]): string[] {
+  return Array.from(new Set(tokenAccounts.map((account) => account.tokenProgramId.toBase58())));
+}
+
+async function resolveNetRecoveredSol(params: {
+  connection: Connection;
+  signature: string | null;
+  walletAddress: string;
+  fallbackLamports: number;
+}): Promise<number | null> {
+  const signature = String(params.signature || "").trim();
+  if (!signature) return null;
+
+  const settlement = await getWalletNetSolChangeForSignature(signature, {
+    connection: params.connection,
+    ownerAddress: params.walletAddress,
+    maxAttempts: 8,
+    pollDelayMs: 500,
+  }).catch(() => null);
+
+  if (settlement && typeof settlement.netSolChange === "number") {
+    return settlement.netSolChange;
+  }
+
+  if (params.fallbackLamports > 0) {
+    return Number((params.fallbackLamports / 1e9).toFixed(9));
+  }
+
+  return null;
+}
+
 export async function buildBurnAndCloseAtaPlan(params: {
   tokenMint: string;
   connection?: Connection;
@@ -523,6 +586,10 @@ export async function executeBurnAndCloseAta(
       closeRetryAttemptsUsed: 0,
       deferredCloseRecoveryNeeded: false,
       recoveryReason: null,
+      rentRecoveredLamports: 0,
+      rentRecoveredSol: 0,
+      netRecoveredSol: null,
+      tokenPrograms: [],
     };
   }
 
@@ -571,6 +638,8 @@ export async function executeBurnAndCloseAta(
     owner,
   });
   let remainingCloseTargets = countZeroBalanceAtaAccounts(remainingAccounts);
+  const totalCloseRentLamports = sumZeroBalanceAtaRentLamports(remainingAccounts);
+  const tokenPrograms = summarizeAtaTokenPrograms(remainingAccounts);
 
   if (remainingCloseTargets === 0) {
     return {
@@ -583,6 +652,10 @@ export async function executeBurnAndCloseAta(
       closeRetryAttemptsUsed: 0,
       deferredCloseRecoveryNeeded: false,
       recoveryReason: null,
+      rentRecoveredLamports: 0,
+      rentRecoveredSol: 0,
+      netRecoveredSol: null,
+      tokenPrograms,
     };
   }
 
@@ -691,8 +764,28 @@ export async function executeBurnAndCloseAta(
       closeRetryAttemptsUsed,
       deferredCloseRecoveryNeeded: true,
       recoveryReason,
+      rentRecoveredLamports: totalCloseRentLamports,
+      rentRecoveredSol: Number((totalCloseRentLamports / 1e9).toFixed(9)),
+      netRecoveredSol: closeSignature
+        ? await resolveNetRecoveredSol({
+          connection,
+          signature: closeSignature,
+          walletAddress: owner.toBase58(),
+          fallbackLamports: totalCloseRentLamports,
+        })
+        : null,
+      tokenPrograms,
     };
   }
+
+  const netRecoveredSol = closeSignature
+    ? await resolveNetRecoveredSol({
+      connection,
+      signature: closeSignature,
+      walletAddress: owner.toBase58(),
+      fallbackLamports: totalCloseRentLamports,
+    })
+    : null;
 
   return {
     signature: closeSignature || burnSignature,
@@ -704,6 +797,187 @@ export async function executeBurnAndCloseAta(
     closeRetryAttemptsUsed,
     deferredCloseRecoveryNeeded: false,
     recoveryReason: null,
+    rentRecoveredLamports: totalCloseRentLamports,
+    rentRecoveredSol: Number((totalCloseRentLamports / 1e9).toFixed(9)),
+    netRecoveredSol,
+    tokenPrograms,
+  };
+}
+
+export async function closeAtaAfterFullSell(
+  tokenMint: string,
+  options?: { retryAttempts?: number; connection?: Connection }
+): Promise<AtaCloseAfterSellResult> {
+  const signer = getTradingKeypair();
+  const connection = options?.connection || await getConnection();
+  const closeRetryLimit = Math.max(1, Number(options?.retryAttempts ?? 1));
+  const owner = signer.publicKey;
+
+  let tokenAccounts = await getAtaExitTokenAccounts({
+    tokenMint,
+    connection,
+    owner,
+  });
+
+  if (tokenAccounts.length === 0) {
+    return {
+      signature: null,
+      closedAccounts: 0,
+      alreadyClosed: true,
+      deferredCloseRecoveryNeeded: false,
+      recoveryReason: null,
+      rentRecoveredLamports: 0,
+      rentRecoveredSol: 0,
+      netRecoveredSol: null,
+      tokenPrograms: [],
+      skippedReason: null,
+    };
+  }
+
+  const tokenPrograms = summarizeAtaTokenPrograms(tokenAccounts);
+  const residualAccounts = tokenAccounts.filter((account) => account.rawAmount > 0n);
+  if (residualAccounts.length > 0) {
+    return {
+      signature: null,
+      closedAccounts: 0,
+      alreadyClosed: false,
+      deferredCloseRecoveryNeeded: false,
+      recoveryReason: null,
+      rentRecoveredLamports: 0,
+      rentRecoveredSol: 0,
+      netRecoveredSol: null,
+      tokenPrograms,
+      skippedReason: `ATA_CLOSE_SKIPPED_RESIDUAL_BALANCE:${residualAccounts.length}`,
+    };
+  }
+
+  const totalCloseTargets = countZeroBalanceAtaAccounts(tokenAccounts);
+  const totalCloseRentLamports = sumZeroBalanceAtaRentLamports(tokenAccounts);
+  if (totalCloseTargets === 0) {
+    return {
+      signature: null,
+      closedAccounts: 0,
+      alreadyClosed: true,
+      deferredCloseRecoveryNeeded: false,
+      recoveryReason: null,
+      rentRecoveredLamports: 0,
+      rentRecoveredSol: 0,
+      netRecoveredSol: null,
+      tokenPrograms,
+      skippedReason: null,
+    };
+  }
+
+  const attemptClose = async (accounts: AtaExitTokenAccount[]): Promise<string | null> => {
+    const closePlan = buildAtaExitPlanForAccounts({
+      tokenMint,
+      owner,
+      tokenAccounts: accounts.filter((account) => account.rawAmount === 0n),
+      includeBurn: false,
+      includeClose: true,
+    });
+
+    if (closePlan.instructions.length === 0) {
+      return null;
+    }
+
+    return await sendAtaExitInstructions({
+      connection,
+      signer,
+      instructions: closePlan.instructions,
+      computeUnitLimit: 100_000,
+    });
+  };
+
+  let closeSignature: string | null = null;
+  let remainingCloseTargets = totalCloseTargets;
+
+  try {
+    closeSignature = await attemptClose(tokenAccounts);
+  } catch (error: any) {
+    logger.warn(`🔁 [ATA CLOSE] Primeira tentativa falhou para ${tokenMint}: ${error?.message || error}`);
+  }
+
+  tokenAccounts = await getAtaExitTokenAccounts({
+    tokenMint,
+    connection,
+    owner,
+  });
+  remainingCloseTargets = countZeroBalanceAtaAccounts(tokenAccounts);
+  let closeRetryAttemptsUsed = 0;
+
+  for (let retryAttempt = 1; retryAttempt <= closeRetryLimit && remainingCloseTargets > 0; retryAttempt++) {
+    closeRetryAttemptsUsed = retryAttempt;
+    await new Promise((resolve) => setTimeout(resolve, 400 * retryAttempt));
+
+    try {
+      closeSignature = await attemptClose(tokenAccounts);
+    } catch (retryError: any) {
+      logger.warn(
+        `🔁 [ATA CLOSE] Retry ${retryAttempt}/${closeRetryLimit} falhou para ${tokenMint}: ${retryError?.message || retryError}`
+      );
+    }
+
+    tokenAccounts = await getAtaExitTokenAccounts({
+      tokenMint,
+      connection,
+      owner,
+    });
+    remainingCloseTargets = countZeroBalanceAtaAccounts(tokenAccounts);
+  }
+
+  if (remainingCloseTargets > 0) {
+    const recoveryReason =
+      `ATA close recovery pending for ${tokenMint}: ${remainingCloseTargets} zero-balance ATA(s) still open after ${Math.max(closeRetryAttemptsUsed, 1)} close attempt(s).`;
+    logger.error(`⚠️ [ATA CLOSE] ${recoveryReason}`);
+
+    return {
+      signature: closeSignature,
+      closedAccounts: Math.max(0, totalCloseTargets - remainingCloseTargets),
+      alreadyClosed: false,
+      deferredCloseRecoveryNeeded: true,
+      recoveryReason,
+      rentRecoveredLamports: totalCloseRentLamports,
+      rentRecoveredSol: Number((totalCloseRentLamports / 1e9).toFixed(9)),
+      netRecoveredSol: closeSignature
+        ? await resolveNetRecoveredSol({
+          connection,
+          signature: closeSignature,
+          walletAddress: owner.toBase58(),
+          fallbackLamports: totalCloseRentLamports,
+        })
+        : null,
+      tokenPrograms,
+      skippedReason: null,
+    };
+  }
+
+  const netRecoveredSol = closeSignature
+    ? await resolveNetRecoveredSol({
+      connection,
+      signature: closeSignature,
+      walletAddress: owner.toBase58(),
+      fallbackLamports: totalCloseRentLamports,
+    })
+    : null;
+
+  logger.info(
+    `🧹 [ATA CLOSE] Close success for ${tokenMint}: ${totalCloseTargets} ATA(s), ` +
+    `signature=${closeSignature} rentRecoveredSol=${(netRecoveredSol ?? Number((totalCloseRentLamports / 1e9).toFixed(9))).toFixed(9)} ` +
+    `tokenPrograms=${tokenPrograms.join(",")}`
+  );
+
+  return {
+    signature: closeSignature,
+    closedAccounts: totalCloseTargets,
+    alreadyClosed: false,
+    deferredCloseRecoveryNeeded: false,
+    recoveryReason: null,
+    rentRecoveredLamports: totalCloseRentLamports,
+    rentRecoveredSol: Number((totalCloseRentLamports / 1e9).toFixed(9)),
+    netRecoveredSol,
+    tokenPrograms,
+    skippedReason: null,
   };
 }
 
@@ -715,13 +989,20 @@ async function syncPositionAfterExit(
   venue: string,
   currentPrice?: number | null,
   exitDecision?: ExitStrategyDecision | null,
-  recoveryState?: { needed: boolean; reason?: string | null } | null
+  recoveryState?: { needed: boolean; reason?: string | null } | null,
+  ataCloseResult?: AtaCloseAfterSellResult | AtaExitExecutionResult | null
 ): Promise<void> {
   const afterBalance = await waitForWalletTokenBalanceChange(position.mint, beforeBalanceRaw, {
     direction: "decrease",
     timeoutMs: 20_000,
     pollIntervalMs: 800,
   });
+  let finalAtaCloseResult = ataCloseResult || null;
+
+  if (!finalAtaCloseResult && afterBalance.rawAmount <= 0 && getRuntimeConfig().AUTO_CLOSE_ATA_AFTER_FULL_SELL !== false) {
+    finalAtaCloseResult = await closeAtaAfterFullSell(position.mint, { retryAttempts: 2 });
+  }
+
   const sync = buildPositionBalanceSyncResult(position, {
     baselineRawAmount: beforeBalanceRaw,
     balance: afterBalance,
@@ -731,10 +1012,18 @@ async function syncPositionAfterExit(
     currentPrice,
     exitType: exitDecision?.action,
     netSellValue: exitDecision?.netSellValue,
-    netAtaCloseValue: exitDecision?.netAtaCloseValue,
+    netAtaCloseValue: finalAtaCloseResult?.netRecoveredSol ?? finalAtaCloseResult?.rentRecoveredSol ?? exitDecision?.netAtaCloseValue,
     decisionReason: exitDecision?.reason,
-    recoveryNeeded: recoveryState?.needed === true,
-    recoveryReason: recoveryState?.reason || null,
+    recoveryNeeded: recoveryState?.needed === true || finalAtaCloseResult?.deferredCloseRecoveryNeeded === true,
+    recoveryReason: recoveryState?.reason || finalAtaCloseResult?.recoveryReason || null,
+    ataClosed: finalAtaCloseResult
+      ? (finalAtaCloseResult.alreadyClosed ? true : finalAtaCloseResult.closedAccounts > 0)
+      : undefined,
+    ataCloseSignature: finalAtaCloseResult?.signature ?? null,
+    ataCloseRecoveredSol: finalAtaCloseResult?.netRecoveredSol ?? finalAtaCloseResult?.rentRecoveredSol ?? null,
+    ataCloseRecoveredLamports: finalAtaCloseResult?.rentRecoveredLamports ?? null,
+    ataCloseTokenProgram: finalAtaCloseResult?.tokenPrograms?.[0] || null,
+    ataCloseSkippedReason: (finalAtaCloseResult as AtaCloseAfterSellResult | null)?.skippedReason || null,
   });
 
   if (sync.isClosed) {
@@ -1401,6 +1690,18 @@ export async function executeHybridTrade(
               {
                 needed: ataExit.deferredCloseRecoveryNeeded,
                 reason: ataExit.recoveryReason,
+              },
+              {
+                signature: ataExit.closeSignature || ataExit.signature,
+                closedAccounts: ataExit.closedAccounts,
+                alreadyClosed: ataExit.alreadyClosed,
+                deferredCloseRecoveryNeeded: ataExit.deferredCloseRecoveryNeeded,
+                recoveryReason: ataExit.recoveryReason,
+                rentRecoveredLamports: ataExit.rentRecoveredLamports,
+                rentRecoveredSol: ataExit.rentRecoveredSol,
+                netRecoveredSol: ataExit.netRecoveredSol,
+                tokenPrograms: ataExit.tokenPrograms,
+                skippedReason: null,
               }
             );
             notifyDashboardUpdate();

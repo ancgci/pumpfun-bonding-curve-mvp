@@ -1478,10 +1478,13 @@ export async function executeAgentTrade(
     const confidenceMultiplier = confidenceToPositionMultiplier(executionConfidence);
     const technicalMultiplier = scoreCheck.payload.execScore.sizing;
     const positionMultiplier = Math.min(confidenceMultiplier, technicalMultiplier, adaptiveEntryProfile.positionCap);
-    const adjustedBuyAmount = baseBuyAmount * positionMultiplier;
+    const rawAdjustedBuyAmount = baseBuyAmount * positionMultiplier;
+    const adjustedBuyAmount = agentMode === "LIVE"
+      ? baseBuyAmount
+      : rawAdjustedBuyAmount;
     logger.info(
       `   💰 Position Size: ${adjustedBuyAmount.toFixed(4)} SOL ` +
-      `(${(positionMultiplier * 100).toFixed(0)}% of ${baseBuyAmount} SOL | profile=${adaptiveEntryProfile.profile} | tech=${(technicalMultiplier * 100).toFixed(0)}% | conf=${executionConfidence}%)`
+      `(${(positionMultiplier * 100).toFixed(0)}% target of ${baseBuyAmount} SOL | profile=${adaptiveEntryProfile.profile} | tech=${(technicalMultiplier * 100).toFixed(0)}% | conf=${executionConfidence}%${agentMode === "LIVE" ? " | live_floor=ON" : ""})`
     );
 
     // record live price sample for volatility windows

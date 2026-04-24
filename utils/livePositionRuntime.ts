@@ -42,6 +42,12 @@ export interface PositionBalanceSyncResult {
   updates: Partial<Position>;
 }
 
+export interface WalletNetSolChangeResult {
+  exitTime: number;
+  netSolChange: number | null;
+  feeSol: number | null;
+}
+
 export interface ExitSellAssessment {
   tokenMarketValueSol: number;
   estimatedSellFeesSol: number;
@@ -176,6 +182,72 @@ export async function waitForWalletTokenBalanceChange(
   }
 
   return latest;
+}
+
+export async function getWalletNetSolChangeForSignature(
+  signature: string,
+  options: {
+    connection?: Connection;
+    ownerAddress?: string | null;
+    maxAttempts?: number;
+    pollDelayMs?: number;
+  } = {}
+): Promise<WalletNetSolChangeResult> {
+  const normalizedSignature = String(signature || "").trim();
+  const normalizedWallet = String(options.ownerAddress || getActiveTradingWalletAddress() || "").trim();
+  if (!normalizedSignature || !normalizedWallet) {
+    return {
+      exitTime: Date.now(),
+      netSolChange: null,
+      feeSol: null,
+    };
+  }
+
+  const connection = await getConnection(options.connection);
+  const maxAttempts = Math.max(1, Number(options.maxAttempts ?? 8));
+  const pollDelayMs = Math.max(100, Number(options.pollDelayMs ?? 500));
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const tx = await connection.getTransaction(normalizedSignature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: "confirmed",
+    });
+
+    if (!tx) {
+      await sleep(pollDelayMs);
+      continue;
+    }
+
+    const accountKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
+    const walletIndex = accountKeys.findIndex((key) => key.toBase58() === normalizedWallet);
+    const feeSol = Number(((Number(tx.meta?.fee || 0)) / 1e9).toFixed(9));
+    const exitTime = Number(tx.blockTime || 0) > 0
+      ? Number(tx.blockTime) * 1000
+      : Date.now();
+
+    if (walletIndex < 0) {
+      return {
+        exitTime,
+        netSolChange: null,
+        feeSol,
+      };
+    }
+
+    const preBalanceLamports = Number(tx.meta?.preBalances?.[walletIndex] || 0);
+    const postBalanceLamports = Number(tx.meta?.postBalances?.[walletIndex] || 0);
+
+    return {
+      exitTime,
+      netSolChange: Number(((postBalanceLamports - preBalanceLamports) / 1e9).toFixed(9)),
+      feeSol,
+    };
+  }
+
+  return {
+    exitTime: Date.now(),
+    netSolChange: null,
+    feeSol: null,
+  };
 }
 
 function getLatestTradeBasedPrice(mint: string): number | null {
@@ -397,6 +469,12 @@ export function buildPositionBalanceSyncResult(
     decisionReason?: string | null;
     recoveryNeeded?: boolean;
     recoveryReason?: string | null;
+    ataClosed?: boolean;
+    ataCloseSignature?: string | null;
+    ataCloseRecoveredSol?: number | null;
+    ataCloseRecoveredLamports?: number | null;
+    ataCloseTokenProgram?: string | null;
+    ataCloseSkippedReason?: string | null;
   }
 ): PositionBalanceSyncResult {
   const balance = params.balance;
@@ -455,6 +533,12 @@ export function buildPositionBalanceSyncResult(
       ...(params.decisionReason ? { lastExitDecisionReason: params.decisionReason } : {}),
       ...(params.recoveryNeeded === true ? { lastExitRecoveryNeeded: true } : {}),
       ...(params.recoveryReason ? { lastExitRecoveryReason: params.recoveryReason } : {}),
+      ...(params.ataClosed !== undefined ? { lastAtaClosed: params.ataClosed } : {}),
+      ...(params.ataCloseSignature !== undefined ? { lastAtaCloseSignature: params.ataCloseSignature } : {}),
+      ...(Number.isFinite(Number(params.ataCloseRecoveredSol)) ? { lastAtaCloseRecoveredSol: Number(params.ataCloseRecoveredSol) } : {}),
+      ...(Number.isFinite(Number(params.ataCloseRecoveredLamports)) ? { lastAtaCloseRecoveredLamports: Number(params.ataCloseRecoveredLamports) } : {}),
+      ...(params.ataCloseTokenProgram ? { lastAtaCloseTokenProgram: params.ataCloseTokenProgram } : {}),
+      ...(params.ataCloseSkippedReason ? { lastAtaCloseSkippedReason: params.ataCloseSkippedReason } : {}),
     },
   };
 }

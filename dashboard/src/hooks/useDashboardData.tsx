@@ -7,6 +7,24 @@ const SOCKET_URL = window.location.hostname === "localhost"
   : window.location.origin;
 const DASHBOARD_HISTORY_LIMIT = 150;
 
+function mergeStatsWithStickyWalletSpotSol(previous: any, next: any) {
+  if (!next) return previous;
+  if (
+    (next.walletSpotSol === null || next.walletSpotSol === undefined)
+    && previous
+    && previous.walletSpotSol !== null
+    && previous.walletSpotSol !== undefined
+  ) {
+    return {
+      ...previous,
+      ...next,
+      walletSpotSol: previous.walletSpotSol,
+    };
+  }
+
+  return next;
+}
+
 export interface DashboardData {
   stats: any;
   simTrades: any[];
@@ -173,7 +191,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         apiFetch(`${API_BASE}/pl-history?source=mainnet`).catch(() => null),
       ]);
 
-      if (statsData) setStats(statsData);
+      if (statsData) setStats((prev: any) => mergeStatsWithStickyWalletSpotSol(prev, statsData));
       if (Array.isArray(posData)) setPositions(posData);
       if (agentData) setAgentStatus(agentData);
       if (Array.isArray(historyData)) setTradeHistory(historyData);
@@ -265,7 +283,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     newSocket.on("disconnect", () => setConnected(false));
 
     newSocket.on("dashboardUpdate", (data: any) => {
-      if (data.stats) setStats(data.stats);
+      if (data.stats) setStats((prev: any) => mergeStatsWithStickyWalletSpotSol(prev, data.stats));
       // Guard: only update simTrades if server returns actual data
       // Never flash to empty if we already have trades displayed
       if (data.simTrades && Array.isArray(data.simTrades) && data.simTrades.length > 0) {
@@ -277,7 +295,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     });
 
     newSocket.on("pnl-update", (data: any) => {
-      if (data.stats) setStats(data.stats);
+      if (data.stats) setStats((prev: any) => mergeStatsWithStickyWalletSpotSol(prev, data.stats));
       if (data.plHistorySimulation) applyPlHistory(data.plHistorySimulation, "simulation");
       if (data.plHistoryMainnet) applyPlHistory(data.plHistoryMainnet, "mainnet");
       if (data.plHistory) applyPlHistory(data.plHistory);

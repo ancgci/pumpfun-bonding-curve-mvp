@@ -10,6 +10,7 @@ import {
   sellOnPumpFun,
   sellViaJupiter,
   checkExitConditions,
+  closeAtaAfterFullSell,
   executeBurnAndCloseAta,
   evaluateAtaAwareExit,
 } from "./hybridExecutor";
@@ -243,6 +244,10 @@ async function monitorPosition(position: Position): Promise<void> {
       timeoutMs: 20_000,
       pollIntervalMs: 800,
     });
+    let ataCloseResult: Awaited<ReturnType<typeof closeAtaAfterFullSell>> | null = null;
+    if (exitDecision.action !== "BURN_AND_CLOSE_ATA" && afterBalance.rawAmount <= 0 && runtimeConfig.AUTO_CLOSE_ATA_AFTER_FULL_SELL !== false) {
+      ataCloseResult = await closeAtaAfterFullSell(syncedPosition.mint, { retryAttempts: 2 });
+    }
     const sync = buildPositionBalanceSyncResult(syncedPosition, {
       baselineRawAmount: walletBalance.rawAmount,
       balance: afterBalance,
@@ -252,10 +257,18 @@ async function monitorPosition(position: Position): Promise<void> {
       venue: execution.venue,
       exitType: exitDecision.action,
       netSellValue: exitDecision.netSellValue,
-      netAtaCloseValue: exitDecision.netAtaCloseValue,
+      netAtaCloseValue: ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? exitDecision.netAtaCloseValue,
       decisionReason: exitDecision.reason,
-      recoveryNeeded: execution.deferredCloseRecoveryNeeded === true,
-      recoveryReason: execution.recoveryReason || null,
+      recoveryNeeded: execution.deferredCloseRecoveryNeeded === true || ataCloseResult?.deferredCloseRecoveryNeeded === true,
+      recoveryReason: execution.recoveryReason || ataCloseResult?.recoveryReason || null,
+      ataClosed: ataCloseResult
+        ? (ataCloseResult.alreadyClosed ? true : ataCloseResult.closedAccounts > 0)
+        : undefined,
+      ataCloseSignature: ataCloseResult?.signature ?? null,
+      ataCloseRecoveredSol: ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? null,
+      ataCloseRecoveredLamports: ataCloseResult?.rentRecoveredLamports ?? null,
+      ataCloseTokenProgram: ataCloseResult?.tokenPrograms?.[0] || null,
+      ataCloseSkippedReason: ataCloseResult?.skippedReason || null,
     });
 
     if (sync.isClosed) {

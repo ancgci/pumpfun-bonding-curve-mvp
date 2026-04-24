@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import {
@@ -26,6 +26,27 @@ function createTimeAnchor() {
   return Date.now();
 }
 
+function computeMaxDrawdownSol(series: ChartPoint[]): number {
+  const normalized = Array.isArray(series)
+    ? [...series]
+        .filter((point) => Number.isFinite(Number(point?.timestamp)) && Number.isFinite(Number(point?.pnl)))
+        .sort((a, b) => a.timestamp - b.timestamp)
+    : [];
+
+  if (normalized.length === 0) return 0;
+
+  let peak = 0;
+  let maxDrawdown = 0;
+
+  for (const point of normalized) {
+    const pnl = Number(point.pnl || 0);
+    peak = Math.max(peak, pnl);
+    maxDrawdown = Math.max(maxDrawdown, peak - pnl);
+  }
+
+  return Number(maxDrawdown.toFixed(4));
+}
+
 export function StatsOverview() {
   const {
     stats,
@@ -35,18 +56,23 @@ export function StatsOverview() {
     mainnetPlChartData,
   } = useDashboardData();
 
-  const [viewMode, setViewMode] = useState("simulation");
+  const runtimeMode = agentStatus?.mode === "LIVE" ? "LIVE" : "SIMULATION";
+  const [viewMode, setViewMode] = useState(runtimeMode === "LIVE" ? "mainnet" : "simulation");
   const [timeFilter, setTimeFilter] = useState("all");
   const [timeAnchor, setTimeAnchor] = useState(() => createTimeAnchor());
 
   const isSim = viewMode === "simulation";
-  const runtimeMode = agentStatus?.mode === "LIVE" ? "LIVE" : "SIMULATION";
   const selectedChartData = (isSim ? simulationPlChartData : mainnetPlChartData) as ChartPoint[];
 
   const handleViewModeChange = (nextMode: string) => {
     setTimeAnchor(createTimeAnchor());
     setViewMode(nextMode);
   };
+
+  useEffect(() => {
+    setTimeAnchor(createTimeAnchor());
+    setViewMode(runtimeMode === "LIVE" ? "mainnet" : "simulation");
+  }, [runtimeMode]);
 
   const handleTimeFilterChange = (nextFilter: string) => {
     setTimeAnchor(createTimeAnchor());
@@ -58,8 +84,13 @@ export function StatsOverview() {
   const wins = Number(isSim ? (simStatus?.metrics?.winTrades ?? 0) : (stats?.wins ?? 0));
   const losses = Number(isSim ? (simStatus?.metrics?.lossTrades ?? 0) : (stats?.losses ?? 0));
   const totalInvested = Number(isSim ? (simStatus?.metrics?.simBalance ?? 0) : (stats?.totalInvested ?? 0));
-  const totalPnL = Number(isSim ? (simStatus?.metrics?.totalPnL ?? 0) : (stats?.totalPnL ?? 0));
-  const maxDrawdown = Number(isSim ? (simStatus?.metrics?.maxDrawdown ?? 0) : 0);
+  const livePnlUnavailable = !isSim && stats?.pnlUnavailable === true;
+  const totalPnL = isSim
+    ? Number(simStatus?.metrics?.totalPnL ?? 0)
+    : (livePnlUnavailable ? null : Number(stats?.totalPnL ?? 0));
+  const maxDrawdown = Number(isSim
+    ? (simStatus?.metrics?.maxDrawdown ?? 0)
+    : computeMaxDrawdownSol(mainnetPlChartData as ChartPoint[]));
 
   const filteredChartData = useMemo(() => {
     if (!selectedChartData || selectedChartData.length === 0) return [];
@@ -222,9 +253,16 @@ export function StatsOverview() {
 
             <TrendingUp className={`w-6 h-6 mb-2 ${isSim ? 'text-purple-400' : 'text-green-400'}`} />
             <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Total Profit</p>
-            <p className={`text-2xl font-bold font-mono ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {totalPnL > 0 ? '+' : ''}{totalPnL.toFixed(4)} SOL
-            </p>
+            {totalPnL === null ? (
+              <>
+                <p className="text-lg font-bold font-mono text-amber-300">P&L Pending</p>
+                <p className="text-[11px] text-muted-foreground mt-1">Closed live trades found, but exact net values were not persisted in the old ledger.</p>
+              </>
+            ) : (
+              <p className={`text-2xl font-bold font-mono ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {totalPnL > 0 ? '+' : ''}{totalPnL.toFixed(4)} SOL
+              </p>
+            )}
           </CardContent>
         </Card>
 

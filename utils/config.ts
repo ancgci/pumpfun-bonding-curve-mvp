@@ -129,6 +129,7 @@ export const CONFIG = {
   EXECUTION_PREFLIGHT_SOL_BUFFER: parseFloat(process.env.EXECUTION_PREFLIGHT_SOL_BUFFER || "0.015"),
   ENABLE_ATA_EXIT_STRATEGY: process.env.ENABLE_ATA_EXIT_STRATEGY === "true",
   ATA_RENT_SOL: parseFloat(process.env.ATA_RENT_SOL || "0.00203928"),
+  AUTO_CLOSE_ATA_AFTER_FULL_SELL: process.env.AUTO_CLOSE_ATA_AFTER_FULL_SELL !== "false",
 
   // Auto Trading
   AGENT_ENABLED: process.env.AGENT_ENABLED === "true",
@@ -272,6 +273,7 @@ export function getRuntimeConfig() {
     }
     if (saved.executionPreflightEnabled !== undefined) (runtimeConfig as any).EXECUTION_PREFLIGHT_ENABLED = saved.executionPreflightEnabled;
     if (saved.executionPreflightSolBuffer !== undefined) (runtimeConfig as any).EXECUTION_PREFLIGHT_SOL_BUFFER = saved.executionPreflightSolBuffer;
+    if (saved.autoCloseAtaAfterFullSell !== undefined) (runtimeConfig as any).AUTO_CLOSE_ATA_AFTER_FULL_SELL = saved.autoCloseAtaAfterFullSell;
     if (saved.dipMonitorScanIntervalMs !== undefined) (runtimeConfig as any).DIP_MONITOR_SCAN_INTERVAL_MS = saved.dipMonitorScanIntervalMs;
     if (saved.dipWaitlistMaxAgeMs !== undefined) (runtimeConfig as any).DIP_WAITLIST_MAX_AGE_MS = saved.dipWaitlistMaxAgeMs;
     if (saved.microWaitlistMaxTokens !== undefined) (runtimeConfig as any).MICRO_WAITLIST_MAX_TOKENS = saved.microWaitlistMaxTokens;
