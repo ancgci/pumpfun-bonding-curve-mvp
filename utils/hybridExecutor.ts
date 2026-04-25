@@ -3,26 +3,32 @@ import {
   PublicKey,
   Transaction,
   sendAndConfirmTransaction,
+  SendTransactionError,
   Keypair,
   ComputeBudgetProgram,
   SystemProgram,
   TransactionInstruction,
   VersionedTransaction,
-  TransactionMessage
+  TransactionMessage,
+  type AccountMeta,
 } from "@solana/web3.js";
 import { BN } from "@project-serum/anchor";
+import { BorshAccountsCoder, type Idl } from "@coral-xyz/anchor";
 import { decode } from "bs58";
+import { inflateSync } from "zlib";
 import { createJupiterApiClient } from "@jup-ag/api";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createBurnInstruction,
   createCloseAccountInstruction,
+  createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import logger from "./logger";
 import { recordApiCall, recordError } from "./performanceMonitor";
 import { getATR } from "./volatilityMonitor";
-import { sendJitoBundle } from "./jitoManager";
+import { createJitoTipInstruction, sendJitoBundle } from "./jitoManager";
 import { circuitBreaker } from "./circuitBreaker";
 import { rpcPool } from "./rpcPool";
 import { getCachedDynamicGasPrice } from "./gasPriceOracle";
@@ -88,6 +94,440 @@ logger.info(`RPC configured: ${!!process.env.RPC_URL}`);
 
 // Configurações do ambiente inicial (carregadas dinamicamente agora)
 const PUMPFUN_PROGRAM_ID = new PublicKey(process.env.PUMPFUN_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+const PUMPFUN_FEE_PROGRAM_ID = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
+const PUMPFUN_EVENT_AUTHORITY = PublicKey.findProgramAddressSync(
+  [Buffer.from("__event_authority")],
+  PUMPFUN_PROGRAM_ID
+)[0];
+const PUMPFUN_GLOBAL_VOLUME_ACCUMULATOR = PublicKey.findProgramAddressSync(
+  [Buffer.from("global_volume_accumulator")],
+  PUMPFUN_PROGRAM_ID
+)[0];
+const PUMPFUN_FEE_CONFIG = PublicKey.findProgramAddressSync(
+  [Buffer.from("fee_config"), PUMPFUN_PROGRAM_ID.toBuffer()],
+  PUMPFUN_FEE_PROGRAM_ID
+)[0];
+const PUMPFUN_BUYBACK_FEE_RECIPIENTS = [
+  "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+  "9M4giFFMxmFGXtc3feFzRai56WbBqehoSeRE5GK7gf7",
+  "GXPFM2caqTtQYC2cJ5yJRi9VDkpsYZXzYdwYpGnLmtDL",
+  "3BpXnfJaUTiwXnJNe7Ej1rcbzqTTQUvLShZaWazebsVR",
+  "5cjcW9wExnJJiqgLjq7DEG75Pm6JBgE1hNv4B2vHXUW6",
+  "EHAAiTxcdDwQ3U4bU6YcMsQGaekdzLS3B5SmYo46kJtL",
+  "5eHhjP8JaYkz83CWwvGU2uMUXefd3AazWGx4gpcuEEYD",
+  "A7hAgCzFw14fejgCp387JUJRMNyz4j89JKnhtKU8piqW",
+].map(address => new PublicKey(address));
+
+const BUY_SLOT_RESERVATION_TTL_MS = 2 * 60 * 1000;
+const pendingBuyReservations = new Map<string, { createdAt: number; amountSol: number }>();
+
+function prunePendingBuyReservations() {
+  const now = Date.now();
+  for (const [mint, reservation] of pendingBuyReservations.entries()) {
+    if (!reservation || now - reservation.createdAt > BUY_SLOT_RESERVATION_TTL_MS) {
+      pendingBuyReservations.delete(mint);
+    }
+  }
+}
+
+function getPendingBuyReservationsCount(): number {
+  prunePendingBuyReservations();
+  return pendingBuyReservations.size;
+}
+
+function reserveBuySlot(mint: string, amountSol: number): { ok: true } | { ok: false; reason: string } {
+  prunePendingBuyReservations();
+  const currentConfig = getRuntimeConfig();
+  const normalizedMint = String(mint || '').trim();
+  const activePositions = positionManager.getActivePositions();
+  const effectiveOpenPositions = activePositions.length + getPendingBuyReservationsCount();
+
+  if (normalizedMint && pendingBuyReservations.has(normalizedMint)) {
+    return { ok: false, reason: 'BUY_ALREADY_PENDING' };
+  }
+
+  if (normalizedMint && activePositions.some((position) => position.mint === normalizedMint)) {
+    return { ok: false, reason: 'POSITION_ALREADY_ACTIVE' };
+  }
+
+  if (currentConfig.SINGLE_TRADE_MODE && effectiveOpenPositions > 0) {
+    return { ok: false, reason: 'SINGLE_TRADE_MODE_ACTIVE' };
+  }
+
+  const maxOpenPositions = Number((currentConfig as any).MAX_OPEN_POSITIONS || 0);
+  if (!currentConfig.SINGLE_TRADE_MODE && maxOpenPositions > 0 && effectiveOpenPositions >= maxOpenPositions) {
+    return { ok: false, reason: `PORTFOLIO_MAX_OPEN_POSITIONS:${effectiveOpenPositions}/${maxOpenPositions}` };
+  }
+
+  if (normalizedMint) {
+    pendingBuyReservations.set(normalizedMint, {
+      createdAt: Date.now(),
+      amountSol: Math.max(0, Number(amountSol || 0)),
+    });
+  }
+
+  return { ok: true };
+}
+
+function releaseBuySlot(mint: string | null | undefined) {
+  const normalizedMint = String(mint || '').trim();
+  if (!normalizedMint) return;
+  pendingBuyReservations.delete(normalizedMint);
+}
+
+function getEffectiveOpenPositionsCount(): number {
+  return positionManager.getActivePositions().length + getPendingBuyReservationsCount();
+}
+
+function getRandomPumpFunBuybackFeeRecipient(): PublicKey {
+  const index = Math.floor(Math.random() * PUMPFUN_BUYBACK_FEE_RECIPIENTS.length);
+  return PUMPFUN_BUYBACK_FEE_RECIPIENTS[index];
+}
+
+interface ParsedGlobalAccount {
+  feeRecipient: PublicKey;
+  feeRecipients: PublicKey[];
+  feeBasisPoints: number;
+  creatorFeeBasisPoints: number;
+}
+
+interface ParsedBondingCurveAccount {
+  virtualTokenReserves: bigint;
+  virtualSolReserves: bigint;
+  realTokenReserves: bigint;
+  realSolReserves: bigint;
+  tokenTotalSupply: bigint;
+  complete: boolean;
+  creator: PublicKey;
+  isCashbackCoin: boolean;
+}
+
+let pumpAccountsCoderPromise: Promise<BorshAccountsCoder> | null = null;
+
+function readU64LE(buffer: Buffer, offset: number): bigint {
+  return buffer.readBigUInt64LE(offset);
+}
+
+function readPubkey(buffer: Buffer, offset: number): PublicKey {
+  return new PublicKey(buffer.subarray(offset, offset + 32));
+}
+
+async function getPumpAccountsCoder(connection: Connection): Promise<BorshAccountsCoder> {
+  if (!pumpAccountsCoderPromise) {
+    pumpAccountsCoderPromise = (async () => {
+      const [idlAddress] = PublicKey.findProgramAddressSync([Buffer.from("anchor:idl")], PUMPFUN_PROGRAM_ID);
+      const info = await connection.getAccountInfo(idlAddress, "confirmed");
+      if (!info?.data || info.data.length < 44) {
+        throw new Error("PUMPFUN_IDL_NOT_FOUND");
+      }
+
+      const compressedLen = Buffer.from(info.data).readUInt32LE(40);
+      const compressed = Buffer.from(info.data).subarray(44, 44 + compressedLen);
+      const idl = JSON.parse(inflateSync(compressed).toString("utf8")) as Idl;
+      return new BorshAccountsCoder(idl);
+    })().catch((error) => {
+      pumpAccountsCoderPromise = null;
+      throw error;
+    });
+  }
+
+  return pumpAccountsCoderPromise;
+}
+
+function readDecodedBigInt(decoded: Record<string, any>, ...keys: string[]): bigint {
+  for (const key of keys) {
+    const value = decoded[key];
+    if (value !== undefined && value !== null) {
+      if (typeof value === "bigint") return value;
+      if (typeof value === "number") return BigInt(value);
+      if (typeof value === "string") return BigInt(value);
+      if (typeof value?.toString === "function") return BigInt(value.toString());
+    }
+  }
+  return 0n;
+}
+
+function readDecodedBool(decoded: Record<string, any>, ...keys: string[]): boolean {
+  for (const key of keys) {
+    const value = decoded[key];
+    if (value !== undefined && value !== null) {
+      return Boolean(value);
+    }
+  }
+  return false;
+}
+
+function readDecodedPubkey(decoded: Record<string, any>, ...keys: string[]): PublicKey {
+  for (const key of keys) {
+    const value = decoded[key];
+    if (!value) continue;
+    if (value instanceof PublicKey) return value;
+    if (typeof value === "string") return new PublicKey(value);
+    if (typeof value?.toBase58 === "function") return new PublicKey(value.toBase58());
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) return new PublicKey(value);
+  }
+  throw new Error(`PUMPFUN_DECODED_PUBKEY_MISSING:${keys.join("|")}`);
+}
+
+async function resolveTokenProgramId(connection: Connection, mint: PublicKey): Promise<PublicKey> {
+  const mintInfo = await connection.getAccountInfo(mint, "confirmed");
+  if (!mintInfo?.owner) {
+    throw new Error(`MINT_ACCOUNT_NOT_FOUND:${mint.toBase58()}`);
+  }
+  return mintInfo.owner;
+}
+
+async function fetchGlobalAccount(connection: Connection): Promise<ParsedGlobalAccount> {
+  const globalAccount = PublicKey.findProgramAddressSync(
+    [Buffer.from("global")],
+    PUMPFUN_PROGRAM_ID
+  )[0];
+  const info = await connection.getAccountInfo(globalAccount, "confirmed");
+  if (!info?.data) {
+    throw new Error("PUMPFUN_GLOBAL_ACCOUNT_NOT_FOUND");
+  }
+
+  const data = Buffer.from(info.data);
+  const feeRecipients: PublicKey[] = [];
+  let offset = 162;
+  for (let i = 0; i < 7; i++) {
+    feeRecipients.push(readPubkey(data, offset));
+    offset += 32;
+  }
+
+  return {
+    feeRecipient: readPubkey(data, 41),
+    feeRecipients,
+    feeBasisPoints: Number(readU64LE(data, 105)),
+    creatorFeeBasisPoints: Number(readU64LE(data, 154)),
+  };
+}
+
+async function fetchBondingCurveAccount(
+  connection: Connection,
+  bondingCurve: PublicKey
+): Promise<ParsedBondingCurveAccount> {
+  const info = await connection.getAccountInfo(bondingCurve, "confirmed");
+  if (!info?.data) {
+    throw new Error(`PUMPFUN_BONDING_CURVE_NOT_FOUND:${bondingCurve.toBase58()}`);
+  }
+
+  try {
+    const coder = await getPumpAccountsCoder(connection);
+    const decoded = await coder.decode("BondingCurve", Buffer.from(info.data)) as Record<string, any> | null;
+    if (decoded) {
+      return {
+        virtualTokenReserves: readDecodedBigInt(decoded, "virtualTokenReserves", "virtual_token_reserves"),
+        virtualSolReserves: readDecodedBigInt(decoded, "virtualSolReserves", "virtual_sol_reserves"),
+        realTokenReserves: readDecodedBigInt(decoded, "realTokenReserves", "real_token_reserves"),
+        realSolReserves: readDecodedBigInt(decoded, "realSolReserves", "real_sol_reserves"),
+        tokenTotalSupply: readDecodedBigInt(decoded, "tokenTotalSupply", "token_total_supply"),
+        complete: readDecodedBool(decoded, "complete"),
+        creator: readDecodedPubkey(decoded, "creator"),
+        isCashbackCoin: readDecodedBool(decoded, "isCashbackCoin", "is_cashback_coin"),
+      };
+    }
+  } catch (decodeError) {
+    logger.warn(`⚠️ Falha ao decodificar BondingCurve via IDL para ${bondingCurve.toBase58()}, usando fallback legado: ${(decodeError as Error)?.message || decodeError}`);
+  }
+
+  const data = Buffer.from(info.data);
+  return {
+    virtualTokenReserves: readU64LE(data, 8),
+    virtualSolReserves: readU64LE(data, 16),
+    realTokenReserves: readU64LE(data, 24),
+    realSolReserves: readU64LE(data, 32),
+    tokenTotalSupply: readU64LE(data, 40),
+    complete: data[48] === 1,
+    creator: readPubkey(data, 49),
+    isCashbackCoin: data.length > 82 ? data[82] === 1 : false,
+  };
+}
+
+function calculateNetSpendableSol(spendableSolIn: bigint, totalFeeBps: number): bigint {
+  const feeBps = BigInt(Math.max(0, totalFeeBps));
+  if (spendableSolIn <= 0n) return 0n;
+  let netSol = (spendableSolIn * 10_000n) / (10_000n + feeBps);
+  const fees = ((netSol * feeBps) + 9_999n) / 10_000n;
+  if (netSol + fees > spendableSolIn) {
+    netSol -= netSol + fees - spendableSolIn;
+  }
+  return netSol > 0n ? netSol : 0n;
+}
+
+function calculateBuyExactSolInTokensOut(
+  bondingCurve: ParsedBondingCurveAccount,
+  spendableSolIn: bigint,
+  totalFeeBps: number
+): bigint {
+  if (bondingCurve.complete) {
+    throw new Error("PUMPFUN_CURVE_COMPLETE");
+  }
+  const netSol = calculateNetSpendableSol(spendableSolIn, totalFeeBps);
+  if (netSol <= 1n) return 0n;
+
+  const numerator = (netSol - 1n) * bondingCurve.virtualTokenReserves;
+  const denominator = bondingCurve.virtualSolReserves + netSol - 1n;
+  if (denominator <= 0n) return 0n;
+
+  const tokensOut = numerator / denominator;
+  return tokensOut < bondingCurve.realTokenReserves ? tokensOut : bondingCurve.realTokenReserves;
+}
+
+function calculateSellPrice(
+  bondingCurve: ParsedBondingCurveAccount,
+  amount: bigint,
+  totalFeeBps: number
+): bigint {
+  if (bondingCurve.complete) {
+    throw new Error("PUMPFUN_CURVE_COMPLETE");
+  }
+  if (amount <= 0n) return 0n;
+
+  const grossSol = (amount * bondingCurve.virtualSolReserves) / (bondingCurve.virtualTokenReserves + amount);
+  const fees = (grossSol * BigInt(Math.max(0, totalFeeBps))) / 10_000n;
+  const netSol = grossSol - fees;
+  return netSol > 0n ? netSol : 0n;
+}
+
+function applySlippageFloor(value: bigint, slippageBps: number): bigint {
+  const normalized = BigInt(Math.max(0, Math.min(10_000, slippageBps)));
+  if (value <= 0n) return 0n;
+  return (value * (10_000n - normalized)) / 10_000n;
+}
+
+function logInstructionDump(label: string, instruction: TransactionInstruction): void {
+  try {
+    logger.info(`🔬 [${label}] discriminator=${JSON.stringify([...instruction.data.slice(0, 8)])}`);
+    logger.info(`🔬 [${label}] data_hex=${instruction.data.toString("hex")}`);
+    logger.info(`🔬 [${label}] total_accounts=${instruction.keys.length}`);
+    instruction.keys.forEach((key, index) => {
+      logger.info(
+        `🔬 [${label}] [${index}] ${key.pubkey.toBase58()} writable=${key.isWritable} signer=${key.isSigner}`
+      );
+    });
+  } catch (error) {
+    logger.warn(`⚠️ Falha ao gerar dump da instrução ${label}:`, (error as Error)?.message || error);
+  }
+}
+
+async function logDetailedTransactionError(
+  connection: Connection,
+  context: string,
+  error: unknown
+): Promise<void> {
+  if (error instanceof SendTransactionError) {
+    try {
+      const logs = typeof (error as any).getLogs === "function"
+        ? await (error as any).getLogs(connection)
+        : Array.isArray((error as any).logs)
+          ? (error as any).logs
+          : null;
+      if (logs?.length) {
+        logger.error(`❌ ${context} preflight logs:\n${logs.join("\n")}`);
+      }
+    } catch (logError) {
+      logger.warn(`⚠️  Não foi possível obter logs detalhados do preflight em ${context}:`, (logError as Error)?.message || logError);
+    }
+    return;
+  }
+
+  const maybeLogs = (error as { logs?: string[] } | null)?.logs;
+  if (Array.isArray(maybeLogs) && maybeLogs.length) {
+    logger.error(`❌ ${context} preflight logs:\n${maybeLogs.join("\n")}`);
+  }
+}
+
+function extractSignatureFromError(error: unknown): string | null {
+  const directSignature = (error as { signature?: unknown } | null)?.signature;
+  if (typeof directSignature === "string" && directSignature.length > 40) {
+    return directSignature;
+  }
+
+  const message = (error as { message?: unknown } | null)?.message;
+  if (typeof message !== "string") return null;
+
+  const match = message.match(/Signature\\s+([1-9A-HJ-NP-Za-km-z]{80,90})\\s+has expired/);
+  return match?.[1] || null;
+}
+
+async function recoverConfirmedSignature(
+  connection: Connection,
+  error: unknown,
+  context: string
+): Promise<string | null> {
+  const signature = extractSignatureFromError(error);
+  if (!signature) return null;
+
+  const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+  const value = status.value;
+  if (value?.err === null) {
+    logger.warn(`⚠️ ${context}: confirmação local expirou, mas assinatura está on-chain com sucesso: ${signature}`);
+    return signature;
+  }
+
+  return null;
+}
+
+async function resolvePumpFunTradeContext(
+  connection: Connection,
+  mintPublicKey: PublicKey
+): Promise<{
+  tokenProgramId: PublicKey;
+  bondingCurve: PublicKey;
+  associatedBondingCurve: PublicKey;
+  associatedUser: PublicKey;
+  creator: PublicKey;
+  creatorVault: PublicKey;
+  globalAccount: ParsedGlobalAccount;
+  bondingCurveAccount: ParsedBondingCurveAccount;
+  feeRecipient: PublicKey;
+}> {
+  const signer = getTradingKeypair();
+  const tokenProgramId = await resolveTokenProgramId(connection, mintPublicKey);
+  const bondingCurve = PublicKey.findProgramAddressSync(
+    [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
+    PUMPFUN_PROGRAM_ID
+  )[0];
+  const [globalAccount, bondingCurveAccount, currentSlot] = await Promise.all([
+    fetchGlobalAccount(connection),
+    fetchBondingCurveAccount(connection, bondingCurve),
+    connection.getSlot("processed").catch(() => 0),
+  ]);
+  const recipients = [globalAccount.feeRecipient, ...globalAccount.feeRecipients];
+  const feeRecipient = recipients[currentSlot % recipients.length] || globalAccount.feeRecipient;
+  const creator = bondingCurveAccount.creator;
+  const creatorVault = PublicKey.findProgramAddressSync(
+    [Buffer.from("creator-vault"), creator.toBuffer()],
+    PUMPFUN_PROGRAM_ID
+  )[0];
+  const associatedBondingCurve = await getAssociatedTokenAddress(
+    mintPublicKey,
+    bondingCurve,
+    true,
+    tokenProgramId,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  const associatedUser = await getAssociatedTokenAddress(
+    mintPublicKey,
+    signer.publicKey,
+    false,
+    tokenProgramId,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+
+  return {
+    tokenProgramId,
+    bondingCurve,
+    associatedBondingCurve,
+    associatedUser,
+    creator,
+    creatorVault,
+    globalAccount,
+    bondingCurveAccount,
+    feeRecipient,
+  };
+}
 
 // Função helper para obter conexão otimizada
 async function getConnection(): Promise<Connection> {
@@ -262,9 +702,9 @@ async function getTokenPrice(tokenMint: string): Promise<PriceInfo | null> {
  * Verifica condições de saída (TP, SL, Trailing Stop, Whale Dump)
  */
 export function checkExitConditions(
-  currentPrice: number,
+  currentValue: number,
   highWaterMark: number,
-  entryPrice: number,
+  entryValue: number,
   takeProfitPercent: number,
   stopLossPercent: number,
   trailingStopPercent: number = 0,
@@ -279,13 +719,13 @@ export function checkExitConditions(
   newHighWaterMark: number;
   newStopLossPrice: number;
 } {
-  const profitLossPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+  const profitLossPercent = ((currentValue - entryValue) / entryValue) * 100;
   let status = {
     shouldExit: false,
     reason: "",
     profitLossPercent,
-    newHighWaterMark: Math.max(highWaterMark, currentPrice),
-    newStopLossPrice: entryPrice * (1 - stopLossPercent / 100)
+    newHighWaterMark: Math.max(highWaterMark, currentValue),
+    newStopLossPrice: entryValue * (1 - stopLossPercent / 100)
   };
 
   // 1. Whale Dump Check (sudden drop from peak)
@@ -310,8 +750,8 @@ export function checkExitConditions(
 
   // 3. Take Profit
   let finalTpPercent = takeProfitPercent;
-  if (atr && atrMultiplierTp > 0) {
-    const atrTpPercent = (atr * atrMultiplierTp / entryPrice) * 100;
+  if (atr && atrMultiplierTp > 0 && entryValue > 0) {
+    const atrTpPercent = (atr * atrMultiplierTp / entryValue) * 100;
     // Use the wider of the two to avoid premature exits in high volatility
     finalTpPercent = Math.max(takeProfitPercent, atrTpPercent);
   }
@@ -323,17 +763,17 @@ export function checkExitConditions(
 
   // 4. Stop Loss (Traditional, Trailing, or Volatility-Adjusted)
   let finalSlPrice = status.newStopLossPrice;
-  if (atr && atrMultiplierSl > 0) {
-    const atrSlPrice = entryPrice - (atr * atrMultiplierSl);
+  if (atr && atrMultiplierSl > 0 && entryValue > 0) {
+    const atrSlPrice = entryValue - (atr * atrMultiplierSl);
     // Use the lower of the two (more permissive) in high volatility to avoid stop-hunting
     finalSlPrice = Math.min(status.newStopLossPrice, atrSlPrice);
   }
 
-  if (currentPrice <= finalSlPrice) {
+  if (currentValue <= finalSlPrice) {
     let slReason = "Stop Loss Hit";
-    if (finalSlPrice < entryPrice * (1 - stopLossPercent / 100)) {
-      slReason = `Volatility-Adjusted SL Hit (${((finalSlPrice - entryPrice) / entryPrice * 100).toFixed(1)}%)`;
-    } else if (status.newStopLossPrice > (entryPrice * (1 - stopLossPercent / 100))) {
+    if (finalSlPrice < entryValue * (1 - stopLossPercent / 100)) {
+      slReason = `Volatility-Adjusted SL Hit (${((finalSlPrice - entryValue) / entryValue * 100).toFixed(1)}%)`;
+    } else if (status.newStopLossPrice > (entryValue * (1 - stopLossPercent / 100))) {
       slReason = "Trailing Stop Hit";
     }
     return { ...status, shouldExit: true, reason: slReason };
@@ -1047,9 +1487,7 @@ export function hasActiveTrade(): boolean {
     return false; // Se o modo single trade não estiver habilitado, permitir múltiplos trades
   }
 
-  // Verificar se há posições ativas
-  const activePositions = positionManager.getActivePositions();
-  return activePositions.length > 0;
+  return getEffectiveOpenPositionsCount() > 0;
 }
 
 /**
@@ -1076,97 +1514,139 @@ export function isTradeTypeAllowed(tradeType: string): boolean {
  */
 export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promise<string> {
   logger.info(`🛒 Iniciando compra do token ${tokenMint} na PumpFun`);
+  let buyPhase = "init";
 
   try {
+    buyPhase = "signer";
     const signer = getTradingKeypair();
     // OTIMIZAÇÃO: Obter conexão do pool de RPCs
+    buyPhase = "connection";
     const connection = await getConnection();
 
-    // Converter amountSol para lamports (1 SOL = 10^9 lamports)
-    const amountLamports = Math.floor(amountSol * 1e9);
-
-    // Obter endereços necessários
+    buyPhase = "mint-public-key";
     const mintPublicKey = new PublicKey(tokenMint);
-    const globalAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("global")],
-      PUMPFUN_PROGRAM_ID
-    )[0];
-
-    const feeRecipient = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
-
-    const bondingCurve = PublicKey.findProgramAddressSync(
-      [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
-      PUMPFUN_PROGRAM_ID
-    )[0];
-
-    const associatedBondingCurve = await getAssociatedTokenAddress(
-      mintPublicKey,
-      bondingCurve,
-      true
-    );
-
-    const associatedUser = await getAssociatedTokenAddress(
-      mintPublicKey,
-      signer.publicKey
-    );
+    buyPhase = "amount-lamports";
+    const amountLamports = BigInt(Math.floor(amountSol * 1e9));
+    buyPhase = "trade-context";
+    const tradeContext = await resolvePumpFunTradeContext(connection, mintPublicKey);
 
     // OTIMIZAÇÃO: Slippage adaptativo baseado na liquidez do token
+    buyPhase = "slippage";
     const currentConfig = getRuntimeConfig();
     const DEFAULT_SLIPPAGE_BPS = currentConfig.SLIPPAGE_BPS || 50;
-    const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
-    const maxSolCost = Math.floor(amountLamports * (1 + slippageBps / 10000));
+    const quotedSlippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
+    const slippageBps = Math.max(quotedSlippageBps, 1000);
+    // Pump debit the spendable amount as-is; rent for creator_vault/UVA is charged separately.
+    const spendableLamports = amountLamports;
+    const totalFeeBps = tradeContext.globalAccount.feeBasisPoints + tradeContext.globalAccount.creatorFeeBasisPoints;
+    const expectedTokensOut = calculateBuyExactSolInTokensOut(
+      tradeContext.bondingCurveAccount,
+      spendableLamports,
+      totalFeeBps
+    );
+    const minTokensOut = applySlippageFloor(expectedTokensOut, slippageBps);
+    const jitoTip = createJitoTipInstruction(signer.publicKey, currentConfig.JITO_TIP_AMOUNT);
 
-    // Criar instrução de compra
+    if (expectedTokensOut <= 0n) {
+      throw new Error(`PUMPFUN_BUY_QUOTE_EMPTY:${tokenMint}`);
+    }
+
+    const setupInstructions: TransactionInstruction[] = [];
+    const bondingCurveV2 = PublicKey.findProgramAddressSync(
+      [Buffer.from("bonding-curve-v2"), mintPublicKey.toBuffer()],
+      PUMPFUN_PROGRAM_ID
+    )[0];
+    const userVolumeAccumulator = PublicKey.findProgramAddressSync(
+      [Buffer.from("user_volume_accumulator"), signer.publicKey.toBuffer()],
+      PUMPFUN_PROGRAM_ID
+    )[0];
+    const userVolumeAccumulatorInfo = await connection.getAccountInfo(userVolumeAccumulator, "confirmed");
+    const walletBalance = await connection.getBalance(signer.publicKey, "confirmed");
+    logger.info(
+      `🧾 [PumpBuy] mint=${tokenMint} spendable_sol_in=${spendableLamports.toString()} min_tokens_out=${minTokensOut.toString()} expected_tokens_out=${expectedTokensOut.toString()} slippage_bps=${slippageBps} track_volume=true uva_exists=${Boolean(userVolumeAccumulatorInfo)} wallet_balance=${walletBalance} token_program=${tradeContext.tokenProgramId.toBase58()} assoc_bc=${tradeContext.associatedBondingCurve.toBase58()} bc_v2=${bondingCurveV2.toBase58()} creator=${tradeContext.creator.toBase58()} creator_vault=${tradeContext.creatorVault.toBase58()}`
+    );
+    buyPhase = "associated-user-check";
+    const associatedUserInfo = await connection.getAccountInfo(tradeContext.associatedUser, "confirmed");
+    if (!associatedUserInfo) {
+      buyPhase = "associated-user-create-ix";
+      setupInstructions.push(
+        createAssociatedTokenAccountInstruction(
+          signer.publicKey,
+          tradeContext.associatedUser,
+          signer.publicKey,
+          mintPublicKey,
+          tradeContext.tokenProgramId,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+    }
+
+    buyPhase = "build-buy-instruction";
     const buyInstruction = new TransactionInstruction({
       programId: PUMPFUN_PROGRAM_ID,
       keys: [
-        { pubkey: globalAccount, isSigner: false, isWritable: false },
-        { pubkey: feeRecipient, isSigner: false, isWritable: true },
+        { pubkey: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMPFUN_PROGRAM_ID)[0], isSigner: false, isWritable: false },
+        { pubkey: tradeContext.feeRecipient, isSigner: false, isWritable: true },
         { pubkey: mintPublicKey, isSigner: false, isWritable: false },
-        { pubkey: bondingCurve, isSigner: false, isWritable: true },
-        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-        { pubkey: associatedUser, isSigner: false, isWritable: true },
+        { pubkey: tradeContext.bondingCurve, isSigner: false, isWritable: true },
+        { pubkey: tradeContext.associatedBondingCurve, isSigner: false, isWritable: true },
+        { pubkey: tradeContext.associatedUser, isSigner: false, isWritable: true },
         { pubkey: signer.publicKey, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // rent
+        { pubkey: tradeContext.tokenProgramId, isSigner: false, isWritable: false },
+        { pubkey: tradeContext.creatorVault, isSigner: false, isWritable: true },
+        { pubkey: PUMPFUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+        { pubkey: PUMPFUN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: PUMPFUN_GLOBAL_VOLUME_ACCUMULATOR, isSigner: false, isWritable: false },
+        { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
+        { pubkey: PUMPFUN_FEE_CONFIG, isSigner: false, isWritable: false },
+        { pubkey: PUMPFUN_FEE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: bondingCurveV2, isSigner: false, isWritable: false },
       ],
       data: Buffer.concat([
-        Buffer.from([110, 159, 49, 139, 158, 125, 146, 204]), // Discriminator for "buy"
-        new BN(amountLamports).toArrayLike(Buffer, "le", 8), // amount
-        new BN(maxSolCost).toArrayLike(Buffer, "le", 8), // maxSolCost
+        Buffer.from([56, 252, 116, 8, 158, 223, 205, 95]), // buy_exact_sol_in
+        new BN(spendableLamports.toString()).toArrayLike(Buffer, "le", 8), // spendable_sol_in
+        new BN(minTokensOut.toString()).toArrayLike(Buffer, "le", 8), // min_tokens_out
+        Buffer.from([1]), // track_volume = true
       ]),
     });
+    logInstructionDump("BuyIx", buyInstruction);
 
     // Criar transação
+    buyPhase = "latest-blockhash";
     const latestBlockhash = await connection.getLatestBlockhash();
 
     // OTIMIZAÇÃO: Gas pricing dinâmico
+    buyPhase = "gas-price";
     const gasPrice = await getCachedDynamicGasPrice(connection).catch(() => 10000);
 
     // Preparar mensagem da transação (v0 para Jito, legacy para fallback)
+    buyPhase = "build-v0-message";
     const messageV0 = new TransactionMessage({
       payerKey: signer.publicKey,
       recentBlockhash: latestBlockhash.blockhash,
       instructions: [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
         ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        ...setupInstructions,
+        jitoTip.instruction,
         buyInstruction
       ],
     }).compileToV0Message();
 
+    buyPhase = "sign-v0-transaction";
     const versionedTransaction = new VersionedTransaction(messageV0);
     versionedTransaction.sign([signer]);
 
     // Tentar enviar via Jito primeiro
     try {
+      buyPhase = "jito-send";
       logger.info("⚡ Tentando enviar via Jito Bundle...");
+      logger.info(`💸 Tip Jito embutida na compra: ${jitoTip.tipAmountSol} SOL -> ${jitoTip.tipAccount.toBase58()}`);
       const signature = await sendJitoBundle(
         [versionedTransaction],
         signer,
-        connection,
-        currentConfig.JITO_TIP_AMOUNT
+        connection
       );
       logger.info(`✅ Compra realizada com sucesso via Jito: ${signature}`);
       return signature;
@@ -1174,22 +1654,31 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
       logger.warn("⚠️  Falha no envio Jito, tentando fallback para RPC padrão:", jitoError.message);
 
       // Fallback para envio padrão
+      buyPhase = "rpc-fallback-build";
       const transaction = new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
         ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        ...setupInstructions,
         buyInstruction
       );
 
-      const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
-        commitment: "confirmed",
-        skipPreflight: false,
-      });
+      try {
+        buyPhase = "rpc-send";
+        logInstructionDump("BuyIxRpcFallback", buyInstruction);
+        const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
+          commitment: "confirmed",
+          skipPreflight: false,
+        });
 
-      logger.info(`✅ Compra realizada com sucesso (Standard RPC): ${signature}`);
-      return signature;
+        logger.info(`✅ Compra realizada com sucesso (Standard RPC): ${signature}`);
+        return signature;
+      } catch (rpcError) {
+        await logDetailedTransactionError(connection, `compra ${tokenMint}`, rpcError);
+        throw rpcError;
+      }
     }
   } catch (error) {
-    logger.error(`❌ Erro na compra do token ${tokenMint}:`, error);
+    logger.error(`❌ Erro na compra do token ${tokenMint} [fase=${buyPhase}]:`, error);
     throw error;
   }
 }
@@ -1218,107 +1707,182 @@ export async function sellOnPumpFun(
       throw new Error(`Quantidade insuficiente para venda de ${tokenMint}`);
     }
 
-    // Obter endereços necessários
-    const mintPublicKey = new PublicKey(tokenMint);
-    const globalAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("global")],
-      PUMPFUN_PROGRAM_ID
-    )[0];
-
-    const feeRecipient = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
-
-    const bondingCurve = PublicKey.findProgramAddressSync(
-      [Buffer.from("bonding-curve"), mintPublicKey.toBuffer()],
-      PUMPFUN_PROGRAM_ID
-    )[0];
-
-    const associatedBondingCurve = await getAssociatedTokenAddress(
-      mintPublicKey,
-      bondingCurve,
-      true
-    );
-
-    const associatedUser = await getAssociatedTokenAddress(
-      mintPublicKey,
-      signer.publicKey
-    );
-
     const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
-    const slippageMultiplier = 1 - (slippageBps / 10000);
-    const minSolOutput = Math.floor(amount * slippageMultiplier);
+    const mintPublicKey = new PublicKey(tokenMint);
+    const u64Max = 18_446_744_073_709_551_615n;
+    const sellOverflowSafetyBps = 8_000n;
+    let remainingAmount = BigInt(amount);
+    const signatures: string[] = [];
+    let chunkIndex = 0;
 
-    // Criar instrução de venda
-    const sellInstruction = new TransactionInstruction({
-      programId: PUMPFUN_PROGRAM_ID,
-      keys: [
-        { pubkey: globalAccount, isSigner: false, isWritable: false },
-        { pubkey: feeRecipient, isSigner: false, isWritable: true },
-        { pubkey: mintPublicKey, isSigner: false, isWritable: false },
-        { pubkey: bondingCurve, isSigner: false, isWritable: true },
-        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-        { pubkey: associatedUser, isSigner: false, isWritable: true },
-        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      ],
-      data: Buffer.concat([
-        Buffer.from([51, 230, 133, 164, 1, 127, 131, 173]), // Discriminator for "sell"
-        new BN(amount).toArrayLike(Buffer, "le", 8), // amount
-        new BN(minSolOutput).toArrayLike(Buffer, "le", 8), // minSolOutput
-      ]),
-    });
+    const getSafeChunkAmount = (context: Awaited<ReturnType<typeof resolvePumpFunTradeContext>>): bigint => {
+      const virtualSolReserves = context.bondingCurveAccount.virtualSolReserves;
+      if (virtualSolReserves <= 0n) {
+        throw new Error("PUMPFUN_INVALID_VIRTUAL_SOL_RESERVES");
+      }
+      const hardLimit = u64Max / virtualSolReserves;
+      const safeLimit = (hardLimit * sellOverflowSafetyBps) / 10_000n;
+      if (safeLimit <= 0n) {
+        throw new Error("PUMPFUN_SELL_CHUNK_LIMIT_ZERO");
+      }
+      return safeLimit;
+    };
 
-    // Criar transação
-    const latestBlockhash = await connection.getLatestBlockhash();
-
-    // OTIMIZAÇÃO: Gas pricing dinâmico
-    const gasPrice = await getCachedDynamicGasPrice(connection).catch(() => 10000);
-
-    // Preparar mensagem da transação (v0 para Jito, legacy para fallback)
-    const messageV0 = new TransactionMessage({
-      payerKey: signer.publicKey,
-      recentBlockhash: latestBlockhash.blockhash,
-      instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
-        sellInstruction
-      ],
-    }).compileToV0Message();
-
-    const versionedTransaction = new VersionedTransaction(messageV0);
-    versionedTransaction.sign([signer]);
-
-    // Tentar enviar via Jito primeiro
-    try {
-      logger.info("⚡ Tentando enviar VENDA via Jito Bundle...");
-      const signature = await sendJitoBundle(
-        [versionedTransaction],
-        signer,
-        connection,
-        currentConfig.JITO_TIP_AMOUNT
+    const executeSellChunk = async (
+      tradeContext: Awaited<ReturnType<typeof resolvePumpFunTradeContext>>,
+      chunkAmount: bigint,
+      useJito: boolean
+    ): Promise<string> => {
+      const bondingCurveV2 = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve-v2"), mintPublicKey.toBuffer()],
+        PUMPFUN_PROGRAM_ID
+      )[0];
+      const userVolumeAccumulator = PublicKey.findProgramAddressSync(
+        [Buffer.from("user_volume_accumulator"), signer.publicKey.toBuffer()],
+        PUMPFUN_PROGRAM_ID
+      )[0];
+      const buybackFeeRecipient = getRandomPumpFunBuybackFeeRecipient();
+      const totalFeeBps = tradeContext.globalAccount.feeBasisPoints + tradeContext.globalAccount.creatorFeeBasisPoints;
+      const quotedSellOutput = calculateSellPrice(
+        tradeContext.bondingCurveAccount,
+        chunkAmount,
+        totalFeeBps
       );
-      logger.info(`✅ Venda realizada com sucesso via Jito: ${signature}`);
-      return signature;
-    } catch (jitoError) {
-      logger.warn("⚠️  Falha no envio Jito (Venda), tentando fallback para RPC padrão:", jitoError.message);
+      const minSolOutput = applySlippageFloor(quotedSellOutput, slippageBps);
 
-      // Fallback para envio padrão
+      const remainingSellAccounts: AccountMeta[] = [
+        ...(tradeContext.bondingCurveAccount.isCashbackCoin
+          ? [{ pubkey: userVolumeAccumulator, isSigner: false, isWritable: true }]
+          : []),
+        { pubkey: bondingCurveV2, isSigner: false, isWritable: false },
+        { pubkey: buybackFeeRecipient, isSigner: false, isWritable: true },
+      ];
+
+      const sellInstruction = new TransactionInstruction({
+        programId: PUMPFUN_PROGRAM_ID,
+        keys: [
+          { pubkey: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMPFUN_PROGRAM_ID)[0], isSigner: false, isWritable: false },
+          { pubkey: tradeContext.feeRecipient, isSigner: false, isWritable: true },
+          { pubkey: mintPublicKey, isSigner: false, isWritable: false },
+          { pubkey: tradeContext.bondingCurve, isSigner: false, isWritable: true },
+          { pubkey: tradeContext.associatedBondingCurve, isSigner: false, isWritable: true },
+          { pubkey: tradeContext.associatedUser, isSigner: false, isWritable: true },
+          { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: tradeContext.creatorVault, isSigner: false, isWritable: true },
+          { pubkey: tradeContext.tokenProgramId, isSigner: false, isWritable: false },
+          { pubkey: PUMPFUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+          { pubkey: PUMPFUN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: PUMPFUN_FEE_CONFIG, isSigner: false, isWritable: false },
+          { pubkey: PUMPFUN_FEE_PROGRAM_ID, isSigner: false, isWritable: false },
+          ...remainingSellAccounts,
+        ],
+        data: Buffer.concat([
+          Buffer.from([51, 230, 133, 164, 1, 127, 131, 173]), // Discriminator for "sell"
+          new BN(chunkAmount.toString()).toArrayLike(Buffer, "le", 8), // amount
+          new BN(minSolOutput.toString()).toArrayLike(Buffer, "le", 8), // minSolOutput
+        ]),
+      });
+
+      logger.info(
+        `🧾 [PumpSell] mint=${tokenMint} chunk=${chunkIndex + 1} amount_raw=${chunkAmount.toString()} ` +
+        `remaining_before=${remainingAmount.toString()} min_sol_output=${minSolOutput.toString()} ` +
+        `slippage_bps=${slippageBps} token_program=${tradeContext.tokenProgramId.toBase58()} ` +
+        `assoc_bc=${tradeContext.associatedBondingCurve.toBase58()} bc_v2=${bondingCurveV2.toBase58()} ` +
+        `cashback=${tradeContext.bondingCurveAccount.isCashbackCoin} ` +
+        `uva=${tradeContext.bondingCurveAccount.isCashbackCoin ? userVolumeAccumulator.toBase58() : "none"} ` +
+        `buyback_fee_recipient=${buybackFeeRecipient.toBase58()}`
+      );
+      logInstructionDump("SellIx", sellInstruction);
+
+      const gasPrice = await getCachedDynamicGasPrice(connection).catch(() => 10000);
+
+      if (useJito) {
+        const jitoTip = createJitoTipInstruction(signer.publicKey, currentConfig.JITO_TIP_AMOUNT);
+        const latestBlockhash = await connection.getLatestBlockhash();
+        const messageV0 = new TransactionMessage({
+          payerKey: signer.publicKey,
+          recentBlockhash: latestBlockhash.blockhash,
+          instructions: [
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+            jitoTip.instruction,
+            sellInstruction
+          ],
+        }).compileToV0Message();
+
+        const versionedTransaction = new VersionedTransaction(messageV0);
+        versionedTransaction.sign([signer]);
+
+        try {
+          logger.info("⚡ Tentando enviar VENDA via Jito Bundle...");
+          logger.info(`💸 Tip Jito embutida na venda: ${jitoTip.tipAmountSol} SOL -> ${jitoTip.tipAccount.toBase58()}`);
+          const signature = await sendJitoBundle(
+            [versionedTransaction],
+            signer,
+            connection
+          );
+          logger.info(`✅ Venda realizada com sucesso via Jito: ${signature}`);
+          return signature;
+        } catch (jitoError) {
+          logger.warn("⚠️  Falha no envio Jito (Venda), tentando fallback para RPC padrão:", jitoError.message);
+        }
+      }
+
       const transaction = new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
         ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
         sellInstruction
       );
 
-      const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
-        commitment: "confirmed",
-        skipPreflight: false,
-      });
+      try {
+        const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
+          commitment: "confirmed",
+          skipPreflight: false,
+        });
 
-      logger.info(`✅ Venda realizada com sucesso (Standard RPC): ${signature}`);
+        logger.info(`✅ Venda realizada com sucesso (Standard RPC): ${signature}`);
+        return signature;
+      } catch (rpcError) {
+        const recoveredSignature = await recoverConfirmedSignature(connection, rpcError, `venda ${tokenMint}`);
+        if (recoveredSignature) {
+          return recoveredSignature;
+        }
 
-      return signature;
+        await logDetailedTransactionError(connection, `venda ${tokenMint}`, rpcError);
+        throw rpcError;
+      }
+    };
+
+    const initialContext = await resolvePumpFunTradeContext(connection, mintPublicKey);
+    const initialSafeChunk = getSafeChunkAmount(initialContext);
+    const chunkedSell = remainingAmount > initialSafeChunk;
+    if (chunkedSell) {
+      logger.warn(
+        `🧩 [PumpSell] Venda em chunks ativada para evitar overflow: total=${remainingAmount.toString()} ` +
+        `safe_chunk_initial=${initialSafeChunk.toString()} virtual_sol_reserves=${initialContext.bondingCurveAccount.virtualSolReserves.toString()}`
+      );
     }
+
+    while (remainingAmount > 0n) {
+      const tradeContext = chunkIndex === 0
+        ? initialContext
+        : await resolvePumpFunTradeContext(connection, mintPublicKey);
+      const safeChunkAmount = getSafeChunkAmount(tradeContext);
+      const chunkAmount = remainingAmount > safeChunkAmount ? safeChunkAmount : remainingAmount;
+      const signature = await executeSellChunk(tradeContext, chunkAmount, !chunkedSell);
+      signatures.push(signature);
+      remainingAmount -= chunkAmount;
+      chunkIndex += 1;
+
+      if (remainingAmount > 0n) {
+        logger.info(`🧩 [PumpSell] Chunk ${chunkIndex} confirmado. Restante=${remainingAmount.toString()} raw tokens`);
+        await new Promise(resolve => setTimeout(resolve, 800));
+      }
+    }
+
+    logger.info(`✅ Venda PumpFun concluída em ${signatures.length} chunk(s): ${signatures.join(",")}`);
+    return signatures[signatures.length - 1];
   } catch (error) {
     logger.error(`❌ Erro na venda do token ${tokenMint}:`, error);
     throw error;
@@ -1472,6 +2036,7 @@ export async function executeHybridTrade(
     signature: signature || null,
   });
   const currentConfig = getRuntimeConfig();
+  let reservedBuySlot = false;
 
   // 🚨 EMERGENCY STOP CHECK 🚨
   if ((currentConfig as any).EMERGENCY_STOP_ACTIVE) {
@@ -1509,7 +2074,8 @@ export async function executeHybridTrade(
         return skip("AUTO_BUY_DISABLED");
       }
 
-      const isDiscoveryBuy = tokenData.mode === "CURVE" && tokenData.curvePercent >= 97.7;
+      const discoveryBuyMinCurvePercent = Number((currentConfig as any).PUMPFUN_DISCOVERY_MIN_PROGRESS || 90);
+      const isDiscoveryBuy = tokenData.mode === "CURVE" && tokenData.curvePercent >= discoveryBuyMinCurvePercent;
       const isReentryBuy = tokenData.mode === "REENTRY";
       if (isDiscoveryBuy || isReentryBuy || force) {
         if (SINGLE_TRADE_MODE && hasActiveTrade() && !force) {
@@ -1524,6 +2090,14 @@ export async function executeHybridTrade(
         if (force && buyAmountOverrideSol === undefined) {
           tradeSolAmount = (currentConfig as any).COPY_TRADE_AMOUNT_SOL || tradeSolAmount;
         }
+
+        const buySlotReservation = reserveBuySlot(tokenData.mint, tradeSolAmount);
+        if (!buySlotReservation.ok) {
+          logger.warn(`⛔ [BUY_SLOT] ${tokenData.mint} bloqueado: ${buySlotReservation.reason}`);
+          return skip(buySlotReservation.reason);
+        }
+        reservedBuySlot = true;
+        logger.info(`🧮 [BUY_SLOT] reservado ${tokenData.mint} | effectiveOpen=${getEffectiveOpenPositionsCount()}`);
 
         logger.info(`💰 Comprando token ${tokenData.mint} (Amount: ${tradeSolAmount} SOL, Force: ${force})`);
         const balanceBefore = await getWalletTokenBalanceSnapshot(tokenData.mint).catch(() => ({
@@ -1577,6 +2151,8 @@ export async function executeHybridTrade(
         };
 
         await positionManager.savePosition(position);
+        releaseBuySlot(tokenData.mint);
+        reservedBuySlot = false;
         circuitBreaker.recordSuccess(0);
         notifyDashboardUpdate();
         return done("BUY_EXECUTED", signature);
@@ -1597,7 +2173,6 @@ export async function executeHybridTrade(
         if (!walletBalance || walletBalance.rawAmount <= 0) {
           logger.warn(`⚠️  Nenhum saldo encontrado na wallet para ${tokenData.mint}. Fechando posição local.`);
           await positionManager.closePosition(tokenData.mint, {
-            buyTokenAmount: 0,
             lastKnownTokenBalanceRaw: 0,
             lastKnownTokenBalanceUi: 0,
             lastBalanceSyncedAt: Date.now(),
@@ -1630,24 +2205,28 @@ export async function executeHybridTrade(
         }
 
         const currentPrice = quote?.pricePerTokenSol || 0;
+        const buyValueSol = Number(position.buySolAmount || 0);
         const buyPrice = getPositionEntryPrice(position)
           || (walletBalance.uiAmount > 0 ? position.buySolAmount / walletBalance.uiAmount : 0);
-        if (!(buyPrice > 0) && !force) {
-          logger.warn(`⚠️  Não foi possível determinar preço de entrada para ${tokenData.mint}.`);
-          return skip("ENTRY_PRICE_UNAVAILABLE");
+        if (!(buyValueSol > 0) && !force) {
+          logger.warn(`⚠️  Não foi possível determinar valor de entrada para ${tokenData.mint}.`);
+          return skip("ENTRY_VALUE_UNAVAILABLE");
         }
         const highWaterMark = Math.max(
           Number(position.lastHighPrice || 0),
-          currentPrice || 0,
-          buyPrice || 0
+          Number(quote?.estimatedSolOutput || 0),
+          buyValueSol || 0
         );
 
         const atr = getATR(tokenData.mint);
+        const tpPercent = autoSellTakeProfit && quote?.confidence === "quote"
+          ? (position.takeProfit || TAKE_PROFIT_PERCENT)
+          : Number.POSITIVE_INFINITY;
         const exitResult = checkExitConditions(
-          currentPrice || buyPrice,
-          highWaterMark || buyPrice,
-          buyPrice,
-          autoSellTakeProfit ? (position.takeProfit || TAKE_PROFIT_PERCENT) : Number.POSITIVE_INFINITY,
+          Number(quote?.estimatedSolOutput || 0) || buyValueSol,
+          highWaterMark || buyValueSol,
+          buyValueSol,
+          tpPercent,
           (autoSellStopLoss && stopLossEnabled) ? (position.stopLoss || STOP_LOSS_PERCENT) : 100,
           (currentConfig as any).TRAILING_STOP_PERCENT || 0,
           (currentConfig as any).WHALE_DUMP_PERCENT || 30,
@@ -1749,6 +2328,10 @@ export async function executeHybridTrade(
       return skip("SELL_POSITION_NOT_FOUND");
     }
   } catch (error: any) {
+    if (reservedBuySlot) {
+      releaseBuySlot(tokenData.mint);
+      reservedBuySlot = false;
+    }
     const errorMsg = error?.message || String(error);
     const normalizedErrorMsg = errorMsg.toLowerCase();
     logger.error(`❌ Erro ao executar trade híbrido para token ${tokenData.mint}:`, error);
@@ -1771,10 +2354,19 @@ export async function executeHybridTrade(
       'slippage tolerance exceeded',
       'insufficient funds',
       'already been processed',
+      'non-base58',
     ].some(pattern => normalizedErrorMsg.includes(pattern));
 
-    if (isRpcError || isSimulationOrPreflightError) {
-      const errorClass = isSimulationOrPreflightError ? 'simulação/preflight' : 'RPC/rede';
+    const isMarketConditionError = [
+      'pumpfun_curve_complete',
+      'mintokensnotmet',
+      '0x179a',
+    ].some(pattern => normalizedErrorMsg.includes(pattern));
+
+    if (isRpcError || isSimulationOrPreflightError || isMarketConditionError) {
+      const errorClass = isMarketConditionError
+        ? 'mercado/curva'
+        : (isSimulationOrPreflightError ? 'simulação/preflight' : 'RPC/rede');
       logger.warn(`⚠️ Erro de ${errorClass}: ${errorMsg.substring(0, 160)}`);
     } else {
       circuitBreaker.recordFailure(error);
