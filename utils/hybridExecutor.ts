@@ -2093,8 +2093,9 @@ export async function executeHybridTrade(
 
         const buySlotReservation = reserveBuySlot(tokenData.mint, tradeSolAmount);
         if (!buySlotReservation.ok) {
-          logger.warn(`⛔ [BUY_SLOT] ${tokenData.mint} bloqueado: ${buySlotReservation.reason}`);
-          return skip(buySlotReservation.reason);
+          const blockedReason = "reason" in buySlotReservation ? buySlotReservation.reason : "BUY_SLOT_BLOCKED";
+          logger.warn(`⛔ [BUY_SLOT] ${tokenData.mint} bloqueado: ${blockedReason}`);
+          return skip(blockedReason);
         }
         reservedBuySlot = true;
         logger.info(`🧮 [BUY_SLOT] reservado ${tokenData.mint} | effectiveOpen=${getEffectiveOpenPositionsCount()}`);

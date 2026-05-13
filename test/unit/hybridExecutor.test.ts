@@ -75,17 +75,52 @@ jest.mock('@solana/web3.js', () => {
 
 jest.mock('../../utils/jitoManager', () => ({
     sendJitoBundle: jest.fn().mockResolvedValue('jito-sig'),
+    createJitoTipInstruction: jest.fn(() => ({
+        instruction: {
+            programId: {
+                toBase58: () => '11111111111111111111111111111111',
+                toString: () => '11111111111111111111111111111111',
+                toBuffer: () => Buffer.alloc(32),
+            },
+            keys: [],
+            data: Buffer.alloc(0),
+        },
+        tipAccount: {
+            toBase58: () => '11111111111111111111111111111111',
+            toString: () => '11111111111111111111111111111111',
+            toBuffer: () => Buffer.alloc(32),
+        },
+        tipAmountSol: 0.0001,
+    })),
 }));
 
-jest.mock('../../utils/rpcPool', () => ({
-    rpcPool: {
-        getBestConnection: jest.fn().mockResolvedValue({
+jest.mock('../../utils/rpcPool', () => {
+    const owner = {
+        toBase58: () => '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
+        toBuffer: () => Buffer.alloc(32),
+    };
+    const accountData = Buffer.alloc(400);
+    accountData.writeBigUInt64LE(1_000_000_000_000n, 8);
+    accountData.writeBigUInt64LE(1_000_000_000n, 16);
+    accountData.writeBigUInt64LE(500_000_000_000n, 24);
+    accountData.writeBigUInt64LE(500_000_000n, 32);
+    accountData.writeBigUInt64LE(1_000_000_000_000n, 40);
+    accountData.writeBigUInt64LE(100n, 105);
+    accountData.writeBigUInt64LE(50n, 154);
+
+    return {
+        rpcPool: {
+            getBestConnection: jest.fn().mockResolvedValue({
             rpcEndpoint: 'mock-rpc',
             getLatestBlockhash: jest.fn().mockResolvedValue({ blockhash: 'mock-hash' }),
+            getAccountInfo: jest.fn().mockResolvedValue({ data: accountData, owner }),
+            getBalance: jest.fn().mockResolvedValue(1e9),
+            getSlot: jest.fn().mockResolvedValue(0),
             getRecentPrioritizationFees: jest.fn().mockResolvedValue([{ prioritizationFee: 1000 }]),
         }),
-    },
-}));
+        },
+    };
+});
 
 jest.mock('../../utils/walletStore', () => ({
     getActiveTradingWallet: jest.fn(() => ({

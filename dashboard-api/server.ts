@@ -569,13 +569,20 @@ function mapLiveExitStatus(reason: unknown): string {
 function deriveClosedPositionPnl(position: any): number | null {
     const buySolAmount = Number(position?.buySolAmount || 0);
     const netSellValue = Number(position?.lastExitNetSellValue || 0);
-    const netAtaCloseValue = Number(position?.lastExitNetAtaCloseValue || 0);
 
-    if (!(buySolAmount > 0) || !(netSellValue > 0 || netAtaCloseValue > 0)) {
+    if (!(buySolAmount > 0)) {
         return null;
     }
 
-    return Number((netSellValue + netAtaCloseValue - buySolAmount).toFixed(9));
+    if (netSellValue > 0) {
+        return Number((netSellValue - buySolAmount).toFixed(9));
+    }
+
+    if (String(position?.lastExitType || "").toUpperCase() === "BURN_AND_CLOSE_ATA") {
+        return Number((-buySolAmount).toFixed(9));
+    }
+
+    return null;
 }
 
 function classifyClosedPositionOutcome(position: any): "win" | "loss" | "neutral" | null {
@@ -2617,19 +2624,19 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
             ? await getHybridExecutor().closeAtaAfterFullSell(mint, { retryAttempts: 2 })
             : null;
 
-        const realizedPnlWithAta = (
+        const realizedTradePnl = (
             typeof realizedExitValueSol === "number"
             && realizedEntryAmount !== null
             && realizedEntryAmount > 0
         )
-            ? Number(((realizedExitValueSol + Number(ataCloseResult?.netRecoveredSol ?? ataCloseResult?.rentRecoveredSol ?? 0)) - realizedEntryAmount).toFixed(9))
+            ? Number((realizedExitValueSol - realizedEntryAmount).toFixed(9))
             : null;
-        const realizedPnlPercentWithAta = (
-            typeof realizedPnlWithAta === "number"
+        const realizedTradePnlPercent = (
+            typeof realizedTradePnl === "number"
             && realizedEntryAmount !== null
             && realizedEntryAmount > 0
         )
-            ? Number(((realizedPnlWithAta / realizedEntryAmount) * 100).toFixed(2))
+            ? Number(((realizedTradePnl / realizedEntryAmount) * 100).toFixed(2))
             : null;
 
         let positionState: "untracked" | "updated" | "closed" = "untracked";
@@ -2690,10 +2697,10 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
                 exitTime,
                 entryPrice: Number(activePosition.entryPricePerToken || 0) || 0,
                 exitPrice: 0,
-                pnl: realizedPnlWithAta,
-                pnl_sol: realizedPnlWithAta,
-                pnlPercent: realizedPnlPercentWithAta,
-                pnl_percent: realizedPnlPercentWithAta,
+                pnl: realizedTradePnl,
+                pnl_sol: realizedTradePnl,
+                pnlPercent: realizedTradePnlPercent,
+                pnl_percent: realizedTradePnlPercent,
                 confidence: Number(activePosition.confidence || 0),
                 status: positionState === "closed" ? "CLOSED_MANUAL" : "PARTIAL_MANUAL_SELL",
                 reason: "MANUAL_SELL",
@@ -2707,9 +2714,10 @@ app.post("/api/wallet/sell", requireAdmin, async (req, res) => {
                 marketCapExit: manualExitMarketContext.marketCapExit,
                 lastExitSignature: execution.signature,
                 lastExitVenue: execution.venue,
-                pnlUnavailable: realizedPnlWithAta === null,
+                pnlUnavailable: realizedTradePnl === null,
                 feeSol: executionSettlement.feeSol,
                 realizedExitValueSol,
+                pnlModel: "TRADE_ONLY_EXCLUDES_ATA_RENT",
                 ataClosed: ataCloseResult
                     ? (ataCloseResult.alreadyClosed ? true : ataCloseResult.closedAccounts > 0)
                     : false,

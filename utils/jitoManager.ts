@@ -38,6 +38,30 @@ function getRandomTipAccount(): PublicKey {
     return new PublicKey(account);
 }
 
+export function createJitoTipInstruction(
+    payer: PublicKey,
+    tipAmountSOL?: number
+): { instruction: TransactionInstruction; tipAccount: PublicKey; tipAmountSol: number } {
+    const configuredTipAmount = Number(
+        tipAmountSOL ?? getRuntimeConfig().JITO_TIP_AMOUNT ?? JITO_TIP_AMOUNT
+    );
+    const tipAmountSol = Number.isFinite(configuredTipAmount) && configuredTipAmount > 0
+        ? configuredTipAmount
+        : JITO_TIP_AMOUNT;
+    const tipAccount = getRandomTipAccount();
+    const instruction = SystemProgram.transfer({
+        fromPubkey: payer,
+        toPubkey: tipAccount,
+        lamports: Math.floor(tipAmountSol * 1e9),
+    });
+
+    return {
+        instruction,
+        tipAccount,
+        tipAmountSol,
+    };
+}
+
 // Cliente Jito
 let searcher: any = null;
 
