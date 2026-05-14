@@ -10,6 +10,14 @@ export interface LiveTradeCacheEntry {
   signature?: string;
 }
 
+export interface RecentTradePriceSummary {
+  tradeCount: number;
+  lastPrice: number;
+  lastTimestamp: number;
+  maxPrice: number;
+  maxTimestamp: number;
+}
+
 interface MintCacheState {
   trades: LiveTradeCacheEntry[];
   lastTradeTimestamp: number;
@@ -149,6 +157,50 @@ export function getCachedTrades(mint: string, limit?: number): LiveTradeCacheEnt
 
 export function getCachedTradeCount(mint: string): number {
   return getCachedTrades(mint).length;
+}
+
+export function getRecentTradePriceSummary(
+  mint: string,
+  options: {
+    sinceTimestamp?: number | null;
+    lookbackMs?: number | null;
+  } = {}
+): RecentTradePriceSummary | null {
+  const now = Date.now();
+  const lookbackMs = Math.max(0, Number(options.lookbackMs || 0));
+  const sinceTimestamp = Math.max(
+    0,
+    Math.min(
+      now,
+      Number(options.sinceTimestamp || 0),
+    ),
+  );
+  const cutoff = Math.max(
+    sinceTimestamp,
+    lookbackMs > 0 ? now - lookbackMs : 0,
+  );
+  const trades = getCachedTrades(mint)
+    .filter((trade) => Number(trade.timestamp || 0) >= cutoff)
+    .filter((trade) => Number.isFinite(Number(trade.price)) && Number(trade.price) > 0)
+    .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+
+  if (trades.length === 0) return null;
+
+  let maxTrade = trades[0];
+  for (const trade of trades) {
+    if (Number(trade.price || 0) > Number(maxTrade.price || 0)) {
+      maxTrade = trade;
+    }
+  }
+
+  const lastTrade = trades[trades.length - 1];
+  return {
+    tradeCount: trades.length,
+    lastPrice: Number(lastTrade.price),
+    lastTimestamp: Number(lastTrade.timestamp),
+    maxPrice: Number(maxTrade.price),
+    maxTimestamp: Number(maxTrade.timestamp),
+  };
 }
 
 export function clearLiveTradeCache(mint: string): void {

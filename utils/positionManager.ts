@@ -16,6 +16,18 @@ export interface Position {
     isActive: boolean;
     lastHighPrice?: number;
     lastCheckedAt?: number;
+    lastObservedPrice?: number | null;
+    lastObservedSource?: string | null;
+    lastObservedPnlPercent?: number | null;
+    lastObservedHighPrice?: number | null;
+    lastObservedHighSource?: string | null;
+    lastObservedHighAt?: number | null;
+    lastObservedTradeCount?: number | null;
+    lastExecutableQuotePrice?: number | null;
+    lastExecutableQuoteSource?: string | null;
+    lastExecutableQuotePnlPercent?: number | null;
+    lastTpCheckAt?: number | null;
+    lastTpMissReason?: string | null;
     creatorWallet?: string;
     tokenDecimals?: number;
     entryPricePerToken?: number | null;
@@ -38,6 +50,9 @@ export interface Position {
     lastAtaCloseRecoveredLamports?: number | null;
     lastAtaCloseTokenProgram?: string | null;
     lastAtaCloseSkippedReason?: string | null;
+    marketCapEntry?: number | null;
+    marketCapExit?: number | null;
+    confidence?: number | null;
     symbol?: string;
 }
 

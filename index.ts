@@ -46,6 +46,7 @@ import { dipMonitor } from "./utils/dipMonitor";
 import { winnerReentryAgent } from "./utils/winnerReentryAgent";
 import { circuitBreaker } from "./utils/circuitBreaker";
 import { startLivePositionMonitor } from "./utils/livePositionMonitor";
+import { getOpenPositionFocusState } from "./utils/openPositionFocus";
 import {
   BOT_HEARTBEAT_INTERVAL_MS,
   STREAM_STALL_THRESHOLD_MS,
@@ -173,6 +174,145 @@ const {
 // Configurações Dinâmicas (Dashboard)
 let ACTIVE_CONFIG = getRuntimeConfig();
 
+const PUMPFUN_OBSERVATION_CURVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PUMPFUN_OBSERVATION_RPC_DELAY_MS = 1500;
+const pumpFunObservationCurveCache = new Map<string, { balance: number; progress: number; ts: number }>();
+const pumpFunObservationCurveCacheByMint = new Map<string, { balance: number; progress: number; ts: number }>();
+const pumpFunObservationResolutionInFlight = new Map<string, Promise<{ balance: number; progress: number }>>();
+
+type PumpFunObservationResolveOptions = {
+  allowRpcFallback?: boolean;
+  sourceLabel?: string;
+};
+
+function readFreshPumpFunCurveCacheEntry(
+  cache: Map<string, { balance: number; progress: number; ts: number }>,
+  key: string
+): { balance: number; progress: number } | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.ts > PUMPFUN_OBSERVATION_CURVE_CACHE_TTL_MS) {
+    cache.delete(key);
+    return null;
+  }
+  return { balance: cached.balance, progress: cached.progress };
+}
+
+function getCachedPumpFunCurveState(
+  bondingCurve: string,
+  mint?: string
+): { balance: number; progress: number } | null {
+  const cached = readFreshPumpFunCurveCacheEntry(pumpFunObservationCurveCache, bondingCurve);
+  if (cached) {
+    return cached;
+  }
+
+  if (mint) {
+    const byMint = readFreshPumpFunCurveCacheEntry(pumpFunObservationCurveCacheByMint, mint);
+    if (byMint) {
+      return byMint;
+    }
+  }
+
+  return null;
+}
+
+function peekPumpFunCurveState(
+  bondingCurve: string,
+  mint?: string
+): { balance: number; progress: number } | null {
+  const cached = getCachedPumpFunCurveState(bondingCurve, mint);
+  if (cached) {
+    return cached;
+  }
+
+  const snapshot = bitqueryEventBus.getLatestPoolSnapshot(bondingCurve);
+  if (snapshot && snapshot.poolSolPostAmount > 0) {
+    return setCachedPumpFunCurveState(bondingCurve, snapshot.poolSolPostAmount, snapshot.mint || mint);
+  }
+
+  return null;
+}
+
+function setCachedPumpFunCurveState(
+  bondingCurve: string,
+  balance: number,
+  mint?: string
+): { balance: number; progress: number } {
+  const progress = calculateCurveProgress(Number(balance));
+  const entry = {
+    balance: Number(balance),
+    progress: Number(progress),
+    ts: Date.now(),
+  };
+  pumpFunObservationCurveCache.set(bondingCurve, entry);
+  if (mint) {
+    pumpFunObservationCurveCacheByMint.set(mint, entry);
+  }
+  return { balance: Number(balance), progress: Number(progress) };
+}
+
+async function resolvePumpFunCurveStateForObservation(
+  bondingCurve: string,
+  mint?: string,
+  options: PumpFunObservationResolveOptions = {}
+): Promise<{ balance: number; progress: number } | null> {
+  const { allowRpcFallback = true, sourceLabel = "pumpfun-observation-delayed" } = options;
+  const cached = getCachedPumpFunCurveState(bondingCurve, mint);
+  if (cached) {
+    return cached;
+  }
+
+  const snapshot = bitqueryEventBus.getLatestPoolSnapshot(bondingCurve);
+  if (snapshot && snapshot.poolSolPostAmount > 0) {
+    return setCachedPumpFunCurveState(bondingCurve, snapshot.poolSolPostAmount, snapshot.mint || mint);
+  }
+
+  const existing = pumpFunObservationResolutionInFlight.get(bondingCurve);
+  if (existing) {
+    return await existing;
+  }
+
+  const resolutionPromise = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, PUMPFUN_OBSERVATION_RPC_DELAY_MS));
+
+    const delayedCached = getCachedPumpFunCurveState(bondingCurve, mint);
+    if (delayedCached) {
+      return delayedCached;
+    }
+
+    const delayedSnapshot = bitqueryEventBus.getLatestPoolSnapshot(bondingCurve);
+    if (delayedSnapshot && delayedSnapshot.poolSolPostAmount > 0) {
+      return setCachedPumpFunCurveState(bondingCurve, delayedSnapshot.poolSolPostAmount, delayedSnapshot.mint || mint);
+    }
+
+    if (!allowRpcFallback) {
+      return null;
+    }
+
+    const balance = Number(await getBondingCurveAddress(bondingCurve, sourceLabel));
+    return setCachedPumpFunCurveState(bondingCurve, balance, mint);
+  })();
+
+  pumpFunObservationResolutionInFlight.set(bondingCurve, resolutionPromise);
+
+  try {
+    return await resolutionPromise;
+  } finally {
+    pumpFunObservationResolutionInFlight.delete(bondingCurve);
+  }
+}
+
+function getWorkerToggle(envName: string, fallback: boolean): boolean {
+  const raw = process.env[envName];
+  if (raw === undefined) return fallback;
+  return !["0", "false", "no", "off"].includes(String(raw).trim().toLowerCase());
+}
+
+const ENABLE_LEARNING_WORKERS = getWorkerToggle("PUMPFUN_ENABLE_LEARNING_WORKERS", true);
+const ENABLE_WINNER_REENTRY_WORKER = getWorkerToggle("PUMPFUN_ENABLE_WINNER_REENTRY_WORKER", true);
+const ENABLE_SIMULATION_MONITOR_WORKER = getWorkerToggle("PUMPFUN_ENABLE_SIMULATION_MONITOR_WORKER", true);
+
 // Atualizar config periodicamente em background (não bloqueia o stream)
 setInterval(() => {
   try {
@@ -286,27 +426,31 @@ dipMonitor.initialize(async (mint: string, token) => {
   }
 });
 
-winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
-  watchBitqueryTransferMint(candidate.mint);
-  logger.info(
-    `🧠 [index.ts] Winner Reentry executing BUY for ${candidate.mint} ` +
-    `(priority=${candidate.priorityScore.toFixed(1)}, force=${force === true})`
-  );
-  const tokenData: TokenData = {
-    mint: candidate.mint,
-    bondingCurve: "",
-    curvePercent: candidate.bondingCurvePercent || 0,
-    isLaunched: false,
-    mode: "REENTRY",
-  };
+if (ENABLE_WINNER_REENTRY_WORKER) {
+  winnerReentryAgent.initialize(async (candidate, force, buyAmountSol) => {
+    watchBitqueryTransferMint(candidate.mint);
+    logger.info(
+      `🧠 [index.ts] Winner Reentry executing BUY for ${candidate.mint} ` +
+      `(priority=${candidate.priorityScore.toFixed(1)}, force=${force === true})`
+    );
+    const tokenData: TokenData = {
+      mint: candidate.mint,
+      bondingCurve: "",
+      curvePercent: candidate.bondingCurvePercent || 0,
+      isLaunched: false,
+      mode: "REENTRY",
+    };
 
-  try {
-    return await executeHybridTrade(tokenData, "BUY", force === true, buyAmountSol);
-  } catch (err: any) {
-    logger.error(`❌ Winner Reentry failed to execute trade: ${err.message}`);
-    return { executed: false, reason: `WINNER_REENTRY_ERROR:${err.message}` };
-  }
-});
+    try {
+      return await executeHybridTrade(tokenData, "BUY", force === true, buyAmountSol);
+    } catch (err: any) {
+      logger.error(`❌ Winner Reentry failed to execute trade: ${err.message}`);
+      return { executed: false, reason: `WINNER_REENTRY_ERROR:${err.message}` };
+    }
+  });
+} else {
+  logger.info("🧠 [WinnerReentryWorker] Disabled inside bot-core by PUMPFUN_ENABLE_WINNER_REENTRY_WORKER=false");
+}
 
 // Create a Map to track sent addresses (Telegram alerts) — value = timestamp
 const ADDR_MAX_SIZE = 10_000;
@@ -316,6 +460,7 @@ let pendingAlertAddresses = new Set<string>();
 // Create a Map to track tokens that have received a FINAL AI decision — value = timestamp
 let aiProcessedAddresses = new Map<string, number>();
 let currentlyProcessing = new Set<string>();
+let lastOpenPositionFocusPauseLogAt = 0;
 const bitqueryDiscoveryWarmupInFlight = new Set<string>();
 // Creator Watchlist: mint -> creatorAddress
 const creatorWatchlist = new Map<string, string>();
@@ -1431,9 +1576,36 @@ async function processPumpFunObservation(params: {
   const withinAlertBand = Number(progress) >= currentAlertThreshold && Number(progress) <= 100;
 
   // AI discovery tracks NEW tokens for analysis, ignoring alert state
-  const isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint) && !currentlyProcessing.has(tOutput.mint);
+  let isDiscovery = withinAiBand && !aiProcessedAddresses.has(tOutput.mint) && !currentlyProcessing.has(tOutput.mint);
   // shouldAlert tracks if we ALREADY sent a telegram message (prevents spam)
   const shouldAlert = withinAlertBand && !hasQueuedOrSentAlert(tOutput.mint);
+
+  if (isDiscovery) {
+    const focusState = getOpenPositionFocusState();
+    if (focusState.scannerPaused) {
+      const now = Date.now();
+      if (now - lastOpenPositionFocusPauseLogAt > 15_000) {
+        logger.info(
+          `🛑 [OpenPositionFocus] Scanner de novas entradas pausado: slots ocupados ${focusState.activeCount}/${focusState.maxSlots}. Monitoria segue ativa.`
+        );
+        lastOpenPositionFocusPauseLogAt = now;
+      }
+      recordFunnelEvent({
+        stage: "discovery",
+        outcome: "blocked",
+        reason: focusState.reason || "OPEN_POSITION_FOCUS_SLOTS_FULL",
+        protocol: "pumpfun",
+        mint: tOutput.mint,
+        symbol: tokenMetadata?.symbol || "UNK",
+        metadata: {
+          activeCount: focusState.activeCount,
+          maxSlots: focusState.maxSlots,
+          activeMints: focusState.activeMints,
+        },
+      });
+      isDiscovery = false;
+    }
+  }
 
   if (followedWallet || isDiscovery || shouldAlert) {
     if (isDiscovery) currentlyProcessing.add(tOutput.mint);
@@ -1517,7 +1689,8 @@ async function processPumpFunObservation(params: {
 
       // ── Risk Engine Analysis ──
       let riskSection = "";
-      if (RISK_CONFIG.enabled) {
+      const needsDecisionPipeline = followedWallet || isDiscovery;
+      if (RISK_CONFIG.enabled && needsDecisionPipeline) {
         try {
           if (isDiscovery) logger.info(`[Pipeline 2/8 - RiskEngine] 🛡️ Validando ${tokenMetadata?.symbol || '???'} (${tOutput.mint}) no Motor de Risco (RiskEngine).`);
           riskAnalysis = await analyzeToken(tOutput.mint, tokenMetadata, Number(progress));
@@ -1605,24 +1778,40 @@ async function processPumpFunObservation(params: {
         const maxRetries = 3;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            const executionResult = await executeHybridTrade(tokenData, "BUY", force, buyAmountSol); // FIX 2026-04-16: use agent decision type ("BUY"), not raw market event type (tOutput.type which can be "SELL")
+            const executionResult = await executeHybridTrade(tokenData, "BUY", force, buyAmountSol); // FIX 2026-04-16: use agente decision type, not raw market event type
             if (!executionResult.executed) {
               if (executionResult.reason.startsWith("EXECUTION_ERROR:")) {
                 throw new Error(executionResult.reason);
               }
 
-              logger.info(`ℹ️ Trade não executado (${tOutput.type}) para ${tOutput.mint}: ${executionResult.reason}`);
+              logger.info(`ℹ️ Trade não executado (BUY) para ${tOutput.mint}: ${executionResult.reason}`);
               return executionResult;
             }
 
             markTradeExecutionActivity();
-            logger.info(`✅ Trade executado (${tOutput.type}) para ${tOutput.mint}`);
+            logger.info(`✅ Trade executado (BUY) para ${tOutput.mint}`);
             return executionResult;
           } catch (error: any) {
-            if (attempt === maxRetries) {
-              logger.error(`❌ Trade falhou após retries: ${error.message}`);
+            const errMsg = error?.message || String(error);
+            const errLower = errMsg.toLowerCase();
+
+            // FIX: Erros permanentes (token migrou, curva completa) não devem ser retentados.
+            // Abortar imediatamente e marcar como permanentemente processado.
+            const isPermanentError =
+              errLower.includes('curve_complete') ||
+              errLower.includes('mintokensnotmet') ||
+              errLower.includes('0x179a');
+
+            if (isPermanentError) {
+              logger.warn(`⛔ [PERMANENT_ERROR] ${tOutput.mint}: ${errMsg.substring(0, 120)} — NÃO retentando.`);
               recordError();
-              return { executed: false, reason: `EXECUTION_ERROR:${error.message}` };
+              return { executed: false, reason: `PERMANENT_ERROR:${errMsg.substring(0, 120)}` };
+            }
+
+            if (attempt === maxRetries) {
+              logger.error(`❌ Trade falhou após retries: ${errMsg}`);
+              recordError();
+              return { executed: false, reason: `EXECUTION_ERROR:${errMsg}` };
             } else {
               await new Promise(r => setTimeout(r, 1000 * attempt));
             }
@@ -1631,6 +1820,7 @@ async function processPumpFunObservation(params: {
 
         return { executed: false, reason: "EXECUTION_RETRY_EXHAUSTED" };
       };
+
 
       // ── AI Agent / Copy-Trading orchestration ──
       const agentEnabled = getRuntimeConfig().AGENT_ENABLED === true;
@@ -1717,8 +1907,29 @@ async function processPumpFunTransaction(txn: any, parsedTxn: any) {
     return;
   }
 
-  const balance = await getBondingCurveAddress(tOutput.bondingCurve);
-  const progress = calculateCurveProgress(Number(balance));
+  const followedWallet = isFollowedWallet(tOutput.user);
+  const activePosition = positionManager.getPosition(tOutput.mint);
+  const isHolding = Boolean(activePosition?.isActive);
+  const whaleRelevant =
+    Boolean(ACTIVE_CONFIG.WHALE_WATCHER_ENABLED) &&
+    Number(tOutput.solAmount) >= Number(ACTIVE_CONFIG.WHALE_ALERT_THRESHOLD_SOL || 0);
+  const immediateCurveState = peekPumpFunCurveState(tOutput.bondingCurve, tOutput.mint);
+
+  if (!immediateCurveState && !followedWallet && !isHolding && !whaleRelevant) {
+    return;
+  }
+
+  const resolvedCurveState =
+    immediateCurveState ||
+    await resolvePumpFunCurveStateForObservation(tOutput.bondingCurve, tOutput.mint, {
+      allowRpcFallback: true,
+      sourceLabel: "pumpfun-open-position-observation-delayed",
+    });
+  if (!resolvedCurveState) {
+    return;
+  }
+
+  const { balance, progress } = resolvedCurveState;
   logVerboseTransaction(
     `
     TYPE : ${tOutput.type}
@@ -2790,11 +3001,18 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
   bitqueryDiscoveryWarmupInFlight.add(discoveryKey);
   try {
     const poolSnapshot = bitqueryEventBus.getLatestPoolSnapshot(candidate.marketAddress);
-    const balance =
+    const resolvedCurve =
       poolSnapshot && poolSnapshot.poolSolPostAmount > 0
-        ? poolSnapshot.poolSolPostAmount
-        : await getBondingCurveAddress(candidate.marketAddress);
-    const progress = calculateCurveProgress(Number(balance));
+        ? setCachedPumpFunCurveState(candidate.marketAddress, poolSnapshot.poolSolPostAmount, candidate.mint)
+        : await resolvePumpFunCurveStateForObservation(candidate.marketAddress, candidate.mint, {
+            allowRpcFallback: false,
+            sourceLabel: "pumpfun-discovery-observation-delayed",
+          });
+    if (!resolvedCurve) {
+      return;
+    }
+    const cachedCurve = setCachedPumpFunCurveState(candidate.marketAddress, Number(resolvedCurve.balance), candidate.mint);
+    const progress = cachedCurve.progress;
 
     if (!(progress >= 90 && progress <= 100)) {
       return;
@@ -2833,7 +3051,7 @@ async function processBitqueryPumpFunDiscoveryCandidate(candidate: BitqueryDisco
       },
       signature: candidate.signature,
       progress: Number(progress),
-      balance: Number(balance),
+      balance: cachedCurve.balance,
     });
   } catch (error: any) {
     logger.error(`❌ Erro ao processar candidate Bitquery PumpFun ${candidate.mint}: ${error.message}`);
@@ -2847,6 +3065,13 @@ bitqueryEventBus.subscribeDiscovery((candidate) => {
   if (!accepted) {
     logger.debug(`⏳ [Semaphore] Discovery descartado (slots cheios): ${candidate.mint?.substring(0, 8)}...`);
   }
+});
+
+bitqueryEventBus.subscribePool((snapshot) => {
+  if (!snapshot.marketAddress || !(snapshot.poolSolPostAmount > 0)) {
+    return;
+  }
+  setCachedPumpFunCurveState(snapshot.marketAddress, snapshot.poolSolPostAmount, snapshot.mint);
 });
 
 function getBitqueryProgramAddresses(): string[] {
@@ -3750,7 +3975,11 @@ function registerManualGrpcRotationSignal(
 }
 
 // Resume simulation monitoring for open trades
-resumeSimulationMonitoring().catch(err => logger.error(`Error resuming simulation: ${err.message}`));
+if (ENABLE_SIMULATION_MONITOR_WORKER) {
+  resumeSimulationMonitoring().catch(err => logger.error(`Error resuming simulation: ${err.message}`));
+} else {
+  logger.info("🛰️ [SimulationMonitor] Disabled inside bot-core by PUMPFUN_ENABLE_SIMULATION_MONITOR_WORKER=false");
+}
 
 const shyftParser = new SolanaParser(
   [
@@ -4019,67 +4248,75 @@ const WINNER_REENTRY_DISCOVERY_INTERVAL_MS = getWorkerIntervalMs(
 );
 const LIVE_POSITION_MONITOR_INTERVAL_MS = getWorkerIntervalMs(
   "LIVE_POSITION_MONITOR_INTERVAL_MS",
-  8_000
+  CONFIG.LIVE_POSITION_SWEEP_INTERVAL_MS || 30_000
 );
 
 logger.info(
   `🧠 [LearningWorkers] Configured post-mortem interval=${POSTMORTEM_INTERVAL_MS}ms ` +
   `learner interval=${LEARNER_INTERVAL_MS}ms winner-reentry interval=${WINNER_REENTRY_DISCOVERY_INTERVAL_MS}ms`
 );
-logger.info(`🛰️ [LiveMonitor] Configured interval=${LIVE_POSITION_MONITOR_INTERVAL_MS}ms`);
-startLivePositionMonitor(LIVE_POSITION_MONITOR_INTERVAL_MS);
+logger.info(`🛰️ [LiveMonitor] Configured sweep interval=${LIVE_POSITION_MONITOR_INTERVAL_MS}ms`);
+if (ENABLE_SIMULATION_MONITOR_WORKER) {
+  startLivePositionMonitor(LIVE_POSITION_MONITOR_INTERVAL_MS);
+}
 
-// Post-mortem worker: runs frequently to drain losing-trade backlog.
-setInterval(async () => {
-  try {
-    await runPostMortemCycle();
-  } catch (error: any) {
-    logger.error(`❌ [PostMortemWorker] Cycle error: ${error.message}`);
-  }
-}, POSTMORTEM_INTERVAL_MS);
+if (ENABLE_LEARNING_WORKERS) {
+  // Post-mortem worker: runs frequently to drain losing-trade backlog.
+  setInterval(async () => {
+    try {
+      await runPostMortemCycle();
+    } catch (error: any) {
+      logger.error(`❌ [PostMortemWorker] Cycle error: ${error.message}`);
+    }
+  }, POSTMORTEM_INTERVAL_MS);
 
-// Learner worker: stays slower to avoid excess LLM churn.
-setInterval(async () => {
-  try {
-    await runLearningCycle();
-  } catch (error: any) {
-    logger.error(`❌ [LearnerWorker] Cycle error: ${error.message}`);
-  }
-}, LEARNER_INTERVAL_MS);
+  // Learner worker: stays slower to avoid excess LLM churn.
+  setInterval(async () => {
+    try {
+      await runLearningCycle();
+    } catch (error: any) {
+      logger.error(`❌ [LearnerWorker] Cycle error: ${error.message}`);
+    }
+  }, LEARNER_INTERVAL_MS);
 
-setInterval(async () => {
-  try {
-    await winnerReentryAgent.runDiscoveryCycle();
-  } catch (error: any) {
-    logger.error(`❌ [WinnerReentryWorker] Cycle error: ${error.message}`);
-  }
-}, WINNER_REENTRY_DISCOVERY_INTERVAL_MS);
+  // Run first post-mortem pass shortly after boot so backlog starts draining immediately.
+  setTimeout(async () => {
+    try {
+      await runPostMortemCycle();
+    } catch (error: any) {
+      logger.error(`❌ [PostMortemWorker] Initial cycle error: ${error.message}`);
+    }
+  }, 30000);
 
-// Run first post-mortem pass shortly after boot so backlog starts draining immediately.
-setTimeout(async () => {
-  try {
-    await runPostMortemCycle();
-  } catch (error: any) {
-    logger.error(`❌ [PostMortemWorker] Initial cycle error: ${error.message}`);
-  }
-}, 30000);
+  // Run first learner cycle after boot, but on a separate cadence from post-mortem.
+  setTimeout(async () => {
+    try {
+      await runLearningCycle();
+    } catch (error: any) {
+      logger.error(`❌ [LearnerWorker] Initial cycle error: ${error.message}`);
+    }
+  }, 60000);
+} else {
+  logger.info("🧠 [LearningWorkers] Disabled inside bot-core by PUMPFUN_ENABLE_LEARNING_WORKERS=false");
+}
 
-// Run first learner cycle after boot, but on a separate cadence from post-mortem.
-setTimeout(async () => {
-  try {
-    await runLearningCycle();
-  } catch (error: any) {
-    logger.error(`❌ [LearnerWorker] Initial cycle error: ${error.message}`);
-  }
-}, 60000);
+if (ENABLE_WINNER_REENTRY_WORKER) {
+  setInterval(async () => {
+    try {
+      await winnerReentryAgent.runDiscoveryCycle();
+    } catch (error: any) {
+      logger.error(`❌ [WinnerReentryWorker] Cycle error: ${error.message}`);
+    }
+  }, WINNER_REENTRY_DISCOVERY_INTERVAL_MS);
 
-setTimeout(async () => {
-  try {
-    await winnerReentryAgent.runDiscoveryCycle();
-  } catch (error: any) {
-    logger.error(`❌ [WinnerReentryWorker] Initial cycle error: ${error.message}`);
-  }
-}, 45000);
+  setTimeout(async () => {
+    try {
+      await winnerReentryAgent.runDiscoveryCycle();
+    } catch (error: any) {
+      logger.error(`❌ [WinnerReentryWorker] Initial cycle error: ${error.message}`);
+    }
+  }, 45000);
+}
 
 // Testar o envio imediatamente ao iniciar
 setTimeout(async () => {

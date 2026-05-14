@@ -11,28 +11,39 @@ const rpcLimiter = new Bottleneck({
 
 // Cache to avoid flooding the RPC with repeated calls to the same bonding curve
 const bondingCache: Map<string, { balance: number; ts: number }> = new Map();
+const bondingInFlight = new Map<string, Promise<number>>();
 const BONDING_CACHE_TTL_MS = 30_000; // 30 seconds
 
-export async function getBondingCurveAddress(bondingCurve: string) {
+export async function getBondingCurveAddress(bondingCurve: string, sourceLabel: string = "generic") {
   // Check cache first
   const cached = bondingCache.get(bondingCurve);
   if (cached && Date.now() - cached.ts < BONDING_CACHE_TTL_MS) {
     return cached.balance;
   }
 
-  try {
-    const result = await rpcLimiter.schedule(() =>
-      rpcPool.executeWithFallback(async (connection) => {
-        const address = new PublicKey(bondingCurve);
-        const systemOwner = await connection.getAccountInfo(address);
-        if (systemOwner) {
-          const solBalance = systemOwner.lamports;
-          return Number((solBalance / 1000000000).toFixed(2));
-        }
-        return 0;
-      }, 2) // Only 2 attempts to reduce cascading failures
-    );
+  const existing = bondingInFlight.get(bondingCurve);
+  if (existing) {
+    return await existing;
+  }
 
+  try {
+    const lookupPromise = rpcLimiter.schedule(async () => {
+      const address = new PublicKey(bondingCurve);
+      const systemOwner = await rpcPool.getAccountInfoWithFallback(
+        address,
+        "confirmed",
+        2,
+        `getBonding:${sourceLabel}`
+      );
+      if (systemOwner) {
+        const solBalance = systemOwner.lamports;
+        return Number((solBalance / 1000000000).toFixed(2));
+      }
+      return 0;
+    });
+
+    bondingInFlight.set(bondingCurve, lookupPromise);
+    const result = await lookupPromise;
     bondingCache.set(bondingCurve, { balance: result, ts: Date.now() });
     return result;
   } catch (error: any) {
@@ -42,6 +53,8 @@ export async function getBondingCurveAddress(bondingCurve: string) {
     }
     logger.debug(`⚠️ getBondingCurveAddress failed for ${bondingCurve.substring(0, 8)}...`);
     return 0;
+  } finally {
+    bondingInFlight.delete(bondingCurve);
   }
 }
 

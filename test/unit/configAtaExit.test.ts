@@ -17,14 +17,14 @@ describe("ATA_RENT_SOL runtime enforcement", () => {
     jest.resetModules();
   });
 
-  test("throws when ATA strategy is enabled and ATA_RENT_SOL is missing", () => {
+  test("uses default ATA_RENT_SOL when ATA strategy is enabled and env is missing", () => {
     process.env.ENABLE_ATA_EXIT_STRATEGY = "true";
     delete process.env.ATA_RENT_SOL;
 
     const config = require("../../utils/config");
 
-    expect(() => config.getRuntimeConfig()).toThrow(/ATA_RENT_SOL is missing/i);
-    expect(config.validateConfig().errors.some((error: string) => /ATA_RENT_SOL/i.test(error))).toBe(true);
+    expect(config.getRuntimeConfig().ATA_RENT_SOL).toBeCloseTo(0.00203928, 9);
+    expect(config.validateConfig().errors.some((error: string) => /ATA_RENT_SOL/i.test(error))).toBe(false);
   });
 
   test("throws when ATA strategy is enabled and ATA_RENT_SOL is non-positive", () => {

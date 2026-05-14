@@ -107,17 +107,28 @@ jest.mock('../../utils/rpcPool', () => {
     accountData.writeBigUInt64LE(1_000_000_000_000n, 40);
     accountData.writeBigUInt64LE(100n, 105);
     accountData.writeBigUInt64LE(50n, 154);
+    const mockConnection = {
+        rpcEndpoint: 'mock-rpc',
+        getLatestBlockhash: jest.fn().mockResolvedValue({ blockhash: 'mock-hash' }),
+        getAccountInfo: jest.fn().mockResolvedValue({ data: accountData, owner }),
+        getBalance: jest.fn().mockResolvedValue(1e9),
+        getMinimumBalanceForRentExemption: jest.fn().mockResolvedValue(0),
+        getSlot: jest.fn().mockResolvedValue(0),
+        getRecentPrioritizationFees: jest.fn().mockResolvedValue([{ prioritizationFee: 1000 }]),
+        getParsedTokenAccountsByOwner: jest.fn().mockResolvedValue({ value: [] }),
+        getTokenAccountBalance: jest.fn().mockResolvedValue({ value: { amount: '1000000' } }),
+        getParsedTransaction: jest.fn().mockResolvedValue(null),
+    };
 
     return {
         rpcPool: {
-            getBestConnection: jest.fn().mockResolvedValue({
-            rpcEndpoint: 'mock-rpc',
-            getLatestBlockhash: jest.fn().mockResolvedValue({ blockhash: 'mock-hash' }),
-            getAccountInfo: jest.fn().mockResolvedValue({ data: accountData, owner }),
-            getBalance: jest.fn().mockResolvedValue(1e9),
-            getSlot: jest.fn().mockResolvedValue(0),
-            getRecentPrioritizationFees: jest.fn().mockResolvedValue([{ prioritizationFee: 1000 }]),
-        }),
+            getBestConnection: jest.fn().mockResolvedValue(mockConnection),
+            getAccountInfoWithFallback: jest.fn().mockResolvedValue({ data: accountData, owner }),
+            getParsedTokenAccountsByOwnerWithFallback: jest.fn().mockResolvedValue({ value: [] }),
+            getTransactionWithFallback: jest.fn().mockResolvedValue(null),
+            getTokenAccountBalanceWithFallback: jest.fn().mockResolvedValue({ value: { amount: '1000000' } }),
+            getLatestBlockhashWithFallback: jest.fn().mockResolvedValue({ blockhash: 'mock-hash' }),
+            sendAndConfirmTransactionWithFallback: jest.fn().mockResolvedValue('mock-sig'),
         },
     };
 });

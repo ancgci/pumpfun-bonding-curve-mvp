@@ -96,7 +96,9 @@ export async function getWalletTokenBalanceSnapshot(
   const connection = await getConnection(options.connection);
   const owner = new PublicKey(address);
   const mint = new PublicKey(tokenMint);
-  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+  const tokenAccounts = options.connection
+    ? await connection.getParsedTokenAccountsByOwner(owner, { mint })
+    : await rpcPool.getParsedTokenAccountsByOwnerWithFallback(owner, { mint }, 4);
 
   let decimals = 0;
   let rawAmount = 0;
@@ -208,18 +210,33 @@ export async function getWalletNetSolChangeForSignature(
   const pollDelayMs = Math.max(100, Number(options.pollDelayMs ?? 500));
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const tx = await connection.getTransaction(normalizedSignature, {
-      maxSupportedTransactionVersion: 0,
-      commitment: "confirmed",
-    });
+    const tx = options.connection
+      ? await connection.getParsedTransaction(normalizedSignature, {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+      })
+      : await rpcPool.getTransactionWithFallback(
+        normalizedSignature,
+        {
+          maxSupportedTransactionVersion: 0,
+          commitment: "confirmed",
+        },
+        4
+      );
 
     if (!tx) {
       await sleep(pollDelayMs);
       continue;
     }
 
-    const accountKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
-    const walletIndex = accountKeys.findIndex((key) => key.toBase58() === normalizedWallet);
+    const accountKeys = tx.transaction.message.accountKeys || [];
+    const walletIndex = accountKeys.findIndex((key: any) => {
+      const pubkey = typeof key === "string" ? key : key?.pubkey ?? key;
+      const value = typeof pubkey === "string"
+        ? pubkey
+        : pubkey?.toBase58?.() ?? pubkey?.toString?.();
+      return value === normalizedWallet;
+    });
     const feeSol = Number(((Number(tx.meta?.fee || 0)) / 1e9).toFixed(9));
     const exitTime = Number(tx.blockTime || 0) > 0
       ? Number(tx.blockTime) * 1000
@@ -259,6 +276,14 @@ function getLatestTradeBasedPrice(mint: string): number | null {
   const recent = trades.slice(-3);
   const average = recent.reduce((sum, price) => sum + price, 0) / recent.length;
   return Number.isFinite(average) && average > 0 ? average : trades[trades.length - 1];
+}
+
+function getLatestObservedTradePrice(mint: string): number | null {
+  const trades = getCachedTrades(mint, 8)
+    .map((trade) => Number(trade.price || 0))
+    .filter((price) => Number.isFinite(price) && price > 0);
+
+  return trades.length > 0 ? trades[trades.length - 1] : null;
 }
 
 async function getDexScreenerNativePrice(mint: string): Promise<number | null> {
@@ -302,10 +327,13 @@ export async function getExecutableExitQuote(params: {
   const amountRaw = Math.max(0, Math.floor(Number(params.amountRaw || 0)));
   if (amountRaw <= 0) return null;
 
-  const connection = await getConnection();
-  const decimals = Number.isFinite(Number(params.decimalsHint))
+  let decimals = Number.isFinite(Number(params.decimalsHint))
     ? Number(params.decimalsHint)
-    : await getTokenMintDecimals(params.mint, connection);
+    : null;
+  if (decimals === null) {
+    const connection = await getConnection();
+    decimals = await getTokenMintDecimals(params.mint, connection);
+  }
   const uiAmount = computeUiAmount(amountRaw, decimals);
   if (!(uiAmount > 0)) return null;
 
@@ -357,9 +385,8 @@ export async function getExecutableExitQuote(params: {
     );
   };
 
-  const strategies = preferVenue === "pumpfun"
-    ? [tryLiveTradePrice, tryDexScreener, tryJupiterQuote]
-    : [tryJupiterQuote, tryLiveTradePrice, tryDexScreener];
+  // Always prefer a real executable quote first. Market-price fallbacks are only proxies.
+  const strategies = [tryJupiterQuote, tryLiveTradePrice, tryDexScreener];
 
   for (const strategy of strategies) {
     const quote = await strategy();
@@ -367,6 +394,45 @@ export async function getExecutableExitQuote(params: {
   }
 
   return null;
+}
+
+export async function getObservedExitQuote(params: {
+  mint: string;
+  amountRaw: number;
+  decimalsHint?: number | null;
+  preferVenue?: "pumpfun" | "jupiter" | "auto";
+}): Promise<ExecutableExitQuote | null> {
+  const amountRaw = Math.max(0, Math.floor(Number(params.amountRaw || 0)));
+  if (amountRaw <= 0) return null;
+
+  let decimals = Number.isFinite(Number(params.decimalsHint))
+    ? Number(params.decimalsHint)
+    : null;
+  if (decimals === null) {
+    const connection = await getConnection();
+    decimals = await getTokenMintDecimals(params.mint, connection);
+  }
+
+  const uiAmount = computeUiAmount(amountRaw, decimals);
+  if (!(uiAmount > 0)) return null;
+
+  const preferVenue = params.preferVenue || "auto";
+  const observedPrice = getLatestObservedTradePrice(params.mint);
+  const observedQuote = buildQuoteFromPrice(
+    Number(observedPrice || 0),
+    uiAmount,
+    "live-trades",
+    preferVenue === "pumpfun" ? "pumpfun" : "market"
+  );
+  if (observedQuote) return observedQuote;
+
+  const dexPrice = await getDexScreenerNativePrice(params.mint);
+  return buildQuoteFromPrice(
+    Number(dexPrice || 0),
+    uiAmount,
+    "dexscreener",
+    preferVenue === "pumpfun" ? "pumpfun" : "market"
+  );
 }
 
 export function estimateAtaExitFeesSol(): {
@@ -495,9 +561,12 @@ export function buildPositionBalanceSyncResult(
 
   const currentBuySolAmount = Number(position.buySolAmount || 0);
   const currentEntryPrice = getPositionEntryPrice(position);
+  const preservedBuyTokenAmount = baselineRawAmount > 0
+    ? baselineRawAmount
+    : Number(position.buyTokenAmount || 0);
   const nextBuySolAmount = balance.rawAmount > 0
     ? Number((currentBuySolAmount * remainingRatio).toFixed(9))
-    : 0;
+    : currentBuySolAmount;
 
   const nextEntryPrice = currentEntryPrice
     ?? (balance.uiAmount > 0 && currentBuySolAmount > 0
@@ -516,7 +585,7 @@ export function buildPositionBalanceSyncResult(
     isClosed: balance.rawAmount <= 0,
     updates: {
       buySolAmount: nextBuySolAmount,
-      buyTokenAmount: balance.rawAmount,
+      buyTokenAmount: balance.rawAmount > 0 ? balance.rawAmount : preservedBuyTokenAmount,
       tokenDecimals: balance.decimals || position.tokenDecimals || 0,
       entryPricePerToken: nextEntryPrice,
       lastKnownTokenBalanceRaw: balance.rawAmount,

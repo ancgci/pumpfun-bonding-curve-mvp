@@ -12,6 +12,8 @@ import {
   TransactionMessage,
   type AccountMeta,
 } from "@solana/web3.js";
+import fs from "fs";
+import path from "path";
 import { BN } from "@project-serum/anchor";
 import { BorshAccountsCoder, type Idl } from "@coral-xyz/anchor";
 import { decode } from "bs58";
@@ -41,6 +43,7 @@ import { getRuntimeConfig } from "./config";
 import { notifyDashboardUpdate } from "./broadcastOptimizer";
 import { getActiveTradingWallet } from "./walletStore";
 import { decideExitAction, type ExitStrategyDecision } from "./exitStrategy";
+import { getCachedTokenMetadata } from "./metadataCache";
 import {
   buildPositionBalanceSyncResult,
   estimateAtaExitFeesSol,
@@ -68,6 +71,65 @@ async function getAssociatedTokenAddress(
   return address;
 }
 
+async function getAccountInfoWithFallback(
+  publicKey: PublicKey,
+  commitment: "confirmed" | "finalized" | "processed" = "confirmed",
+  connectionOverride?: Connection,
+  sourceLabel: string = "hybridExecutor"
+) {
+  if (connectionOverride) {
+    return await connectionOverride.getAccountInfo(publicKey, commitment);
+  }
+  return await rpcPool.getAccountInfoWithFallback(publicKey, commitment, 4, sourceLabel);
+}
+
+async function getParsedTokenAccountsByOwnerWithFallback(
+  owner: PublicKey,
+  filter: { mint: PublicKey },
+  connectionOverride?: Connection
+) {
+  if (connectionOverride) {
+    return await connectionOverride.getParsedTokenAccountsByOwner(owner, filter);
+  }
+  return await rpcPool.getParsedTokenAccountsByOwnerWithFallback(owner, filter, 4);
+}
+
+async function getTokenAccountBalanceWithFallback(
+  publicKey: PublicKey,
+  commitment: "confirmed" | "finalized" | "processed" = "confirmed",
+  connectionOverride?: Connection
+) {
+  if (connectionOverride) {
+    return await connectionOverride.getTokenAccountBalance(publicKey, commitment);
+  }
+  return await rpcPool.getTokenAccountBalanceWithFallback(publicKey, commitment, 4);
+}
+
+async function sendAndConfirmTransactionWithRpcFallback(params: {
+  connection?: Connection;
+  buildTransaction: (connection: Connection) => Promise<Transaction> | Transaction;
+  signers: Keypair[];
+  options?: { commitment?: "confirmed" | "finalized" | "processed"; skipPreflight?: boolean };
+  maxAttempts?: number;
+}): Promise<string> {
+  if (params.connection) {
+    const transaction = await params.buildTransaction(params.connection);
+    return await sendAndConfirmTransaction(
+      params.connection,
+      transaction,
+      params.signers,
+      params.options
+    );
+  }
+
+  return await rpcPool.sendAndConfirmTransactionWithFallback({
+    buildTransaction: params.buildTransaction,
+    signers: params.signers,
+    options: params.options,
+    maxAttempts: params.maxAttempts ?? 4,
+  });
+}
+
 // Tipos e interfaces
 export interface TokenData {
   mint: string;
@@ -85,6 +147,55 @@ export interface HybridTradeExecutionResult {
 }
 
 export type { Position } from "./positionManager";
+
+const AGENT_TRADES_FILE = path.join(__dirname, "../data/agent/trades.json");
+
+async function resolveExitMarketCapContext(
+  mint: string,
+  entryPricePerToken?: number | null,
+  existingEntryMarketCap?: number | null
+): Promise<{ marketCapEntry: number | null; marketCapExit: number | null }> {
+  const safeMint = String(mint || "").trim();
+  if (!safeMint) {
+    return { marketCapEntry: null, marketCapExit: null };
+  }
+
+  try {
+    const metadata = await Promise.race([
+      getCachedTokenMetadata(safeMint),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+    ]);
+
+    const marketCapExit = Number(metadata?.marketCap || 0) > 0
+      ? Number(metadata!.marketCap)
+      : null;
+    const livePrice = Number(metadata?.price || 0) > 0
+      ? Number(metadata!.price)
+      : null;
+    const normalizedExistingEntryMc = Number(existingEntryMarketCap || 0) > 0
+      ? Number(existingEntryMarketCap)
+      : null;
+    const normalizedEntryPrice = Number(entryPricePerToken || 0) > 0
+      ? Number(entryPricePerToken)
+      : null;
+
+    const marketCapEntry = normalizedExistingEntryMc
+      ?? (
+        marketCapExit !== null
+        && livePrice !== null
+        && normalizedEntryPrice !== null
+        ? Number((marketCapExit * (normalizedEntryPrice / livePrice)).toFixed(2))
+        : null
+      );
+
+    return { marketCapEntry, marketCapExit };
+  } catch {
+    return {
+      marketCapEntry: Number(existingEntryMarketCap || 0) > 0 ? Number(existingEntryMarketCap) : null,
+      marketCapExit: null,
+    };
+  }
+}
 
 // Configurações do ambiente
 logger.info("Loading environment configuration");
@@ -118,8 +229,80 @@ const PUMPFUN_BUYBACK_FEE_RECIPIENTS = [
   "A7hAgCzFw14fejgCp387JUJRMNyz4j89JKnhtKU8piqW",
 ].map(address => new PublicKey(address));
 
+function loadRuntimeLiveTrades(): any[] {
+  try {
+    if (!fs.existsSync(AGENT_TRADES_FILE)) {
+      return [];
+    }
+    const data = fs.readFileSync(AGENT_TRADES_FILE, "utf-8");
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error: any) {
+    logger.debug(`Falha ao carregar ledger de trades live: ${error.message}`);
+    return [];
+  }
+}
+
+function writeRuntimeLiveTrades(trades: any[]): void {
+  const next = Array.isArray(trades) ? trades : [];
+  fs.mkdirSync(path.dirname(AGENT_TRADES_FILE), { recursive: true });
+  fs.writeFileSync(AGENT_TRADES_FILE, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+}
+
+function mergeTradeRecordByIdentity(existingTrades: any[], tradeRecord: any) {
+  const next = Array.isArray(existingTrades) ? [...existingTrades] : [];
+  const tradeSignature = String(
+    tradeRecord?.lastExitSignature
+    || tradeRecord?.signature
+    || ""
+  ).trim();
+  const tradeMint = String(tradeRecord?.tokenMint || tradeRecord?.mint || "").trim();
+  const tradeEntryTime = Number(tradeRecord?.entryTime || 0);
+  const tradeExitTime = Number(tradeRecord?.exitTime || tradeRecord?.timestamp || 0);
+
+  const duplicateIndex = next.findIndex((entry: any) => {
+    const entrySignature = String(entry?.lastExitSignature || entry?.signature || "").trim();
+    if (tradeSignature && entrySignature && tradeSignature === entrySignature) return true;
+
+    const entryMint = String(entry?.tokenMint || entry?.mint || "").trim();
+    const entryEntryTime = Number(entry?.entryTime || 0);
+    const entryExitTime = Number(entry?.exitTime || entry?.timestamp || 0);
+    if (!!tradeMint && tradeMint === entryMint && tradeEntryTime > 0 && tradeEntryTime === entryEntryTime) {
+      return true;
+    }
+    return !!tradeMint
+      && tradeMint === entryMint
+      && tradeEntryTime > 0
+      && tradeEntryTime === entryEntryTime
+      && tradeExitTime > 0
+      && tradeExitTime === entryExitTime;
+  });
+
+  if (duplicateIndex >= 0) {
+    next[duplicateIndex] = {
+      ...next[duplicateIndex],
+      ...tradeRecord,
+    };
+  } else {
+    next.unshift(tradeRecord);
+  }
+
+  return next
+    .sort((a: any, b: any) => Number(b?.exitTime || b?.entryTime || b?.timestamp || 0) - Number(a?.exitTime || a?.entryTime || a?.timestamp || 0))
+    .slice(0, 1000);
+}
+
+export function persistRuntimeLiveTradeRecord(tradeRecord: any): void {
+  const nextTrades = mergeTradeRecordByIdentity(loadRuntimeLiveTrades(), tradeRecord);
+  writeRuntimeLiveTrades(nextTrades);
+}
+
 const BUY_SLOT_RESERVATION_TTL_MS = 2 * 60 * 1000;
 const pendingBuyReservations = new Map<string, { createdAt: number; amountSol: number }>();
+
+// Cooldown por mint para evitar re-reserva imediata após falha de execução
+const MINT_FAILURE_COOLDOWN_MS = 60_000; // 60 segundos
+const mintFailureCooldowns = new Map<string, { failedAt: number; reason: string }>();
 
 function prunePendingBuyReservations() {
   const now = Date.now();
@@ -128,6 +311,31 @@ function prunePendingBuyReservations() {
       pendingBuyReservations.delete(mint);
     }
   }
+}
+
+function pruneMintFailureCooldowns() {
+  const now = Date.now();
+  for (const [mint, entry] of mintFailureCooldowns.entries()) {
+    if (now - entry.failedAt > MINT_FAILURE_COOLDOWN_MS) {
+      mintFailureCooldowns.delete(mint);
+    }
+  }
+}
+
+export function recordMintFailureCooldown(mint: string, reason: string): void {
+  const normalizedMint = String(mint || '').trim();
+  if (!normalizedMint) return;
+  mintFailureCooldowns.set(normalizedMint, { failedAt: Date.now(), reason });
+  logger.info(`🕐 [BUY_COOLDOWN] ${normalizedMint} em cooldown de ${MINT_FAILURE_COOLDOWN_MS / 1000}s: ${reason.substring(0, 80)}`);
+}
+
+function isMintInFailureCooldown(mint: string): { blocked: boolean; reason?: string } {
+  pruneMintFailureCooldowns();
+  const normalizedMint = String(mint || '').trim();
+  const entry = mintFailureCooldowns.get(normalizedMint);
+  if (!entry) return { blocked: false };
+  const remainingSec = Math.ceil((MINT_FAILURE_COOLDOWN_MS - (Date.now() - entry.failedAt)) / 1000);
+  return { blocked: true, reason: `MINT_COOLDOWN:${remainingSec}s:${entry.reason.substring(0, 60)}` };
 }
 
 function getPendingBuyReservationsCount(): number {
@@ -140,7 +348,8 @@ function reserveBuySlot(mint: string, amountSol: number): { ok: true } | { ok: f
   const currentConfig = getRuntimeConfig();
   const normalizedMint = String(mint || '').trim();
   const activePositions = positionManager.getActivePositions();
-  const effectiveOpenPositions = activePositions.length + getPendingBuyReservationsCount();
+  const realActiveCount = activePositions.length;
+  const effectiveOpenPositions = realActiveCount + getPendingBuyReservationsCount();
 
   if (normalizedMint && pendingBuyReservations.has(normalizedMint)) {
     return { ok: false, reason: 'BUY_ALREADY_PENDING' };
@@ -150,6 +359,15 @@ function reserveBuySlot(mint: string, amountSol: number): { ok: true } | { ok: f
     return { ok: false, reason: 'POSITION_ALREADY_ACTIVE' };
   }
 
+  // Cooldown por mint: evitar re-reserva imediata após falha de execução
+  if (normalizedMint) {
+    const cooldown = isMintInFailureCooldown(normalizedMint);
+    if (cooldown.blocked) {
+      return { ok: false, reason: cooldown.reason || 'MINT_COOLDOWN' };
+    }
+  }
+
+  // In single-trade mode, an in-flight buy is exposure until proven otherwise.
   if (currentConfig.SINGLE_TRADE_MODE && effectiveOpenPositions > 0) {
     return { ok: false, reason: 'SINGLE_TRADE_MODE_ACTIVE' };
   }
@@ -216,7 +434,7 @@ async function getPumpAccountsCoder(connection: Connection): Promise<BorshAccoun
   if (!pumpAccountsCoderPromise) {
     pumpAccountsCoderPromise = (async () => {
       const [idlAddress] = PublicKey.findProgramAddressSync([Buffer.from("anchor:idl")], PUMPFUN_PROGRAM_ID);
-      const info = await connection.getAccountInfo(idlAddress, "confirmed");
+      const info = await getAccountInfoWithFallback(idlAddress, "confirmed", undefined, "hybridExecutor:idl");
       if (!info?.data || info.data.length < 44) {
         throw new Error("PUMPFUN_IDL_NOT_FOUND");
       }
@@ -270,7 +488,7 @@ function readDecodedPubkey(decoded: Record<string, any>, ...keys: string[]): Pub
 }
 
 async function resolveTokenProgramId(connection: Connection, mint: PublicKey): Promise<PublicKey> {
-  const mintInfo = await connection.getAccountInfo(mint, "confirmed");
+  const mintInfo = await getAccountInfoWithFallback(mint, "confirmed", undefined, "hybridExecutor:mint");
   if (!mintInfo?.owner) {
     throw new Error(`MINT_ACCOUNT_NOT_FOUND:${mint.toBase58()}`);
   }
@@ -282,7 +500,7 @@ async function fetchGlobalAccount(connection: Connection): Promise<ParsedGlobalA
     [Buffer.from("global")],
     PUMPFUN_PROGRAM_ID
   )[0];
-  const info = await connection.getAccountInfo(globalAccount, "confirmed");
+  const info = await getAccountInfoWithFallback(globalAccount, "confirmed", undefined, "hybridExecutor:global");
   if (!info?.data) {
     throw new Error("PUMPFUN_GLOBAL_ACCOUNT_NOT_FOUND");
   }
@@ -307,7 +525,7 @@ async function fetchBondingCurveAccount(
   connection: Connection,
   bondingCurve: PublicKey
 ): Promise<ParsedBondingCurveAccount> {
-  const info = await connection.getAccountInfo(bondingCurve, "confirmed");
+  const info = await getAccountInfoWithFallback(bondingCurve, "confirmed", undefined, "hybridExecutor:bondingCurve");
   if (!info?.data) {
     throw new Error(`PUMPFUN_BONDING_CURVE_NOT_FOUND:${bondingCurve.toBase58()}`);
   }
@@ -447,8 +665,20 @@ function extractSignatureFromError(error: unknown): string | null {
   const message = (error as { message?: unknown } | null)?.message;
   if (typeof message !== "string") return null;
 
-  const match = message.match(/Signature\\s+([1-9A-HJ-NP-Za-km-z]{80,90})\\s+has expired/);
-  return match?.[1] || null;
+  const match = message.match(/Signature\s+([1-9A-HJ-NP-Za-km-z]{70,100})\s+has expired/);
+  if (match) return match[1];
+
+  const jitoMatch = message.match(/JITO_BUNDLE_TX_NOT_CONFIRMED:([1-9A-HJ-NP-Za-km-z]{70,100})/);
+  if (jitoMatch) return jitoMatch[1];
+
+  return null;
+}
+
+function isExpiredSignatureError(error: unknown): boolean {
+  const message = (error as { message?: unknown } | null)?.message;
+  if (typeof message !== "string") return false;
+  const lowered = message.toLowerCase();
+  return lowered.includes("has expired") || lowered.includes("block height exceeded");
 }
 
 async function recoverConfirmedSignature(
@@ -459,11 +689,58 @@ async function recoverConfirmedSignature(
   const signature = extractSignatureFromError(error);
   if (!signature) return null;
 
-  const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
-  const value = status.value;
-  if (value?.err === null) {
-    logger.warn(`⚠️ ${context}: confirmação local expirou, mas assinatura está on-chain com sucesso: ${signature}`);
-    return signature;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+    const value = status.value;
+    if (value?.err === null) {
+      logger.warn(`⚠️ ${context}: confirmação local expirou, mas assinatura está on-chain com sucesso: ${signature}`);
+      return signature;
+    }
+
+    if (value?.err) {
+      return null;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 750));
+  }
+
+  return null;
+}
+
+async function recoverChunkExecutionByBalance(
+  connection: Connection,
+  associatedUser: PublicKey,
+  balanceBefore: bigint,
+  expectedChunkAmount: bigint,
+  context: string,
+  signatureHint?: string | null
+): Promise<string | null> {
+  const minimumExpectedBalance = balanceBefore >= expectedChunkAmount
+    ? balanceBefore - expectedChunkAmount
+    : 0n;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      const balance = await getTokenAccountBalanceWithFallback(associatedUser, "confirmed");
+      const raw = BigInt(balance.value.amount || "0");
+      if (raw <= minimumExpectedBalance) {
+        if (signatureHint) {
+          logger.warn(
+            `⚠️ ${context}: saldo do token caiu on-chain apesar do timeout/expiração local. ` +
+            `Assumindo chunk executado via assinatura ${signatureHint}`
+          );
+          return signatureHint;
+        }
+        return null;
+      }
+    } catch (balanceError) {
+      const message = (balanceError as Error)?.message || String(balanceError);
+      if (!message.includes("could not find account")) {
+        logger.debug(`⚠️ ${context}: falha ao verificar saldo pós-timeout: ${message}`);
+      }
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 800));
   }
 
   return null;
@@ -911,7 +1188,7 @@ async function getAtaExitTokenAccounts(params: {
 }): Promise<AtaExitTokenAccount[]> {
   const mintPublicKey = new PublicKey(params.tokenMint);
   return normalizeAtaTokenAccounts(
-    await params.connection.getParsedTokenAccountsByOwner(params.owner, { mint: mintPublicKey })
+    await getParsedTokenAccountsByOwnerWithFallback(params.owner, { mint: mintPublicKey }, params.connection)
   );
 }
 
@@ -921,19 +1198,25 @@ async function sendAtaExitInstructions(params: {
   instructions: TransactionInstruction[];
   computeUnitLimit?: number;
 }): Promise<string> {
-  const latestBlockhash = await params.connection.getLatestBlockhash();
-  const gasPrice = await getCachedDynamicGasPrice(params.connection).catch(() => 10_000);
-  const transaction = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: params.computeUnitLimit || 140_000 }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
-    ...params.instructions
-  );
-  transaction.feePayer = params.signer.publicKey;
-  transaction.recentBlockhash = latestBlockhash.blockhash;
-
-  return await sendAndConfirmTransaction(params.connection, transaction, [params.signer], {
-    commitment: "confirmed",
-    skipPreflight: false,
+  return await sendAndConfirmTransactionWithRpcFallback({
+    connection: params.connection,
+    signers: [params.signer],
+    options: {
+      commitment: "confirmed",
+      skipPreflight: true,
+    },
+    buildTransaction: async (connection) => {
+      const latestBlockhash = await connection.getLatestBlockhash();
+      const gasPrice = await getCachedDynamicGasPrice(connection).catch(() => 10_000);
+      const transaction = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: params.computeUnitLimit || 140_000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+        ...params.instructions
+      );
+      transaction.feePayer = params.signer.publicKey;
+      transaction.recentBlockhash = latestBlockhash.blockhash;
+      return transaction;
+    },
   });
 }
 
@@ -1473,7 +1756,84 @@ async function syncPositionAfterExit(
     await positionManager.updatePosition(position.mint, sync.updates);
     logger.info(
       `♻️ Posição parcialmente vendida: ${position.mint} saldo restante=${afterBalance.uiAmount.toFixed(6)} tokens`
+      );
+  }
+
+  if (sync.isClosed) {
+    const marketCapContext = await resolveExitMarketCapContext(
+      position.mint,
+      Number(position.entryPricePerToken || getPositionEntryPrice(position) || 0) || null,
+      Number((position as any).marketCapEntry || 0) || null
     );
+    const activeWallet = getActiveTradingWallet();
+    const walletAddress = activeWallet?.publicKey || activeWallet?.wallet?.publicKey || null;
+    const realizedSettlement = signature && walletAddress
+      ? await getWalletNetSolChangeForSignature(signature, { ownerAddress: walletAddress })
+      : { exitTime: Date.now(), netSolChange: null, feeSol: null };
+    const realizedEntryAmount = Number(position.buySolAmount || 0);
+    const settlementNetSol = typeof realizedSettlement.netSolChange === "number"
+      ? Number(realizedSettlement.netSolChange)
+      : null;
+    const realizedExitValueSol = exitDecision?.action === "BURN_AND_CLOSE_ATA"
+      ? 0
+      : settlementNetSol;
+    const ataRecoveredSol = exitDecision?.action === "BURN_AND_CLOSE_ATA"
+      ? 0
+      : Number(finalAtaCloseResult?.netRecoveredSol ?? finalAtaCloseResult?.rentRecoveredSol ?? 0);
+    const realizedTradePnl = realizedEntryAmount > 0 && typeof realizedExitValueSol === "number"
+      ? Number((realizedExitValueSol - realizedEntryAmount).toFixed(9))
+      : null;
+    const realizedTradePnlPercent = realizedEntryAmount > 0 && Number.isFinite(Number(realizedTradePnl))
+      ? Number(((Number(realizedTradePnl) / realizedEntryAmount) * 100).toFixed(2))
+      : null;
+    const exitStatus = /take profit/i.test(reason)
+      ? "CLOSED_TP"
+      : /stop loss/i.test(reason)
+        ? "CLOSED_SL"
+        : /manual/i.test(reason)
+          ? "CLOSED_MANUAL"
+          : exitDecision?.action === "BURN_AND_CLOSE_ATA"
+            ? "CLOSED_ATA"
+            : "CLOSED";
+
+    persistRuntimeLiveTradeRecord({
+      token: position.symbol || position.mint.slice(0, 6),
+      symbol: position.symbol || null,
+      name: null,
+      mint: position.mint,
+      tokenMint: position.mint,
+      timestamp: Number(realizedSettlement.exitTime || Date.now()),
+      entryTime: Number(position.buyTimestamp || 0) || null,
+      exitTime: Number(realizedSettlement.exitTime || Date.now()),
+      entryPrice: Number(position.entryPricePerToken || getPositionEntryPrice(position) || 0),
+      exitPrice: Number(currentPrice || 0),
+      pnl: realizedTradePnl,
+      pnl_sol: realizedTradePnl,
+      pnlPercent: realizedTradePnlPercent,
+      pnl_percent: realizedTradePnlPercent,
+      confidence: Number((position as any).confidence || 0),
+      status: exitStatus,
+      reason,
+      exitReason: reason,
+      isSimulation: false,
+      mode: "LIVE",
+      isReconciliationEvent: false,
+      buyAmountSol: realizedEntryAmount,
+      entryAmount: realizedEntryAmount,
+      marketCapEntry: marketCapContext.marketCapEntry,
+      marketCapExit: marketCapContext.marketCapExit,
+      lastExitSignature: signature,
+      lastExitVenue: venue,
+      pnlUnavailable: realizedTradePnl === null,
+      feeSol: realizedSettlement.feeSol,
+      realizedExitValueSol,
+      ataClosed: sync.updates.lastAtaClosed === true,
+      ataCloseSignature: sync.updates.lastAtaCloseSignature || null,
+      ataCloseRecoveredSol: sync.updates.lastAtaCloseRecoveredSol ?? (sync.updates.lastAtaClosed === true ? ataRecoveredSol : null),
+      ataCloseRecoveredLamports: sync.updates.lastAtaCloseRecoveredLamports ?? null,
+      ataCloseTokenProgram: sync.updates.lastAtaCloseTokenProgram ?? null,
+      ataCloseSkippedReason: sync.updates.lastAtaCloseSkippedReason ?? null,
+    });
   }
 }
 
@@ -1487,7 +1847,9 @@ export function hasActiveTrade(): boolean {
     return false; // Se o modo single trade não estiver habilitado, permitir múltiplos trades
   }
 
-  return getEffectiveOpenPositionsCount() > 0;
+  // FIX: Contar apenas posições REAIS (isActive=true), não reservas pendentes.
+  // Reservas pendentes de compras que falharam não devem bloquear novas oportunidades.
+  return positionManager.getActivePositions().length > 0;
 }
 
 /**
@@ -1536,8 +1898,13 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
     const DEFAULT_SLIPPAGE_BPS = currentConfig.SLIPPAGE_BPS || 50;
     const quotedSlippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => DEFAULT_SLIPPAGE_BPS);
     const slippageBps = Math.max(quotedSlippageBps, 1000);
-    // Pump debit the spendable amount as-is; rent for creator_vault/UVA is charged separately.
-    const spendableLamports = amountLamports;
+    const creatorVaultInfo = await getAccountInfoWithFallback(tradeContext.creatorVault, "confirmed", undefined, "hybridExecutor:creatorVault");
+    const creatorVaultRentLamports = creatorVaultInfo
+      ? 0n
+      : BigInt(await connection.getMinimumBalanceForRentExemption(0));
+    const spendableLamports = amountLamports > creatorVaultRentLamports
+      ? amountLamports - creatorVaultRentLamports
+      : amountLamports;
     const totalFeeBps = tradeContext.globalAccount.feeBasisPoints + tradeContext.globalAccount.creatorFeeBasisPoints;
     const expectedTokensOut = calculateBuyExactSolInTokensOut(
       tradeContext.bondingCurveAccount,
@@ -1560,13 +1927,13 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
       [Buffer.from("user_volume_accumulator"), signer.publicKey.toBuffer()],
       PUMPFUN_PROGRAM_ID
     )[0];
-    const userVolumeAccumulatorInfo = await connection.getAccountInfo(userVolumeAccumulator, "confirmed");
+    const userVolumeAccumulatorInfo = await getAccountInfoWithFallback(userVolumeAccumulator, "confirmed", undefined, "hybridExecutor:userVolumeAccumulator");
     const walletBalance = await connection.getBalance(signer.publicKey, "confirmed");
     logger.info(
       `🧾 [PumpBuy] mint=${tokenMint} spendable_sol_in=${spendableLamports.toString()} min_tokens_out=${minTokensOut.toString()} expected_tokens_out=${expectedTokensOut.toString()} slippage_bps=${slippageBps} track_volume=true uva_exists=${Boolean(userVolumeAccumulatorInfo)} wallet_balance=${walletBalance} token_program=${tradeContext.tokenProgramId.toBase58()} assoc_bc=${tradeContext.associatedBondingCurve.toBase58()} bc_v2=${bondingCurveV2.toBase58()} creator=${tradeContext.creator.toBase58()} creator_vault=${tradeContext.creatorVault.toBase58()}`
     );
     buyPhase = "associated-user-check";
-    const associatedUserInfo = await connection.getAccountInfo(tradeContext.associatedUser, "confirmed");
+    const associatedUserInfo = await getAccountInfoWithFallback(tradeContext.associatedUser, "confirmed", undefined, "hybridExecutor:associatedUser");
     if (!associatedUserInfo) {
       buyPhase = "associated-user-create-ix";
       setupInstructions.push(
@@ -1582,6 +1949,7 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
     }
 
     buyPhase = "build-buy-instruction";
+    const buybackFeeRecipient = getRandomPumpFunBuybackFeeRecipient();
     const buyInstruction = new TransactionInstruction({
       programId: PUMPFUN_PROGRAM_ID,
       keys: [
@@ -1597,11 +1965,12 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
         { pubkey: tradeContext.creatorVault, isSigner: false, isWritable: true },
         { pubkey: PUMPFUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
         { pubkey: PUMPFUN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: PUMPFUN_GLOBAL_VOLUME_ACCUMULATOR, isSigner: false, isWritable: false },
+        { pubkey: PUMPFUN_GLOBAL_VOLUME_ACCUMULATOR, isSigner: false, isWritable: true },
         { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
         { pubkey: PUMPFUN_FEE_CONFIG, isSigner: false, isWritable: false },
         { pubkey: PUMPFUN_FEE_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: bondingCurveV2, isSigner: false, isWritable: false },
+        { pubkey: buybackFeeRecipient, isSigner: false, isWritable: true },
       ],
       data: Buffer.concat([
         Buffer.from([56, 252, 116, 8, 158, 223, 205, 95]), // buy_exact_sol_in
@@ -1651,29 +2020,46 @@ export async function buyOnPumpFun(tokenMint: string, amountSol: number): Promis
       logger.info(`✅ Compra realizada com sucesso via Jito: ${signature}`);
       return signature;
     } catch (jitoError) {
-      logger.warn("⚠️  Falha no envio Jito, tentando fallback para RPC padrão:", jitoError.message);
+      // [FIX] Verify if Jito actually confirmed before blindly falling back to RPC
+      const recoveredSignature = await recoverConfirmedSignature(connection, jitoError, `compra jito ${tokenMint}`);
+      if (recoveredSignature) {
+        logger.info(`✅ Compra recuperada com sucesso após erro de timeout no Jito: ${recoveredSignature}`);
+        return recoveredSignature;
+      }
+
+      logger.warn("⚠️  Falha no envio Jito, tentando fallback para RPC padrão:", (jitoError as Error).message || jitoError);
 
       // Fallback para envio padrão
       buyPhase = "rpc-fallback-build";
-      const transaction = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
-        ...setupInstructions,
-        buyInstruction
-      );
-
       try {
         buyPhase = "rpc-send";
         logInstructionDump("BuyIxRpcFallback", buyInstruction);
-        const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
-          commitment: "confirmed",
-          skipPreflight: false,
+        const signature = await sendAndConfirmTransactionWithRpcFallback({
+          signers: [signer],
+          options: {
+            commitment: "confirmed",
+            skipPreflight: true,
+          },
+          buildTransaction: async () => new Transaction().add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+            ...setupInstructions,
+            buyInstruction
+          ),
         });
 
         logger.info(`✅ Compra realizada com sucesso (Standard RPC): ${signature}`);
         return signature;
       } catch (rpcError) {
         await logDetailedTransactionError(connection, `compra ${tokenMint}`, rpcError);
+
+        // [FIX] Recover signature if it expired during RPC polling but succeeded on-chain
+        const recoveredSignature = await recoverConfirmedSignature(connection, rpcError, `compra ${tokenMint}`);
+        if (recoveredSignature) {
+          logger.warn(`⚠️ Compra recuperada com sucesso após erro de RPC (RPC_RECOVERED): ${recoveredSignature}`);
+          return recoveredSignature;
+        }
+
         throw rpcError;
       }
     }
@@ -1825,33 +2211,81 @@ export async function sellOnPumpFun(
           logger.info(`✅ Venda realizada com sucesso via Jito: ${signature}`);
           return signature;
         } catch (jitoError) {
-          logger.warn("⚠️  Falha no envio Jito (Venda), tentando fallback para RPC padrão:", jitoError.message);
+          // [FIX] Verify if Jito actually confirmed before blindly falling back to RPC
+          const recoveredSignature = await recoverConfirmedSignature(connection, jitoError, `venda jito ${tokenMint}`);
+          if (recoveredSignature) {
+            logger.info(`✅ Venda recuperada com sucesso após erro de timeout no Jito: ${recoveredSignature}`);
+            return recoveredSignature;
+          }
+
+          logger.warn("⚠️  Falha no envio Jito (Venda), tentando fallback para RPC padrão:", (jitoError as Error).message || jitoError);
         }
       }
 
-      const transaction = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
-        sellInstruction
-      );
+      const maxRpcAttempts = 3;
+      for (let rpcAttempt = 0; rpcAttempt < maxRpcAttempts; rpcAttempt += 1) {
+        const transaction = new Transaction().add(
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+          sellInstruction
+        );
+        const chunkBalanceBefore = await getTokenAccountBalanceWithFallback(tradeContext.associatedUser, "confirmed")
+          .then(balance => BigInt(balance.value.amount || "0"))
+          .catch(() => chunkAmount);
 
-      try {
-        const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
-          commitment: "confirmed",
-          skipPreflight: false,
-        });
+        try {
+          const signature = await sendAndConfirmTransactionWithRpcFallback({
+            signers: [signer],
+            options: {
+              commitment: "confirmed",
+              skipPreflight: true,
+            },
+            buildTransaction: async () => new Transaction().add(
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
+              ComputeBudgetProgram.setComputeUnitPrice({ microLamports: gasPrice }),
+              sellInstruction
+            ),
+          });
 
-        logger.info(`✅ Venda realizada com sucesso (Standard RPC): ${signature}`);
-        return signature;
-      } catch (rpcError) {
-        const recoveredSignature = await recoverConfirmedSignature(connection, rpcError, `venda ${tokenMint}`);
-        if (recoveredSignature) {
-          return recoveredSignature;
+          logger.info(`✅ Venda realizada com sucesso (Standard RPC): ${signature}`);
+          return signature;
+        } catch (rpcError) {
+          const recoveredSignature = await recoverConfirmedSignature(connection, rpcError, `venda ${tokenMint}`);
+          if (recoveredSignature) {
+            return recoveredSignature;
+          }
+
+          if (isExpiredSignatureError(rpcError)) {
+            const balanceRecoveredSignature = await recoverChunkExecutionByBalance(
+              connection,
+              tradeContext.associatedUser,
+              chunkBalanceBefore,
+              chunkAmount,
+              `venda ${tokenMint}`,
+              extractSignatureFromError(rpcError)
+            );
+            if (balanceRecoveredSignature) {
+              return balanceRecoveredSignature;
+            }
+          }
+
+          const rpcMessage = (rpcError as Error)?.message || String(rpcError);
+          const retriableBlockhashError = /blockhash not found/i.test(rpcMessage);
+          const retriableExpiredError = isExpiredSignatureError(rpcError);
+          const shouldRetry = rpcAttempt < maxRpcAttempts - 1 && (retriableBlockhashError || retriableExpiredError);
+          if (shouldRetry) {
+            logger.warn(
+              `🔁 [PumpSell] Reenviando chunk ${chunkIndex + 1} de ${tokenMint} após erro transitório: ${rpcMessage}`
+            );
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+          }
+
+          await logDetailedTransactionError(connection, `venda ${tokenMint}`, rpcError);
+          throw rpcError;
         }
-
-        await logDetailedTransactionError(connection, `venda ${tokenMint}`, rpcError);
-        throw rpcError;
       }
+      throw new Error(`PUMPFUN_SELL_CHUNK_UNREACHABLE:${tokenMint}:${chunkIndex + 1}`);
     };
 
     const initialContext = await resolvePumpFunTradeContext(connection, mintPublicKey);
@@ -1911,15 +2345,18 @@ export async function sellViaJupiter(
       throw new Error(`Quantidade insuficiente para venda de ${tokenMint}`);
     }
 
-    // Obter endereço da token account do usuário
     const mintPublicKey = new PublicKey(tokenMint);
+    const connection = await getConnection();
+    const tokenProgramId = await resolveTokenProgramId(connection, mintPublicKey);
     const userTokenAccount = await getAssociatedTokenAddress(
       mintPublicKey,
-      signer.publicKey
+      signer.publicKey,
+      false,
+      tokenProgramId,
+      ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
     // Obter cotação da Jupiter API (token -> SOL)
-    const connection = await getConnection();
     const slippageBps = await getCachedOptimalSlippage(tokenMint, connection).catch(() => currentConfig.SLIPPAGE_BPS || 50);
 
     const quote = await withRetry(async () => {
@@ -2002,10 +2439,46 @@ export async function sellViaJupiter(
     );
 
     // Enviar e confirmar transação
-    const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
-      commitment: "confirmed",
-      skipPreflight: false,
-    });
+    const balanceBefore = await getTokenAccountBalanceWithFallback(userTokenAccount, "confirmed")
+      .then(balance => BigInt(balance.value.amount || "0"))
+      .catch(() => BigInt(amount));
+
+    let signature: string;
+    try {
+      signature = await sendAndConfirmTransactionWithRpcFallback({
+        signers: [signer],
+        options: {
+          commitment: "confirmed",
+          skipPreflight: true,
+        },
+        buildTransaction: async () => new Transaction().add(
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1000000 }),
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
+          ...instructions
+        ),
+      });
+    } catch (error) {
+      const recoveredSignature = await recoverConfirmedSignature(connection, error, `venda jupiter ${tokenMint}`);
+      if (recoveredSignature) {
+        signature = recoveredSignature;
+      } else if (isExpiredSignatureError(error)) {
+        const balanceRecoveredSignature = await recoverChunkExecutionByBalance(
+          connection,
+          userTokenAccount,
+          balanceBefore,
+          BigInt(amount),
+          `venda jupiter ${tokenMint}`,
+          extractSignatureFromError(error)
+        );
+        if (balanceRecoveredSignature) {
+          signature = balanceRecoveredSignature;
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    }
 
     logger.info(`✅ Venda via Jupiter realizada com sucesso: ${signature}`);
 
@@ -2093,7 +2566,9 @@ export async function executeHybridTrade(
 
         const buySlotReservation = reserveBuySlot(tokenData.mint, tradeSolAmount);
         if (!buySlotReservation.ok) {
-          const blockedReason = "reason" in buySlotReservation ? buySlotReservation.reason : "BUY_SLOT_BLOCKED";
+          const blockedReason = "reason" in buySlotReservation
+            ? buySlotReservation.reason
+            : "BUY_SLOT_BLOCKED";
           logger.warn(`⛔ [BUY_SLOT] ${tokenData.mint} bloqueado: ${blockedReason}`);
           return skip(blockedReason);
         }
@@ -2152,6 +2627,38 @@ export async function executeHybridTrade(
         };
 
         await positionManager.savePosition(position);
+        persistRuntimeLiveTradeRecord({
+          token: tokenData.mint.slice(0, 6),
+          symbol: null,
+          name: null,
+          mint: tokenData.mint,
+          tokenMint: tokenData.mint,
+          timestamp: Number(position.buyTimestamp || Date.now()),
+          entryTime: Number(position.buyTimestamp || Date.now()),
+          exitTime: null,
+          entryPrice: Number(entryPricePerToken || 0),
+          exitPrice: 0,
+          pnl: null,
+          pnl_sol: null,
+          pnlPercent: null,
+          pnl_percent: null,
+          confidence: Number((tokenData as any).confidence || 0),
+          status: "OPEN",
+          reason: null,
+          exitReason: null,
+          isSimulation: false,
+          mode: "LIVE",
+          isReconciliationEvent: false,
+          buyAmountSol: tradeSolAmount,
+          entryAmount: tradeSolAmount,
+          tokenAmount: tokenUiAmount,
+          tokenDecimals: balanceAfter.decimals,
+          signature,
+          lastExitSignature: null,
+          lastExitVenue: null,
+          pnlUnavailable: true,
+          tokenAccount: balanceAfter.address,
+        });
         releaseBuySlot(tokenData.mint);
         reservedBuySlot = false;
         circuitBreaker.recordSuccess(0);
@@ -2221,14 +2728,17 @@ export async function executeHybridTrade(
 
         const atr = getATR(tokenData.mint);
         const tpPercent = autoSellTakeProfit && quote?.confidence === "quote"
-          ? (position.takeProfit || TAKE_PROFIT_PERCENT)
+          ? Number(currentConfig.TAKE_PROFIT_PERCENT ?? TAKE_PROFIT_PERCENT)
           : Number.POSITIVE_INFINITY;
+        const stopLossPercent = (autoSellStopLoss && stopLossEnabled)
+          ? Number(currentConfig.STOP_LOSS_PERCENT ?? STOP_LOSS_PERCENT)
+          : 100;
         const exitResult = checkExitConditions(
           Number(quote?.estimatedSolOutput || 0) || buyValueSol,
           highWaterMark || buyValueSol,
           buyValueSol,
           tpPercent,
-          (autoSellStopLoss && stopLossEnabled) ? (position.stopLoss || STOP_LOSS_PERCENT) : 100,
+          stopLossPercent,
           (currentConfig as any).TRAILING_STOP_PERCENT || 0,
           (currentConfig as any).WHALE_DUMP_PERCENT || 30,
           (currentConfig as any).VOLATILITY_ADJUSTED_TP_SL ? atr : null,
@@ -2369,6 +2879,11 @@ export async function executeHybridTrade(
         ? 'mercado/curva'
         : (isSimulationOrPreflightError ? 'simulação/preflight' : 'RPC/rede');
       logger.warn(`⚠️ Erro de ${errorClass}: ${errorMsg.substring(0, 160)}`);
+
+      // FIX: Registrar cooldown por mint para evitar re-reserva imediata de tokens que falham repetidamente
+      if (isMarketConditionError || isSimulationOrPreflightError) {
+        recordMintFailureCooldown(tokenData.mint, errorMsg.substring(0, 80));
+      }
     } else {
       circuitBreaker.recordFailure(error);
     }

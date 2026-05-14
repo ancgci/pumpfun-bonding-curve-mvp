@@ -98,8 +98,8 @@ describe("livePositionRuntime", () => {
     });
 
     expect(sync.isClosed).toBe(true);
-    expect(sync.updates.buySolAmount).toBe(0);
-    expect(sync.updates.buyTokenAmount).toBe(0);
+    expect(sync.updates.buySolAmount).toBe(1);
+    expect(sync.updates.buyTokenAmount).toBe(1_000_000);
     expect(sync.updates.lastExitReason).toBe("EXTERNAL_SELL_DETECTED");
   });
 });

@@ -140,6 +140,14 @@ export const CONFIG = {
   SELL_PERCENT_ON_TP: parseInt(process.env.SELL_PERCENT_ON_TP || "100"),
   SINGLE_TRADE_MODE: process.env.SINGLE_TRADE_MODE === "true",
   TRADE_TYPE_FILTER: process.env.TRADE_TYPE_FILTER || "BOTH",
+  OPEN_POSITION_FOCUS_MODE: process.env.OPEN_POSITION_FOCUS_MODE !== "false",
+  OPEN_POSITION_FOCUS_MAX_POSITIONS: parseInt(process.env.OPEN_POSITION_FOCUS_MAX_POSITIONS || process.env.MAX_OPEN_POSITIONS || "3"),
+  OPEN_POSITION_MONITOR_INTERVAL_MS: parseInt(process.env.OPEN_POSITION_MONITOR_INTERVAL_MS || "8000"),
+  OPEN_POSITION_EXEC_QUOTE_CONFIRM: process.env.OPEN_POSITION_EXEC_QUOTE_CONFIRM !== "false",
+  OPEN_POSITION_MAX_STALE_PRICE_MS: parseInt(process.env.OPEN_POSITION_MAX_STALE_PRICE_MS || "12000"),
+  OPEN_POSITION_EXEC_QUOTE_COOLDOWN_MS: parseInt(process.env.OPEN_POSITION_EXEC_QUOTE_COOLDOWN_MS || "4000"),
+  OPEN_POSITION_RECENT_TRADE_LOOKBACK_MS: parseInt(process.env.OPEN_POSITION_RECENT_TRADE_LOOKBACK_MS || "20000"),
+  LIVE_POSITION_SWEEP_INTERVAL_MS: parseInt(process.env.LIVE_POSITION_SWEEP_INTERVAL_MS || process.env.LIVE_POSITION_MONITOR_INTERVAL_MS || "30000"),
 
   // Monitoring
   ALERT_THRESHOLD: parseFloat(process.env.ALERT_THRESHOLD || "97.7"),
@@ -259,6 +267,30 @@ export function getRuntimeConfig() {
     if (saved.autoSellTakeProfit !== undefined) runtimeConfig.AUTO_SELL_TAKE_PROFIT = saved.autoSellTakeProfit;
     if (saved.autoSellStopLoss !== undefined) runtimeConfig.AUTO_SELL_STOP_LOSS = saved.autoSellStopLoss;
     if (saved.sellPercentOnTp !== undefined) runtimeConfig.SELL_PERCENT_ON_TP = saved.sellPercentOnTp;
+    if (saved.openPositionFocusMode !== undefined || saved.OPEN_POSITION_FOCUS_MODE !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_FOCUS_MODE = saved.openPositionFocusMode ?? saved.OPEN_POSITION_FOCUS_MODE;
+    }
+    if (saved.openPositionFocusMaxPositions !== undefined || saved.OPEN_POSITION_FOCUS_MAX_POSITIONS !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_FOCUS_MAX_POSITIONS = saved.openPositionFocusMaxPositions ?? saved.OPEN_POSITION_FOCUS_MAX_POSITIONS;
+    }
+    if (saved.openPositionMonitorIntervalMs !== undefined || saved.OPEN_POSITION_MONITOR_INTERVAL_MS !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_MONITOR_INTERVAL_MS = saved.openPositionMonitorIntervalMs ?? saved.OPEN_POSITION_MONITOR_INTERVAL_MS;
+    }
+    if (saved.openPositionExecQuoteConfirm !== undefined || saved.OPEN_POSITION_EXEC_QUOTE_CONFIRM !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_EXEC_QUOTE_CONFIRM = saved.openPositionExecQuoteConfirm ?? saved.OPEN_POSITION_EXEC_QUOTE_CONFIRM;
+    }
+    if (saved.openPositionMaxStalePriceMs !== undefined || saved.OPEN_POSITION_MAX_STALE_PRICE_MS !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_MAX_STALE_PRICE_MS = saved.openPositionMaxStalePriceMs ?? saved.OPEN_POSITION_MAX_STALE_PRICE_MS;
+    }
+    if (saved.openPositionExecQuoteCooldownMs !== undefined || saved.OPEN_POSITION_EXEC_QUOTE_COOLDOWN_MS !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_EXEC_QUOTE_COOLDOWN_MS = saved.openPositionExecQuoteCooldownMs ?? saved.OPEN_POSITION_EXEC_QUOTE_COOLDOWN_MS;
+    }
+    if (saved.openPositionRecentTradeLookbackMs !== undefined || saved.OPEN_POSITION_RECENT_TRADE_LOOKBACK_MS !== undefined) {
+      (runtimeConfig as any).OPEN_POSITION_RECENT_TRADE_LOOKBACK_MS = saved.openPositionRecentTradeLookbackMs ?? saved.OPEN_POSITION_RECENT_TRADE_LOOKBACK_MS;
+    }
+    if (saved.livePositionSweepIntervalMs !== undefined || saved.LIVE_POSITION_SWEEP_INTERVAL_MS !== undefined) {
+      (runtimeConfig as any).LIVE_POSITION_SWEEP_INTERVAL_MS = saved.livePositionSweepIntervalMs ?? saved.LIVE_POSITION_SWEEP_INTERVAL_MS;
+    }
     if (saved.jitoTipAmount !== undefined) runtimeConfig.JITO_TIP_AMOUNT = saved.jitoTipAmount;
     if (saved.agentMinConfidence !== undefined) runtimeConfig.AGENT_MIN_CONFIDENCE = saved.agentMinConfidence;
     if (saved.fastLaneEnabled !== undefined) (runtimeConfig as any).FAST_LANE_ENABLED = saved.fastLaneEnabled;
