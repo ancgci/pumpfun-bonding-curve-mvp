@@ -12,8 +12,17 @@ data/organicity-history.json
 data/telegram-alerts.jsonl
 data/cached-*.json
 .env
+.env.*
 .env.bak-*
 bot-wallet.json
+*wallet*.json
+*keypair*.json
+*secret*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*:Zone.Identifier
 
 # Docusaurus
 website/build/
@@ -48,7 +57,14 @@ output/
 
 # Backups and local data
 backup_top_vps/
+data_backup*/
+recovery/github-state/
+.backup/
+*.bak
+*.bak-*
+*.backup*
 **/*.db
+**/*.db.gz
 **/*.db-journal
 **/*.db-shm
 **/*.db-wal
