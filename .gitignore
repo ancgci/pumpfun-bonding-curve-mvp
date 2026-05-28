@@ -1,5 +1,7 @@
 *~
 node_modules
+.agent/
+.agents/
 data/*.db
 data/
 data/*.db-journal
