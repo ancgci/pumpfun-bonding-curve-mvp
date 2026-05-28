@@ -1,6 +1,7 @@
 *~
 node_modules
 data/*.db
+data/
 data/*.db-journal
 data/positions.json
 data/bot.json
@@ -23,6 +24,7 @@ bot-wallet.json
 *.p12
 *.pfx
 *:Zone.Identifier
+*Zone.Identifier
 
 # Docusaurus
 website/build/
