@@ -2,6 +2,24 @@
 
 Automated trading bot for Solana with support for multiple DeFi protocols.
 
+> [!WARNING]
+> ## ⚠️ Financial Disclaimer & Terms of Use (Isenção de Responsabilidade)
+> 
+> **English:** 
+> This software is for educational, experimental, and personal use only. Cryptocurrency trading (especially DeFi tokens, low-liquidity pairs, and memecoins) involves **extreme financial risk** and may result in the **complete loss of your funds**. 
+> - **No Financial Advice:** The authors, contributors, and maintainers of this project do not provide financial advice or investment recommendations.
+> - **No Guarantees:** There is absolutely no guarantee of financial return, profitability, system stability, uptime, or correctness.
+> - **Use at Your Own Risk:** You are solely responsible for configuring the bot, handling your private keys, and funding the wallet. The developers are not liable for any losses, bugs, exploits, network failures, or liquidated capital.
+> - **No Warranty:** This software is provided "as is" and "as available", without warranty of any kind, express or implied.
+> 
+> **Português:**
+> Este software destina-se apenas a fins educacionais, experimentais e de uso pessoal. A negociação de criptomoedas (especialmente tokens DeFi, pares de baixa liquidez e memecoins) envolve **risco financeiro extremo** e pode resultar na **perda total dos seus fundos**.
+> - **Sem Aconselhamento Financeiro:** Os autores, colaboradores e mantenedores deste projeto não fornecem conselhos de investimento ou recomendações financeiras.
+> - **Sem Garantias:** Não há absolutamente nenhuma garantia de retorno financeiro, lucratividade, estabilidade do sistema, tempo de atividade ou exatidão.
+> - **Uso por sua Conta e Risco:** Você é o único responsável por configurar o bot, gerenciar suas chaves privadas e financiar sua carteira. Os desenvolvedores não se responsabilizam por quaisquer perdas, falhas de sistema, falhas de rede ou perda de capital.
+> - **Sem Garantias de Software:** Este software é fornecido "no estado em que se encontra" (AS-IS) e "conforme disponível", sem qualquer tipo de garantia expressa ou implícita.
+
+
 ## 📚 Documentation
 
 All project documentation is in the `/docs` folder:
