@@ -2,6 +2,8 @@
 
 Automated trading bot for Solana with support for multiple DeFi protocols.
 
+🌐 **Translations:** [Português (Brasil)](README.pt-br.md) | English
+
 > [!WARNING]
 > ## ⚠️ Financial Disclaimer & Terms of Use (Isenção de Responsabilidade)
 > 
