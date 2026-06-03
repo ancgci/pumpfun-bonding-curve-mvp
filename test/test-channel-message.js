@@ -1,8 +1,9 @@
 const TelegramBot = require('node-telegram-bot-api');
+require('dotenv').config();
 
 // Use the same token and chatId from your .env and index.ts
-const token = 'YOUR_TELEGRAM_BOT_TOKEN';
-const chatId = 'YOUR_TELEGRAM_CHAT_ID'; // ID do canal @pumpfunew
+const token = process.env.TELEGRAM_BOT_TOKEN;
+const chatId = process.env.TELEGRAM_CHAT_ID;
 
 console.log('Testing Telegram channel message sending...');
 

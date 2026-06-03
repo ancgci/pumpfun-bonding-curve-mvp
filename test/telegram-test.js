@@ -1,8 +1,9 @@
 const TelegramBot = require('node-telegram-bot-api');
+require('dotenv').config();
 
 // Substitua pelo seu token e ID do chat
-const token = 'YOUR_TELEGRAM_BOT_TOKEN';
-const chatId = 'YOUR_TELEGRAM_CHAT_ID'; // Usar o ID do canal correto
+const token = process.env.TELEGRAM_BOT_TOKEN;
+const chatId = process.env.TELEGRAM_CHAT_ID;
 
 console.log('Iniciando teste de conexão com o Telegram...');
 
