@@ -42,7 +42,7 @@ import { getRugCheckXyzAnalysis } from "./riskEngine/rugCheckXyz";
 import { getRektShieldAnalysis } from "./riskEngine/rektShield";
 import { getGoPlusAnalysis } from "./riskEngine/goPlusLabs";
 import { getOnChainAnalysis } from "./riskEngine/onChainCheck";
-import { orchestrator } from "../.agents/orchestrator/main-orchestrator";
+import { orchestrator } from "./mainOrchestrator";
 import { validateTradeExecution } from "./tradeExecutionValidator";
 import { dipMonitor } from "./dipMonitor";
 import {

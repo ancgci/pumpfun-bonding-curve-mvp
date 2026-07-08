@@ -1,4 +1,4 @@
-import { prepareAgentTokenData } from "../../.agents/orchestrator/main-orchestrator";
+import { prepareAgentTokenData } from "../../utils/mainOrchestrator";
 
 describe("prepareAgentTokenData", () => {
   test("masks unverified PumpFun pre-graduation liquidity before sending to agent prompts", () => {
@@ -19,7 +19,7 @@ describe("prepareAgentTokenData", () => {
     expect(prepared.promptGuardrails).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Do not treat missing LP liquidity as 0 SOL"),
-        expect.stringContaining("holder data is incomplete"),
+        expect.stringContaining("holder data as incomplete"),
         expect.stringContaining("incomplete data"),
       ])
     );
